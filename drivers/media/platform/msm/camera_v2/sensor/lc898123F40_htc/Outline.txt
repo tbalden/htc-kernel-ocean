@@ -1,0 +1,291 @@
+OUTLINE
+
+/*************************************************/
+HTC_H_LGIT_V0E
+	LPDSP VERSION	0905050D   : CM1
+			0905070D   : CM2
+	ATMEL VERSION	010E
+	CALID		0x00000006 : CM1
+	CALID		0x00000008 : CM2
+/*************************************************/
+[Date]
+	2017.03.27
+[Name]
+	T.Tokoro
+[Change point]
+ 1.DSP version is 0x0905050D.
+                  0x0905070D
+ 2.Atmel version is 0x010E.
+ 3.Improve pan tilt effect.
+[File]
+ 1.FromCode_09_05_05.h
+ 2.FromCode_09_05_07.h
+ 3.Ois.h
+
+/*************************************************/
+HTC_H_LGIT_V0D
+	LPDSP VERSION	0905050C   : CM1
+			0905070C   : CM2
+	ATMEL VERSION	010D
+	CALID		0x00000006 : CM1
+	CALID		0x00000008 : CM2
+/*************************************************/
+[Date]
+	2017.03.24
+[Name]
+	T.Tokoro
+[Change point]
+ 1.DSP version is 0x0905050C.
+                  0x0905070C
+ 2.Atmel version is 0x010D.
+ 3.Select Download File.
+[File]
+ 1.FlsCmd.c
+ 2.FromCode_09_05_05.h
+ 3.FromCode_09_05_07.h
+ 4.Ois.h
+ 5.OisAPI.h
+ 6.OisCmd.c
+
+	/*************************************************/
+	HTC_H_LGIT_V0C_SV-CM1
+		LPDSP VERSION	0905F10C	revision  93
+		ATMEL VERSION	010C		revision 121
+		CALID		0x00000006	
+	/*************************************************/
+
+/*************************************************/
+HTC_H_LGIT_V0C
+	LPDSP VERSION	0905010B
+	ATMEL VERSION	010C
+	CALID		0x00000008
+/*************************************************/
+[Date]
+	2017.03.17
+[Name]
+	T.Tokoro
+[Change point]
+ 1.DSP version is 0x0905010B.
+ 2.Atmel version is 0x010C.
+ 3.FrqDet() function sequence update..
+ 4.Improve fast pan tilt effect.
+[File]
+ 1.FromCode.h
+ 2.Ois.h
+ 3.OisAPI.h
+ 4.OisCmd.c
+
+/*************************************************/
+HTC_H_LGIT_V0B
+	LPDSP VERSION	0905010A
+	ATMEL VERSION	010B
+	CALID		0x00000008
+/*************************************************/
+[Date]
+	2017.03.10
+[Name]
+	T.Tokoro
+[Change point]
+ 1.Atmel version is 0x010B.
+ 2.FrqDetReTry(), FrqDetWGyr()Çí«â¡.
+
+[File]
+ 1.OisAPI.h
+ 3.OisCmd.c
+
+/*************************************************/
+HTC_H_LGIT_V0A
+	LPDSP VERSION	0905010A
+	ATMEL VERSION	010A
+	CALID		0x00000008
+/*************************************************/
+[Date]
+	2017.03.09
+[Name]
+	T.Tokoro
+[Change point]
+ 1.DSP version is 0x0905010A.
+ 2.Atmel version is 0x010A.
+ 3.Improve drift control at power on.
+
+[File]
+ 1.FromCode.h
+ 2.Ois.h
+ 3.OisCmd.c
+
+/*************************************************/
+HTC_H_LGIT_V09
+	LPDSP VERSION	09050109
+	ATMEL VERSION	0109
+	CALID		0x00000008
+/*************************************************/
+[Date]
+	2017.03.06
+[Name]
+	T.Tokoro
+[Change point]
+ 1.DSP version is 0x09050109.
+ 2.Atmel version is 0x0109.
+ 3.Changing of shift gain.
+   250mm(0x1FFFFFFF) ---> 270mm(0x1DA12F68)
+ 4.Tuning of Pan/Tilt.
+
+[File]
+ 1.FromCode.h
+ 2.Ois.h
+
+/*************************************************/
+HTC_H_LGIT_V08
+	LPDSP VERSION	09050108
+	ATMEL VERSION	0108
+	CALID		0x00000008
+/*************************************************/
+[Date]
+	2017.02.24
+[Name]
+	T.Tokoro
+[Change point]
+ 1.Servo Filter Tuning for Betty CM2.
+ 2.DSP version is 0x09050108.
+ 3.Atmel version is 0x0008.
+[File]
+ 1.FromCode.h
+ 2.Ois.h
+ 3.OisCmd.c
+
+/*************************************************/
+HTC_H_LGIT_V07
+	LPDSP VERSION	09050107
+	ATMEL VERSION	0107
+	CALID		0x00000007
+/*************************************************/
+[Date]
+	2017.02.21
+[Name]
+	T.Tokoro
+[Change point]
+ 1.Servo Filter Tuning for Betty CM2.
+ 2.DSP version is 0x09050107.
+ 3.Atmel version is 0x0007.
+[File]
+ 1.FromCode.h
+ 2.Ois.h
+ 3.OisCmd.c
+
+/*************************************************/
+HTC_H_LGIT_V06
+	LPDSP VERSION	09050106
+	ATMEL VERSION	0106
+	CALID		0x00000006
+/*************************************************/
+[Date]
+	2017.01.31
+[Name]
+	T.Tokoro
+[Change point]
+ 1.When Pan/Tilt is Off, Offset Control is not Limited.
+ 2.DSP version is 0x09050106.
+ 3.Atmel version is 0x0006.
+[File]
+ 1.FromCode.h
+ 2.Ois.h
+
+/*************************************************/
+HTC_H_LGIT_V05
+	LPDSP VERSION	09050105
+	ATMEL VERSION	0105
+	CALID		0x00000006
+/*************************************************/
+[Date]
+	2017.01.25
+[Name]
+	T.Tokoro
+[Change point]
+ 1.Improved lens drift at power on issue.
+ 2.Improved OIS performance at 6Hz.
+ 3.DSP version is 0x09050105.
+ 4.Atmel version is 0x0005.
+[File]
+ 1.FromCode.h
+ 2.Ois.h
+ 3.OisCmd.c
+
+/*************************************************/
+HTC_H_LGIT_V04
+	LPDSP VERSION	09050104
+	ATMEL VERSION	0104
+	CALID		0x00000006
+/*************************************************/
+[Date]
+	2016.12.22
+[Name]
+	T.Tokoro
+[Change point]
+ 1.MesRam() was added.
+ 2.WrMixingData() was modified.
+ 3.LinearityCorrection was modified.
+[File]
+ 1.FromCode.h
+ 2.Ois.h
+ 3.OisAPI.h
+ 4.OisCmd.c
+
+/*************************************************/
+HTC_H_LGIT_V03
+	LPDSP VERSION	09050103
+	ATMEL VERSION	0103
+	CALID		0x00000005
+/*************************************************/
+[Date]
+	2016.12.15
+[Name]
+	T.Tokoro
+[Change point]
+ 1.Servo Filter was tuned for Betty.
+ 2.Default value of shift gain was changed.(0.2[m] --> 0.25[m])
+[File]
+ 1.FromCode.h
+ 2.Ois.h
+ 3.OisAPI.h
+ 4.OisCmd.c
+ 5.OisLc898123F40.h
+
+
+/*************************************************/
+HTC_LGIT_V02
+	LPDSP VERSION	09050102
+	ATMEL VERSION	0102
+	CALID		0x00000005
+/*************************************************/
+[Date]
+	2016.11.07
+[Name]
+	T.Tokoro
+[Change point]
+ 1.Define names were changed.
+   UINT8 --> UINT_8, UINT16 --> UINT_16, UINT32 --> UINT_32 Åc
+ 2.Function were added.
+   GyrWhoAmIRead(). GyrWhoAmICheck(). GyrIdRead().
+[File]
+ 1.FromCode.h
+ 2.MeasurementLibrary.h
+ 3.Ois.h
+ 4.OisAPI.h
+ 5.OisCmd.c
+ 6.OisFRA.c
+ 7.OisFRA.h
+ 8.PmemCode.h
+
+
+/*************************************************/
+HTC_LGIT_V01
+	LPDSP VERSION	09050101
+	ATMEL VERSION	0101
+	CALID		0x00000000
+/*************************************************/
+[Date]
+	20160826
+[Name]
+	T.Tokoro
+
+
