@@ -44,6 +44,10 @@
 #define MAIN_TOUCH_SOLUTION 2
 #define SEC_TOUCH_SOLUTION 1
 
+#if 1
+static int pulse_rgb_blink = 1;  // 0 - normal stock blinking / 1 - pulsating
+#endif
+
 static int led_rw_delay, chip_enable, rgb_enable, vk_enable;
 static int current_time;
 static struct i2c_client *private_lp5562_client = NULL;
@@ -540,6 +544,26 @@ static void lp5562_red_long_blink(struct i2c_client *client)
 	I(" %s ---\n" , __func__);
 }
 
+#if 1
+static int color_blink_step(struct i2c_client *client, uint8_t brightness, uint8_t time, int reg_index)
+{
+	uint8_t data = 0x00;
+	int ret = 0;
+	/* # === set pwm brightness === */
+	data = 0x40;
+	ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
+	data = brightness;
+	ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
+	/* === wait time === */
+	data = time;
+	ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
+	data = 0x00;
+	ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
+	return reg_index;
+
+}
+#endif
+
 static void lp5562_color_blink(struct i2c_client *client, uint8_t red, uint8_t green, uint8_t blue)
 {
 	uint8_t data = 0x00;
@@ -600,6 +624,9 @@ static void lp5562_color_blink(struct i2c_client *client, uint8_t red, uint8_t g
 	}
 	if (green) {
 		reg_index = 0;
+#if 1
+		if (!pulse_rgb_blink) {
+#endif
 		/* === set green pwm === */
 		data = 0x40;
 		ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
@@ -615,13 +642,27 @@ static void lp5562_color_blink(struct i2c_client *client, uint8_t red, uint8_t g
 		ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
 		data = 0x00;
 		ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
+#if 1
+		} else {
+		I(" %s BLINK +++ red:%d, green:%d, blue:%d\n" , __func__, red, green, blue);
+		/* # === set green blink === */
+		reg_index = color_blink_step(client, 0x42, 0x44, reg_index);
+		reg_index = color_blink_step(client, 0xa0, 0x44, reg_index);
+		reg_index = color_blink_step(client, 0xc8, 0x55, reg_index);
+		reg_index = color_blink_step(client, 0xb0, 0x44, reg_index);
+		reg_index = color_blink_step(client, 0x82, 0x44, reg_index);
+		reg_index = color_blink_step(client, 0x22, 0x44, reg_index);
+		reg_index = color_blink_step(client, 0x00, 0x51, reg_index);
+		}
+#endif
 		/* === wait 0.935s === */
 		data = 0x7c;
 		ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
 		data = 0x00;
 		ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
 		/* === wait 0.999s === */
-		data = 0x7f;
+//		data = 0x7f;
+		data = 0x6f;
 		ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
 		data = 0x00;
 		ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
@@ -1129,6 +1170,35 @@ static void led_fade_do_work(struct work_struct *work)
 }
 
 
+#if 1
+// pulse on/off settings
+static ssize_t bln_pulse_show(struct device *dev,
+            struct device_attribute *attr, char *buf)
+{
+      return snprintf(buf, PAGE_SIZE, "%d\n", pulse_rgb_blink);
+}
+
+static ssize_t bln_pulse_dump(struct device *dev,
+            struct device_attribute *attr, const char *buf, size_t count)
+{
+      int ret;
+      unsigned long input;
+
+      ret = kstrtoul(buf, 0, &input);
+      if (ret < 0)
+            return ret;
+
+      if (input < 0 || input > 1)
+            input = 0;
+
+      pulse_rgb_blink = input;
+
+      return count;
+}
+
+static DEVICE_ATTR(bln_rgb_pulse, (S_IWUSR|S_IRUGO),
+      bln_pulse_show, bln_pulse_dump);
+#endif
 
 static ssize_t lp5562_charging_led_switch_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
@@ -1791,6 +1861,9 @@ static int lp5562_led_probe(struct i2c_client *client
 				pr_err("%s: failed on create attr charging_led_switch [%d]\n", __func__, i);
 				goto err_register_attr_charging_led_switch;
 			}
+#if 1
+			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_rgb_pulse);
+#endif
 			wake_lock_init(&cdata->leds[i].led_wake_lock, WAKE_LOCK_SUSPEND, "lp5562");
 			INIT_WORK(&cdata->leds[i].led_work, led_work_func);
 			INIT_WORK(&cdata->leds[i].led_work_multicolor, multicolor_work_func);
