@@ -2470,6 +2470,10 @@ static inline const char *src_current(enum power_supply_typec_mode typec_mode)
 	}
 }
 
+#if 1
+extern void register_charging(int on);
+#endif
+
 static int psy_changed(struct notifier_block *nb, unsigned long evt, void *ptr)
 {
 	struct usbpd *pd = container_of(nb, struct usbpd, psy_nb);
@@ -2553,6 +2557,9 @@ static int psy_changed(struct notifier_block *nb, unsigned long evt, void *ptr)
 		}
 
 		tusb1044_update_state(CC_STATE_OPEN, CC_ORIENTATION_NONE);
+#if 1
+		register_charging(0);
+#endif
 		pd->current_pr = PR_NONE;
 		break;
 
@@ -2564,6 +2571,9 @@ static int psy_changed(struct notifier_block *nb, unsigned long evt, void *ptr)
 				src_current(typec_mode));
 
 		tusb1044_update_state(CC_STATE_USB3, usbpd_get_plug_orientation(pd));
+#if 1
+		register_charging(1);
+#endif
 		/* if waiting for SinkTxOk to start an AMS */
 		if (pd->spec_rev == USBPD_REV_30 &&
 			typec_mode == POWER_SUPPLY_TYPEC_SOURCE_HIGH &&
