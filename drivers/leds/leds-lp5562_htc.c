@@ -59,6 +59,13 @@ static int bln_no_charger_switch = 1; // 0 - only do BLN when on charger / 1 - B
 static int pulse_rgb_blink = 1;  // 0 - normal stock blinking / 1 - pulsating
 static int charging = 0;
 static struct work_struct vk_blink_work;
+
+static int charge_level = 0; // information from HTC battery driver
+static int supposedly_charging = 0; // information from led call (multicolor work)
+static int colored_charge_level = 1; // if set to 1, colored charge level handling is enabled, 0 - not
+static int first_level_registered = 0; // when register_charge_level first called set to 1
+static struct lp5562_led *g_led_led_data_bln;
+
 #endif
 #ifdef CONFIG_FB
 	static int screen_on = 1;
@@ -655,6 +662,7 @@ static void vk_blink_work_func(struct work_struct *work)
 	I(" %s ---\n" , __func__);
 }
 
+static int last_charge_state = 0;
 
 // register charging: this symbol function will register charging events from anywhere in kernel calls
 // e.g. from USB driver
@@ -662,8 +670,161 @@ void register_charging(int on)
 {
 	I("%s %d\n",__func__,on);
 	charging = on>0?1:0;
+	// if going into no-charge mode, overwrite last charge state, 
+	// ...so next time charging starts multicolored led will be set one time
+	if (!charging) last_charge_state = 0;
 }
 EXPORT_SYMBOL(register_charging);
+
+
+static void led_set_multicolor(int onoff, int red, int green){
+	I(" %s , set display_flag = %d red %d green %d \n" , __func__, onoff, red, green);
+	if(onoff){
+		g_led_led_data_bln->Mode = 1;
+		g_led_led_data_bln->Red = red;
+		g_led_led_data_bln->Green = green;
+		g_led_led_data_bln->Blue = 0;
+		queue_work(g_led_work_queue, &g_led_led_data_bln->led_work_multicolor);
+	}else {
+		g_led_led_data_bln->Mode = 0;
+		g_led_led_data_bln->Red = 0;
+		g_led_led_data_bln->Green = 0;
+		g_led_led_data_bln->Blue = 0;
+		queue_work(g_led_work_queue, &g_led_led_data_bln->led_work_multicolor);
+	}
+}
+
+// depending on red variable different command base is used to write i2c...
+static int color_blink_step_by_color(struct i2c_client *client, uint8_t brightness, uint8_t time, int reg_index, int red)
+{
+	uint8_t data = 0x00;
+	int ret = 0;
+	/* # === set pwm brightness === */
+	data = 0x40;
+	ret = i2c_write_block(client, (red?CMD_ENG_1_BASE:CMD_ENG_2_BASE) + reg_index++, &data, 1);
+	data = brightness;
+	ret = i2c_write_block(client, (red?CMD_ENG_1_BASE:CMD_ENG_2_BASE) + reg_index++, &data, 1);
+	/* === wait time === */
+	data = time;
+	ret = i2c_write_block(client, (red?CMD_ENG_1_BASE:CMD_ENG_2_BASE) + reg_index++, &data, 1);
+	data = 0x00;
+	ret = i2c_write_block(client, (red?CMD_ENG_1_BASE:CMD_ENG_2_BASE) + reg_index++, &data, 1);
+	return reg_index;
+
+}
+
+// will start a gentle blinking of green, to signal something like full battery in charge mode...
+static void led_multicolor_short_transition(void)
+{
+	struct i2c_client *client = private_lp5562_client;
+	uint8_t data = 0x00;
+	int ret, reg_index = 0;
+	uint8_t mode = 0x00;
+
+	if (!client) return;
+
+	I(" %s +++ \n" , __func__);
+	mutex_lock(&led_mutex);
+
+	if (1) // green mode
+		mode |= (3 << 2);
+
+	data = mode & 0x15;
+	ret = write_operation_register(client, data, 0);
+	udelay(200);
+	data = (u8)0;
+	ret = i2c_write_block(client, ENG_1_PC_CONTROL, &data, 1);
+	udelay(200);
+	ret = i2c_write_block(client, ENG_2_PC_CONTROL, &data, 1);
+
+		reg_index = 0;
+		/* # === set green blink === */
+		reg_index = color_blink_step_by_color(client, 0x22, 0x4c, reg_index,0);
+		reg_index = color_blink_step_by_color(client, 0x42, 0x4c, reg_index,0);
+		reg_index = color_blink_step_by_color(client, 0xa0, 0x4c, reg_index,0);
+		reg_index = color_blink_step_by_color(client, 0xc8, 0x4c, reg_index,0);
+		reg_index = color_blink_step_by_color(client, 0xb0, 0x4c, reg_index,0);
+		reg_index = color_blink_step_by_color(client, 0x82, 0x4c, reg_index,0);
+		/* === clear register === */
+		data = 0x00;
+		ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
+		ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
+
+	/* === run program === */
+	data = mode & 0x2a;
+	ret = write_operation_register(client, data, 0);
+	udelay(200);
+	data = (mode & 0x2a)|0x40;
+	ret = write_enable_register(client, data, 0);
+	udelay(150);
+	mutex_unlock(&led_mutex);
+	I(" %s ---\n" , __func__);
+}
+
+
+/*
+* set RG led to appropriate red/green ratio for the current battery level...
+* will set multicolor RG led, or at 100% a gently blinking green led.
+* Will only do the operations if level changed or just started to charge...
+*/
+static void led_multi_color_charge_level(int level) {
+
+	// TODO set color levels of red and green
+	static int last_level = 0;
+	int level_div = level / 5;
+	int level_round = level_div * 5; // rounding by 5;
+	int us_level = (level_round * 235)/100;
+	int red_coeff = 255 - (us_level); // red be a bit more always, except on FULL charge ( 255 - 220 -> Min = 25, except on full where it is 1 )
+	int green_coeff = 235 - red_coeff; // green be a bit less always, except on FULL charge ( Green max is 220, min 1 - except on full where its 255)
+
+	if (!(colored_charge_level && supposedly_charging)) return;
+
+	// check if we're changing from no charge state to charge led and that last received battery level differs from current...
+	if (last_charge_state == supposedly_charging && last_level == level) return; // no change, return
+
+	// store new values into last_ variables
+	last_charge_state = 1;
+	last_level = level;
+
+	if (green_coeff < 1) green_coeff = 10;
+
+	if (level<5) { // under 5, always full RED but low light for red
+		red_coeff = 80;
+		green_coeff = 1;
+	} else
+	if (level<15) { // under 15, always full RED but lower light for red
+		red_coeff = 160;
+		green_coeff = 3;
+	} else
+	if (level<20) { // under 20, always full RED full light for red
+		red_coeff = 255;
+		green_coeff = 7;
+	}
+
+	if (level == 100) { // at 100, always full GREEN
+		red_coeff = 1;
+		green_coeff = 255;
+		I("%s color transition at full strength: red %d green %d \n",__func__, red_coeff, green_coeff);
+	}
+	led_set_multicolor(1, red_coeff, green_coeff);
+	if (level == 100) { // at 100, start fading work too for fancy noticeable look
+		msleep(1000);
+		led_multicolor_short_transition();
+	} 
+}
+
+void register_charge_level(int level)
+{
+	I("%s %d\n",__func__,level);
+	if (colored_charge_level && charging && supposedly_charging) {
+		// TRIGGER COLOR CHANGE of led
+		I("%s triggering color change to multicolor led %d\n",__func__,level);
+		led_multi_color_charge_level(level);
+	}
+	charge_level = level;
+	first_level_registered = 1;
+}
+EXPORT_SYMBOL(register_charge_level);
 
 // handling haptic notifications if enabled to register notifications even when RGB led is already blinking, or on charger
 static unsigned long last_haptic_jiffies = 0;
@@ -1417,6 +1578,35 @@ static ssize_t bln_pulse_dump(struct device *dev,
 
 static DEVICE_ATTR(bln_rgb_pulse, (S_IWUSR|S_IRUGO),
       bln_pulse_show, bln_pulse_dump);
+
+// charge color combination on/off
+static ssize_t bln_rgb_colored_battery_show(struct device *dev,
+            struct device_attribute *attr, char *buf)
+{
+      return snprintf(buf, PAGE_SIZE, "%d\n", colored_charge_level);
+}
+
+static ssize_t bln_rgb_colored_battery_dump(struct device *dev,
+            struct device_attribute *attr, const char *buf, size_t count)
+{
+      int ret;
+      unsigned long input;
+
+      ret = kstrtoul(buf, 0, &input);
+      if (ret < 0)
+            return ret;
+
+      if (input < 0 || input > 1)
+            input = 1;
+
+	colored_charge_level = input;
+
+      return count;
+}
+
+static DEVICE_ATTR(bln_rgb_batt_colored, (S_IWUSR|S_IRUGO),
+      bln_rgb_colored_battery_show, bln_rgb_colored_battery_dump);
+
 #endif
 
 static ssize_t lp5562_charging_led_switch_show(struct device *dev,
@@ -1546,6 +1736,17 @@ static ssize_t lp5562_led_multi_color_store(struct device *dev,
 #endif
 	ModeRGB = val;
 	I(" %s , ModeRGB = %x\n" , __func__, val);
+#ifdef CONFIG_LEDS_QPNP_BUTTON_BLINK
+	supposedly_charging = ldata->Mode == 1 && (ldata->Red > 0 || ldata->Green > 0);
+	I(" %s , RED = %d supposedly charging %d charging %d\n" , __func__, ldata->Red, supposedly_charging, charging);
+
+	if (colored_charge_level && supposedly_charging && first_level_registered) {
+		// if it's supposedly charging and first level registered from HTC battery, we can go and set charge level color mix instead of normal multicolor setting later...
+		led_multi_color_charge_level(charge_level);
+		// and return so color is not overwritten...
+		return count;
+	}
+#endif
 	queue_work(g_led_work_queue, &ldata->led_work_multicolor);
 	return count;
 }
@@ -2139,6 +2340,8 @@ static int lp5562_led_probe(struct i2c_client *client
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_rgb_pulse);
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln);
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_no_charger);
+			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_rgb_batt_colored);
+			g_led_led_data_bln = &cdata->leds[i];
 #endif
 			wake_lock_init(&cdata->leds[i].led_wake_lock, WAKE_LOCK_SUSPEND, "lp5562");
 			INIT_WORK(&cdata->leds[i].led_work, led_work_func);
