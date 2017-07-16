@@ -31,6 +31,11 @@
 #include <linux/of_gpio.h>
 #include <linux/wakelock.h>
 
+#define CONFIG_LEDS_QPNP_BUTTON_BLINK
+#ifdef CONFIG_LEDS_QPNP_BUTTON_BLINK
+#include <linux/alarmtimer.h>
+#endif
+
 #ifdef CONFIG_FB
 #include <linux/notifier.h>
 #include <linux/fb.h>
@@ -51,19 +56,32 @@
 #define SEC_TOUCH_SOLUTION 1
 
 
-#define CONFIG_LEDS_QPNP_BUTTON_BLINK
 #ifdef CONFIG_LEDS_QPNP_BUTTON_BLINK
+
+#define BUTTON_BLINK_SPEED_MAX		2
+#define BUTTON_BLINK_SPEED_DEFAULT	1
+
+#define BUTTON_BLINK_NUMBER_MAX		50
+#define BUTTON_BLINK_NUMBER_DEFAULT	6
+
+static DEFINE_MUTEX(blinkstopworklock);
+static struct alarm blinkstopfunc_rtc;
+
 static int bln_switch = 1; // 0 - off / 1 - on
 static int bln_no_charger_switch = 1; // 0 - only do BLN when on charger / 1 - BLN when not on charger
+static int bln_number = BUTTON_BLINK_NUMBER_DEFAULT; // infinite = 0 - number of max button blinks when not on charger
+static int bln_speed = BUTTON_BLINK_SPEED_DEFAULT;
 
 static int pulse_rgb_blink = 1;  // 0 - normal stock blinking / 1 - pulsating
 static int charging = 0;
 static struct work_struct vk_blink_work;
+static struct work_struct vk_unblink_work;
 
 static int charge_level = 0; // information from HTC battery driver
 static int supposedly_charging = 0; // information from led call (multicolor work)
 static int colored_charge_level = 1; // if set to 1, colored charge level handling is enabled, 0 - not
 static int first_level_registered = 0; // when register_charge_level first called set to 1
+static int short_vib_notif = 0; // if short vibration pattern this will be 1
 static struct lp5562_led *g_led_led_data_bln;
 
 #endif
@@ -588,11 +606,45 @@ static int virtual_key_led_change_pwm(struct i2c_client *client, int pwm_diff);
 
 static int vk_led_blink = 0;
 
+static void lp5562_vk_led_set_brightness(struct led_classdev *led_cdev,
+		enum led_brightness brightness);
+
+static uint8_t bln_get_sleep_time(int buttons) {
+		uint8_t data = 0x00;
+		switch (bln_speed) {
+			case 2:
+			data = 0x44;
+			break;
+			case 1:
+			data = buttons?0x7d:0x7c;
+			break;
+			case 0:
+			data = buttons?0x7d:0x7c;
+			break;
+		}
+		return data;
+}
+
+static int bln_get_alarm_time(void) {
+		int data = 0x00;
+		switch (bln_speed) {
+			case 2:
+			data = 1500;
+			break;
+			case 1:
+			data = 2300;
+			break;
+			case 0:
+			data = 3300;
+			break;
+		}
+		return data;
+}
+
 static void virtual_key_led_blink(int onoff)
 {
 	struct i2c_client *client = private_lp5562_client;
 	int ret = 0, reg_index = 0;
-	int target_pwm;
 	uint8_t data;
 	uint8_t command_data[50] = {0};
 
@@ -605,7 +657,7 @@ static void virtual_key_led_blink(int onoff)
 		vk_led_blink = 1;
 
 //		virtual_key_led_ignore_flag = 1;
-		lp5562_led_enable(client, 0);
+		lp5562_led_enable(client, 1);
 
 		data = 0;
 		ret = i2c_write_block(client, ENG_3_PC_CONTROL, &data, 1);
@@ -613,14 +665,52 @@ static void virtual_key_led_blink(int onoff)
 		data = 0x01;
 		ret = write_operation_register(client, data, 1);
 
-		reg_index = vk_led_step(command_data, reg_index, 0x20, 0x44, 1);
-		reg_index = vk_led_step(command_data, reg_index, 0x60, 0x44, 1);
-		reg_index = vk_led_step(command_data, reg_index, 0xb0, 0x44, 1);
-		reg_index = vk_led_step(command_data, reg_index, 0xc8, 0x54, 1);
-		reg_index = vk_led_step(command_data, reg_index, 0xb0, 0x44, 1);
-		reg_index = vk_led_step(command_data, reg_index, 0x40, 0x44, 1);
-		reg_index = vk_led_step(command_data, reg_index, 0x00, 0x7d, 1);
+		if (short_vib_notif) {
+			short_vib_notif = 0; // reset, so if next time vibration is off, it doesn't accidentally trigger a double blink short notfi...
+			reg_index = vk_led_step(command_data, reg_index, 0x40, 0x44, 1);
+			reg_index = vk_led_step(command_data, reg_index, 0xc8, 0x44, 1);
+			reg_index = vk_led_step(command_data, reg_index, 0x50, 0x4a, 1);
+			reg_index = vk_led_step(command_data, reg_index, 0xc8, 0x4e, 1);
+			reg_index = vk_led_step(command_data, reg_index, 0xb0, 0x44, 1);
+			reg_index = vk_led_step(command_data, reg_index, 0x40, 0x44, 1);
+		} else {
+			reg_index = vk_led_step(command_data, reg_index, 0x20, 0x44, 1);
+			reg_index = vk_led_step(command_data, reg_index, 0x70, 0x44, 1);
+			reg_index = vk_led_step(command_data, reg_index, 0xb0, 0x44, 1);
+			reg_index = vk_led_step(command_data, reg_index, 0xc8, 0x54, 1);
+			reg_index = vk_led_step(command_data, reg_index, 0xb0, 0x44, 1);
+			reg_index = vk_led_step(command_data, reg_index, 0x40, 0x44, 1);
+		}
+		data = bln_get_sleep_time(1);
+		reg_index = vk_led_step(command_data, reg_index, 0x00, data, 1);
 		reg_index = vk_led_step(command_data, reg_index, 0x00, 0x7f, 0);
+		if (bln_speed==0) {
+			reg_index = vk_led_step(command_data, reg_index, 0x00, 0x7f, 0);
+		}
+
+		/* === clear register === */
+//		command_data[reg_index++] = 0x00;
+//		command_data[reg_index++]  = 0x00;
+
+		ret = i2c_write_block(client, CMD_ENG_3_BASE, command_data, reg_index);
+
+		data = 0x02;
+		ret = write_operation_register(client, data, 1);
+		data = 0x42;
+		ret = write_enable_register(client, data, 1);
+	} else if (vk_led_blink && !screen_on) {
+		vk_led_blink = 0;
+
+//		virtual_key_led_ignore_flag = 1;
+		lp5562_led_enable(client, 1);
+
+		data = 0;
+		ret = i2c_write_block(client, ENG_3_PC_CONTROL, &data, 1);
+
+		data = 0x01;
+		ret = write_operation_register(client, data, 1);
+
+		reg_index = vk_led_step(command_data, reg_index, 0x00, 0x7d, 1);
 
 		/* === clear register === */
 		command_data[reg_index++] = 0x00;
@@ -632,33 +722,64 @@ static void virtual_key_led_blink(int onoff)
 		ret = write_operation_register(client, data, 1);
 		data = 0x42;
 		ret = write_enable_register(client, data, 1);
-	} else if (vk_led_blink) {
-		vk_led_blink = 0;
-
-//		virtual_key_led_ignore_flag = 0;
-		data = 0x40;
-		ret = write_enable_register(client, data, 1);
-		write_vk_led_program(client);
-
-		mutex_lock(&vk_led_mutex);
-		target_pwm = VK_brightness / VK_LED_FADE_LEVEL * VK_LED_FADE_LEVEL;
-		ret = virtual_key_led_change_pwm(client, (int)target_pwm);
-		last_pwm = target_pwm;
-		if(last_pwm)
-			vk_enable = 1;
-		else
-			vk_enable = 0;
-		mutex_unlock(&vk_led_mutex);
-
-		if(!rgb_enable && !vk_enable)
-			lp5562_led_disable(client);
 	}
 }
+
+static void vk_unblink_work_func(struct work_struct *work)
+{
+	I(" %s +++\n" , __func__);
+	virtual_key_led_blink(0);
+}
+
+static enum alarmtimer_restart blinkstop_rtc_callback(struct alarm *al, ktime_t now)
+{
+	I("%s step trylock\n",__func__);
+	if (!mutex_trylock(&blinkstopworklock)) {
+		I("%s step trylock failed, return \n",__func__);
+		return ALARMTIMER_NORESTART;
+	}
+	I("%s step trylock success \n",__func__);
+
+	I("%s step unblink? .... blinking %d && !screen_on  %d \n",__func__, vk_led_blink, !screen_on);
+	if (vk_led_blink && !screen_on) {
+		I("%s step unblink! 0\n",__func__);
+		queue_work(g_led_work_queue, &vk_unblink_work);
+	}
+	mutex_unlock(&blinkstopworklock);
+
+	return ALARMTIMER_NORESTART;
+}
+
+static int vary = 1;
 
 static void vk_blink_work_func(struct work_struct *work)
 {
 	I(" %s +++\n" , __func__);
 	virtual_key_led_blink(1);
+	if (bln_number > 0 && !charging) { // if blink number is not infinite and is not charging, schedule CANCEL work
+		if (!mutex_is_locked(&blinkstopworklock)) {
+			int sleeptime = bln_get_alarm_time() * (vary?(vary==2?bln_number+2:bln_number):(bln_number-2));
+
+			ktime_t wakeup_time;
+			ktime_t curr_time = { .tv64 = 0 };
+			wakeup_time = ktime_add_us(curr_time,
+				(sleeptime * 1000LL)); // msec to usec
+
+#if 0 
+// test code
+			vary = vary + 1;
+			if (vary>2) vary = 0;
+#endif
+
+			alarm_cancel(&blinkstopfunc_rtc); // stop pending alarm...
+			alarm_start_relative(&blinkstopfunc_rtc, wakeup_time); // start new...
+
+			I("%s: Current Time tv_sec: %ld, Alarm set to tv_sec: %ld\n",
+				__func__,
+				ktime_to_timeval(curr_time).tv_sec,
+				ktime_to_timeval(wakeup_time).tv_sec);
+		}
+	}
 	I(" %s ---\n" , __func__);
 }
 
@@ -846,7 +967,12 @@ void register_haptic(int value)
 	if (screen_on) return;
 	if (last_value == value) {
 		if (diff_jiffies < MAX_DIFF) {
-			if (!vk_led_blink && charging && bln_switch) {
+			if (value <= 200) {
+				short_vib_notif = 1;
+			} else {
+				short_vib_notif = 0;
+			}
+			if (!vk_led_blink && bln_switch) { // removing "&& charging" so if only haptic signals notification and not the system it still sets it on
 				queue_work(g_led_work_queue, &vk_blink_work);
 			}
 		}
@@ -939,7 +1065,9 @@ static void lp5562_color_blink(struct i2c_client *client, uint8_t red, uint8_t g
 #ifdef CONFIG_LEDS_QPNP_BUTTON_BLINK
 		// BLN
 		// sysfs configuation bln_no_charger_switch == 1 -> always blink even if not on charger
-		if (bln_switch && bln_no_charger_switch) virtual_key_led_blink(1);
+		if (bln_switch && bln_no_charger_switch) {
+			queue_work(g_led_work_queue, &vk_blink_work);
+		}
 		if (!pulse_rgb_blink) {
 #endif
 		/* === set green pwm === */
@@ -968,6 +1096,10 @@ static void lp5562_color_blink(struct i2c_client *client, uint8_t red, uint8_t g
 		ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
 		data = 0x00;
 		ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
+		/* === clear register === */
+		data = 0x00;
+		ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
+		ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
 #ifdef CONFIG_LEDS_QPNP_BUTTON_BLINK
 		} else {
 		I(" %s BLINK +++ red:%d, green:%d, blue:%d\n" , __func__, red, green, blue);
@@ -978,18 +1110,23 @@ static void lp5562_color_blink(struct i2c_client *client, uint8_t red, uint8_t g
 		reg_index = color_blink_step(client, 0xb0, 0x44, reg_index);
 		reg_index = color_blink_step(client, 0x82, 0x44, reg_index);
 		reg_index = color_blink_step(client, 0x22, 0x44, reg_index);
-		reg_index = color_blink_step(client, 0x00, 0x7c, reg_index);
+		// TODO add speed variation here later...
+		data = bln_get_sleep_time(0);
+		reg_index = color_blink_step(client, 0x00, data, reg_index);//0x7c, reg_index);
 		/* === wait 0.999s === */
 		data = 0x7f;
 		ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
 		data = 0x00;
 		ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
+		if (bln_speed == 0) {
+			/* === wait 0.999s === */
+			data = 0x7f;
+			ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
+			data = 0x00;
+			ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
+		}
 		}
 #endif
-		/* === clear register === */
-		data = 0x00;
-		ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
-		ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
 	}
 #ifdef LP5562_BLUE_LED
 	if (blue) {
@@ -1607,6 +1744,110 @@ static ssize_t bln_rgb_colored_battery_dump(struct device *dev,
 static DEVICE_ATTR(bln_rgb_batt_colored, (S_IWUSR|S_IRUGO),
       bln_rgb_colored_battery_show, bln_rgb_colored_battery_dump);
 
+
+static ssize_t bln_number_show(struct device *dev,
+            struct device_attribute *attr, char *buf)
+{
+      return snprintf(buf, PAGE_SIZE, "%d\n", bln_number);
+}
+
+static ssize_t bln_number_dump(struct device *dev,
+            struct device_attribute *attr, const char *buf, size_t count)
+{
+      int ret;
+      unsigned long input;
+
+      ret = kstrtoul(buf, 0, &input);
+      if (ret < 0)
+            return ret;
+            
+      if (input < 0 || input > BUTTON_BLINK_NUMBER_MAX)
+            input = BUTTON_BLINK_NUMBER_DEFAULT;
+            
+      bln_number = input;
+      
+      return count;
+}
+
+static DEVICE_ATTR(bln_number, (S_IWUSR|S_IRUGO),
+      bln_number_show, bln_number_dump);
+
+
+static ssize_t bln_number_max_show(struct device *dev,
+            struct device_attribute *attr, char *buf)
+{
+      return snprintf(buf, PAGE_SIZE, "%d\n", BUTTON_BLINK_NUMBER_MAX);
+}
+
+static ssize_t bln_number_max_dump(struct device *dev,
+            struct device_attribute *attr, const char *buf, size_t count)
+{
+      int ret;
+      unsigned long input;
+      
+      ret = kstrtoul(buf, 0, &input);
+      if (ret < 0)
+            return ret;
+            
+      return count;
+}
+
+static DEVICE_ATTR(bln_number_max, (S_IWUSR|S_IRUGO),
+      bln_number_max_show, bln_number_max_dump);
+
+
+static ssize_t bln_speed_show(struct device *dev,
+            struct device_attribute *attr, char *buf)
+{
+      return snprintf(buf, PAGE_SIZE, "%d\n", bln_speed);
+}
+
+static ssize_t bln_speed_dump(struct device *dev,
+            struct device_attribute *attr, const char *buf, size_t count)
+{
+      int ret;
+      unsigned long input;
+
+      ret = kstrtoul(buf, 0, &input);
+      if (ret < 0)
+            return ret;
+
+      if (input < 0 || input > BUTTON_BLINK_SPEED_MAX)
+            input = BUTTON_BLINK_SPEED_DEFAULT;
+
+      bln_speed = input;
+
+      return count;
+}
+
+static DEVICE_ATTR(bln_speed, (S_IWUSR|S_IRUGO),
+      bln_speed_show, bln_speed_dump);
+
+static ssize_t bln_speed_max_show(struct device *dev,
+            struct device_attribute *attr, char *buf)
+{
+      return snprintf(buf, PAGE_SIZE, "%d\n", BUTTON_BLINK_SPEED_MAX);
+}
+
+static ssize_t bln_speed_max_dump(struct device *dev,
+            struct device_attribute *attr, const char *buf, size_t count)
+{
+      int ret;
+      unsigned long input;
+
+      ret = kstrtoul(buf, 0, &input);
+      if (ret < 0)
+            return ret;
+
+      if (input < 0 || input > BUTTON_BLINK_SPEED_MAX)
+            input = 8;
+
+      return count;
+}
+
+static DEVICE_ATTR(bln_speed_max, (S_IWUSR|S_IRUGO),
+      bln_speed_max_show, bln_speed_max_dump);
+
 #endif
 
 static ssize_t lp5562_charging_led_switch_show(struct device *dev,
@@ -2155,7 +2396,8 @@ static int fb_notifier_led_callback(struct notifier_block *self,
         switch (*blank) {
         case FB_BLANK_UNBLANK:
 		screen_on = 1;
-		pr_info("fpf screen on -early\n");
+		alarm_cancel(&blinkstopfunc_rtc); // stop pending alarm...
+		I("screen on -early\n");
             break;
             
         case FB_BLANK_POWERDOWN:
@@ -2163,7 +2405,7 @@ static int fb_notifier_led_callback(struct notifier_block *self,
         case FB_BLANK_VSYNC_SUSPEND:
         case FB_BLANK_NORMAL:
 		screen_on = 0;
-		pr_info("fpf screen off -early\n");
+		I("screen off -early\n");
             break;
         }
     }
@@ -2172,7 +2414,8 @@ static int fb_notifier_led_callback(struct notifier_block *self,
         switch (*blank) {
         case FB_BLANK_UNBLANK:
 		screen_on = 1;
-		pr_info("fpf screen on\n");
+		alarm_cancel(&blinkstopfunc_rtc); // stop pending alarm...
+		I("screen on\n");
             break;
             
         case FB_BLANK_POWERDOWN:
@@ -2180,7 +2423,7 @@ static int fb_notifier_led_callback(struct notifier_block *self,
         case FB_BLANK_VSYNC_SUSPEND:
         case FB_BLANK_NORMAL:
 		screen_on = 0;
-		pr_info("fpf screen off\n");
+		I("screen off\n");
             break;
         }
     }
@@ -2300,6 +2543,7 @@ static int lp5562_led_probe(struct i2c_client *client
 			INIT_WORK(&cdata->leds[i].led_work, virtual_key_led_work_func);
 #ifdef CONFIG_LEDS_QPNP_BUTTON_BLINK
 			INIT_WORK(&vk_blink_work, vk_blink_work_func);
+			INIT_WORK(&vk_unblink_work, vk_unblink_work_func);
 #endif 
 			//INIT_WORK(&cdata->leds[i].led_work_multicolor, virtual_key_led_blink_work_func);
 			INIT_DELAYED_WORK(&cdata->leds[i].blink_delayed_work, led_fade_do_work);
@@ -2341,7 +2585,13 @@ static int lp5562_led_probe(struct i2c_client *client
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln);
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_no_charger);
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_rgb_batt_colored);
+			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_number);
+			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_number_max);
+			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_speed);
+			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_speed_max);
 			g_led_led_data_bln = &cdata->leds[i];
+			alarm_init(&blinkstopfunc_rtc, ALARM_REALTIME,
+				blinkstop_rtc_callback);
 #endif
 			wake_lock_init(&cdata->leds[i].led_wake_lock, WAKE_LOCK_SUSPEND, "lp5562");
 			INIT_WORK(&cdata->leds[i].led_work, led_work_func);
