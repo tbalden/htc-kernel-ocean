@@ -71,6 +71,8 @@ static int bln_switch = 1; // 0 - off / 1 - on
 static int bln_no_charger_switch = 1; // 0 - only do BLN when on charger / 1 - BLN when not on charger
 static int bln_number = BUTTON_BLINK_NUMBER_DEFAULT; // infinite = 0 - number of max button blinks when not on charger
 static int bln_speed = BUTTON_BLINK_SPEED_DEFAULT;
+static int rgb_coeff_divider = 1; // value between 1 - 20
+static int bln_coeff_divider = 2; // value between 1 - 20
 
 static int pulse_rgb_blink = 1;  // 0 - normal stock blinking / 1 - pulsating
 static int charging = 0;
@@ -593,7 +595,7 @@ static int vk_led_step(uint8_t command_data[], int reg_index, uint8_t brightness
 	if (set_brightness) {
 		/*=== Set PWM to brightness ===*/
 		command_data[reg_index++] = 0x40;
-		command_data[reg_index++]  = brightness;
+		command_data[reg_index++]  = brightness / bln_coeff_divider;
 	}
 
 	/*=== wait for time ===*/
@@ -802,8 +804,8 @@ static void led_set_multicolor(int onoff, int red, int green){
 	I(" %s , set display_flag = %d red %d green %d \n" , __func__, onoff, red, green);
 	if(onoff){
 		g_led_led_data_bln->Mode = 1;
-		g_led_led_data_bln->Red = red;
-		g_led_led_data_bln->Green = green;
+		g_led_led_data_bln->Red = red / rgb_coeff_divider;
+		g_led_led_data_bln->Green = green / rgb_coeff_divider;
 		g_led_led_data_bln->Blue = 0;
 		queue_work(g_led_work_queue, &g_led_led_data_bln->led_work_multicolor);
 	}else {
@@ -823,7 +825,7 @@ static int color_blink_step_by_color(struct i2c_client *client, uint8_t brightne
 	/* # === set pwm brightness === */
 	data = 0x40;
 	ret = i2c_write_block(client, (red?CMD_ENG_1_BASE:CMD_ENG_2_BASE) + reg_index++, &data, 1);
-	data = brightness;
+	data = brightness / rgb_coeff_divider;
 	ret = i2c_write_block(client, (red?CMD_ENG_1_BASE:CMD_ENG_2_BASE) + reg_index++, &data, 1);
 	/* === wait time === */
 	data = time;
@@ -990,7 +992,7 @@ static int color_blink_step(struct i2c_client *client, uint8_t brightness, uint8
 	/* # === set pwm brightness === */
 	data = 0x40;
 	ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
-	data = brightness;
+	data = brightness / rgb_coeff_divider;
 	ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
 	/* === wait time === */
 	data = time;
@@ -1069,6 +1071,7 @@ static void lp5562_color_blink(struct i2c_client *client, uint8_t red, uint8_t g
 			queue_work(g_led_work_queue, &vk_blink_work);
 		}
 		if (!pulse_rgb_blink) {
+		green = green / rgb_coeff_divider;
 #endif
 		/* === set green pwm === */
 		data = 0x40;
@@ -1848,6 +1851,67 @@ static ssize_t bln_speed_max_dump(struct device *dev,
 static DEVICE_ATTR(bln_speed_max, (S_IWUSR|S_IRUGO),
       bln_speed_max_show, bln_speed_max_dump);
 
+// coeff divider for notification blinking
+static ssize_t bln_coeff_div_show(struct device *dev,
+            struct device_attribute *attr, char *buf)
+{
+      return snprintf(buf, PAGE_SIZE, "%d\n", (rgb_coeff_divider<20?(rgb_coeff_divider-1):20));
+}
+
+static ssize_t bln_coeff_div_dump(struct device *dev,
+            struct device_attribute *attr, const char *buf, size_t count)
+{
+      int ret;
+      unsigned long input;
+
+      ret = kstrtoul(buf, 0, &input);
+      if (ret < 0)
+            return ret;
+
+      if (input < 0 || input > 20)
+            input = 0;
+
+      if (input < 20) {
+	      rgb_coeff_divider = input + 1;
+      } else rgb_coeff_divider = 500;
+
+      return count;
+}
+
+static DEVICE_ATTR(bln_rgb_blink_light_level, (S_IWUSR|S_IRUGO),
+      bln_coeff_div_show, bln_coeff_div_dump);
+
+
+// coeff divider for button blinking
+static ssize_t bln_coeff2_div_show(struct device *dev,
+            struct device_attribute *attr, char *buf)
+{
+      return snprintf(buf, PAGE_SIZE, "%d\n", (bln_coeff_divider-1));
+}
+
+static ssize_t bln_coeff2_div_dump(struct device *dev,
+            struct device_attribute *attr, const char *buf, size_t count)
+{
+      int ret;
+      unsigned long input;
+
+      ret = kstrtoul(buf, 0, &input);
+      if (ret < 0)
+            return ret;
+
+      if (input < 0 || input > 20)
+            input = 0;
+
+      bln_coeff_divider = input + 1;
+
+      return count;
+}
+
+static DEVICE_ATTR(bln_light_level, (S_IWUSR|S_IRUGO),
+      bln_coeff2_div_show, bln_coeff2_div_dump);
+
+
+
 #endif
 
 static ssize_t lp5562_charging_led_switch_show(struct device *dev,
@@ -1986,6 +2050,10 @@ static ssize_t lp5562_led_multi_color_store(struct device *dev,
 		led_multi_color_charge_level(charge_level);
 		// and return so color is not overwritten...
 		return count;
+	}
+	if (supposedly_charging) {
+		ldata->Red = ((val/rgb_coeff_divider) & Red_Mask) >> 16;
+		ldata->Green = ((val/rgb_coeff_divider) & Green_Mask) >> 8;
 	}
 #endif
 	queue_work(g_led_work_queue, &ldata->led_work_multicolor);
@@ -2589,6 +2657,8 @@ static int lp5562_led_probe(struct i2c_client *client
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_number_max);
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_speed);
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_speed_max);
+			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_rgb_blink_light_level);
+			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_light_level);
 			g_led_led_data_bln = &cdata->leds[i];
 			alarm_init(&blinkstopfunc_rtc, ALARM_REALTIME,
 				blinkstop_rtc_callback);
