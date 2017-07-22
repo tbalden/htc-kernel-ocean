@@ -64,6 +64,13 @@
 #define BUTTON_BLINK_NUMBER_MAX		50
 #define BUTTON_BLINK_NUMBER_DEFAULT	6
 
+#define RGB_PATTERN_NORMAL 0
+#define RGB_PATTERN_ONEPLUS5 1
+#define RGB_PATTERN_TRIPLE 2
+#define RGB_PATTERN_TRIPLE_UP 3
+#define RGB_PATTERN_TRIPLE_DOWN 4
+
+
 static DEFINE_MUTEX(blinkstopworklock);
 static struct alarm blinkstopfunc_rtc;
 
@@ -71,10 +78,37 @@ static int bln_switch = 1; // 0 - off / 1 - on
 static int bln_no_charger_switch = 1; // 0 - only do BLN when on charger / 1 - BLN when not on charger
 static int bln_number = BUTTON_BLINK_NUMBER_DEFAULT; // infinite = 0 - number of max button blinks when not on charger
 static int bln_speed = BUTTON_BLINK_SPEED_DEFAULT;
+static int bln_dim_blink = 0; // continue quarter strength blinking after bln_number passed blinking
+static int bln_dim_number = 0;//BUTTON_BLINK_NUMBER_DEFAULT * 2; // infinite = 0 - number of max dim button blinks when not on charger
+static int full_or_dim = 1;
+
 static int rgb_coeff_divider = 1; // value between 1 - 20
 static int bln_coeff_divider = 2; // value between 1 - 20
 
 static int pulse_rgb_blink = 1;  // 0 - normal stock blinking / 1 - pulsating
+static int pulse_rgb_pattern =  RGB_PATTERN_NORMAL;
+static int pattern_brightness[5][6] = {
+					{0x32,0x90,0xc8,0x90,0x62,0x22}, // normal
+					{0x12,0x36,0x74,0x50,0x30,0x12}, // oneplus5
+					{0xc8,0x10,0xc8,0x10,0xc8,0x00}, // triple
+					{0x10,0x00,0x38,0x00,0xd8,0x00}, // triple up
+					{0xd8,0x00,0x38,0x00,0x10,0x00}, // triple down
+				    };
+static int pattern_time[5][6] = {
+					{0x44,0x44,0x55,0x44,0x44,0x44}, // normal
+					{0x53,0x53,0x55,0x53,0x53,0x53}, // oneplus5
+					{0x44,0x44,0x44,0x44,0x44,0x55}, // triple
+					{0x50,0x50,0x50,0x50,0x50,0x55}, // triple up
+					{0x50,0x50,0x50,0x50,0x50,0x55}, // triple down
+				    };
+static int pattern_time_button[5][6] = {
+					{0x44,0x44,0x54,0x44,0x44,0x44}, // normal
+					{0x53,0x53,0x54,0x53,0x53,0x53}, // oneplus5
+					{0x44,0x44,0x54,0x44,0x44,0x44}, // triple
+					{0x50,0x50,0x54,0x50,0x50,0x50}, // triple up
+					{0x50,0x50,0x54,0x50,0x50,0x50}, // triple down
+				    };
+
 static int charging = 0;
 static struct work_struct vk_blink_work;
 static struct work_struct vk_unblink_work;
@@ -618,7 +652,7 @@ static uint8_t bln_get_sleep_time(int buttons) {
 			data = 0x44;
 			break;
 			case 1:
-			data = buttons?0x7d:0x7c;
+			data = pulse_rgb_pattern==RGB_PATTERN_ONEPLUS5 || pulse_rgb_pattern==RGB_PATTERN_TRIPLE_UP || pulse_rgb_pattern==RGB_PATTERN_TRIPLE_DOWN ? 44 : (buttons?0x7d:0x7c);
 			break;
 			case 0:
 			data = buttons?0x7d:0x7c;
@@ -643,10 +677,11 @@ static int bln_get_alarm_time(void) {
 		return data;
 }
 
-static void virtual_key_led_blink(int onoff)
+static void virtual_key_led_blink(int onoff, int dim)
 {
 	struct i2c_client *client = private_lp5562_client;
 	int ret = 0, reg_index = 0;
+	int dim_division = (onoff?0:dim)?8:1;
 	uint8_t data;
 	uint8_t command_data[50] = {0};
 
@@ -655,7 +690,7 @@ static void virtual_key_led_blink(int onoff)
 
 	I("virtual_key_led_blink +++, onoff = %d\n", onoff);
 
-	if(onoff && !screen_on) {
+	if((onoff || dim) && !screen_on) {
 		vk_led_blink = 1;
 
 //		virtual_key_led_ignore_flag = 1;
@@ -669,19 +704,19 @@ static void virtual_key_led_blink(int onoff)
 
 		if (short_vib_notif) {
 			short_vib_notif = 0; // reset, so if next time vibration is off, it doesn't accidentally trigger a double blink short notfi...
-			reg_index = vk_led_step(command_data, reg_index, 0x40, 0x44, 1);
-			reg_index = vk_led_step(command_data, reg_index, 0xc8, 0x44, 1);
-			reg_index = vk_led_step(command_data, reg_index, 0x50, 0x4a, 1);
-			reg_index = vk_led_step(command_data, reg_index, 0xc8, 0x4e, 1);
-			reg_index = vk_led_step(command_data, reg_index, 0xb0, 0x44, 1);
-			reg_index = vk_led_step(command_data, reg_index, 0x40, 0x44, 1);
+			reg_index = vk_led_step(command_data, reg_index, 0x40 / dim_division, 0x44, 1);
+			reg_index = vk_led_step(command_data, reg_index, 0xc8 / dim_division, 0x44, 1);
+			reg_index = vk_led_step(command_data, reg_index, 0x50 / dim_division, 0x4a, 1);
+			reg_index = vk_led_step(command_data, reg_index, 0xc8 / dim_division, 0x4e, 1);
+			reg_index = vk_led_step(command_data, reg_index, 0xb0 / dim_division, 0x44, 1);
+			reg_index = vk_led_step(command_data, reg_index, 0x40 / dim_division, 0x44, 1);
 		} else {
-			reg_index = vk_led_step(command_data, reg_index, 0x20, 0x44, 1);
-			reg_index = vk_led_step(command_data, reg_index, 0x70, 0x44, 1);
-			reg_index = vk_led_step(command_data, reg_index, 0xb0, 0x44, 1);
-			reg_index = vk_led_step(command_data, reg_index, 0xc8, 0x54, 1);
-			reg_index = vk_led_step(command_data, reg_index, 0xb0, 0x44, 1);
-			reg_index = vk_led_step(command_data, reg_index, 0x40, 0x44, 1);
+			reg_index = vk_led_step(command_data, reg_index, 0x20 / dim_division, pattern_time_button[pulse_rgb_pattern][0], 1);
+			reg_index = vk_led_step(command_data, reg_index, 0x70 / dim_division, pattern_time_button[pulse_rgb_pattern][1], 1);
+			reg_index = vk_led_step(command_data, reg_index, 0xb0 / dim_division, pattern_time_button[pulse_rgb_pattern][2], 1);
+			reg_index = vk_led_step(command_data, reg_index, 0xc8 / dim_division, pattern_time_button[pulse_rgb_pattern][3], 1);
+			reg_index = vk_led_step(command_data, reg_index, 0xb0 / dim_division, pattern_time_button[pulse_rgb_pattern][4], 1);
+			reg_index = vk_led_step(command_data, reg_index, 0x40 / dim_division, pattern_time_button[pulse_rgb_pattern][5], 1);
 		}
 		data = bln_get_sleep_time(1);
 		reg_index = vk_led_step(command_data, reg_index, 0x00, data, 1);
@@ -727,10 +762,36 @@ static void virtual_key_led_blink(int onoff)
 	}
 }
 
+static int vary1 = 1;
 static void vk_unblink_work_func(struct work_struct *work)
 {
 	I(" %s +++\n" , __func__);
-	virtual_key_led_blink(0);
+	if (full_or_dim == 1 && bln_dim_blink==1 && bln_dim_number > 0) { // won't keep dim blink?
+		if (!mutex_is_locked(&blinkstopworklock)) {
+			int sleeptime = bln_get_alarm_time() * (vary1?(vary1==2?bln_dim_number+2:bln_dim_number):(bln_dim_number-2));
+
+			ktime_t wakeup_time;
+			ktime_t curr_time = { .tv64 = 0 };
+			wakeup_time = ktime_add_us(curr_time,
+				(sleeptime * 1000LL)); // msec to usec
+
+#if 0 
+// test code
+			vary1 = vary1 + 1;
+			if (vary1>2) vary1 = 0;
+#endif
+
+			alarm_cancel(&blinkstopfunc_rtc); // stop pending alarm...
+			alarm_start_relative(&blinkstopfunc_rtc, wakeup_time); // start new...
+
+			I("%s: Current Time tv_sec: %ld, Alarm set to tv_sec: %ld\n",
+				__func__,
+				ktime_to_timeval(curr_time).tv_sec,
+				ktime_to_timeval(wakeup_time).tv_sec);
+		}
+	}
+	virtual_key_led_blink(0,bln_dim_blink&&full_or_dim);
+	full_or_dim = 0;
 }
 
 static enum alarmtimer_restart blinkstop_rtc_callback(struct alarm *al, ktime_t now)
@@ -752,12 +813,14 @@ static enum alarmtimer_restart blinkstop_rtc_callback(struct alarm *al, ktime_t 
 	return ALARMTIMER_NORESTART;
 }
 
-static int vary = 1;
 
+static int vary = 1;
 static void vk_blink_work_func(struct work_struct *work)
 {
 	I(" %s +++\n" , __func__);
-	virtual_key_led_blink(1);
+	full_or_dim = 1;
+	virtual_key_led_blink(1,bln_dim_blink);
+
 	if (bln_number > 0 && !charging) { // if blink number is not infinite and is not charging, schedule CANCEL work
 		if (!mutex_is_locked(&blinkstopworklock)) {
 			int sleeptime = bln_get_alarm_time() * (vary?(vary==2?bln_number+2:bln_number):(bln_number-2));
@@ -1107,12 +1170,12 @@ static void lp5562_color_blink(struct i2c_client *client, uint8_t red, uint8_t g
 		} else {
 		I(" %s BLINK +++ red:%d, green:%d, blue:%d\n" , __func__, red, green, blue);
 		/* # === set green blink === */
-		reg_index = color_blink_step(client, 0x42, 0x44, reg_index);
-		reg_index = color_blink_step(client, 0xa0, 0x44, reg_index);
-		reg_index = color_blink_step(client, 0xc8, 0x55, reg_index);
-		reg_index = color_blink_step(client, 0xb0, 0x44, reg_index);
-		reg_index = color_blink_step(client, 0x82, 0x44, reg_index);
-		reg_index = color_blink_step(client, 0x22, 0x44, reg_index);
+		reg_index = color_blink_step(client, pattern_brightness[pulse_rgb_pattern][0], pattern_time[pulse_rgb_pattern][0], reg_index);
+		reg_index = color_blink_step(client, pattern_brightness[pulse_rgb_pattern][1], pattern_time[pulse_rgb_pattern][1], reg_index);
+		reg_index = color_blink_step(client, pattern_brightness[pulse_rgb_pattern][2], pattern_time[pulse_rgb_pattern][2], reg_index);
+		reg_index = color_blink_step(client, pattern_brightness[pulse_rgb_pattern][3], pattern_time[pulse_rgb_pattern][3], reg_index);
+		reg_index = color_blink_step(client, pattern_brightness[pulse_rgb_pattern][4], pattern_time[pulse_rgb_pattern][4], reg_index);
+		reg_index = color_blink_step(client, pattern_brightness[pulse_rgb_pattern][5], pattern_time[pulse_rgb_pattern][5], reg_index);
 		// TODO add speed variation here later...
 		data = bln_get_sleep_time(0);
 		reg_index = color_blink_step(client, 0x00, data, reg_index);//0x7c, reg_index);
@@ -1297,7 +1360,7 @@ static void lp5562_led_off(struct i2c_client *client)
 	ret = i2c_write_block(client, R_PWM_CONTROL, &data, 1);
 #ifdef CONFIG_LEDS_QPNP_BUTTON_BLINK
 	// BLN
-	virtual_key_led_blink(0);
+	virtual_key_led_blink(0,0);
 #endif
 	ret = i2c_write_block(client, G_PWM_CONTROL, &data, 1);
 #ifdef LP5562_BLUE_LED
@@ -1910,7 +1973,136 @@ static ssize_t bln_coeff2_div_dump(struct device *dev,
 static DEVICE_ATTR(bln_light_level, (S_IWUSR|S_IRUGO),
       bln_coeff2_div_show, bln_coeff2_div_dump);
 
+// dim blink switch sysfs
+static ssize_t bln_dim_blink_show(struct device *dev,
+            struct device_attribute *attr, char *buf)
+{
+      return snprintf(buf, PAGE_SIZE, "%d\n", bln_dim_blink);
+}
 
+static ssize_t bln_dim_blink_dump(struct device *dev,
+            struct device_attribute *attr, const char *buf, size_t count)
+{
+      int ret;
+      unsigned long input;
+
+      ret = kstrtoul(buf, 0, &input);
+      if (ret < 0)
+            return ret;
+
+      if (input < 0 || input > 1)
+            input = 0;
+
+      bln_dim_blink = input;
+
+      return count;
+}
+
+static DEVICE_ATTR(bln_dim_blink, (S_IWUSR|S_IRUGO),
+      bln_dim_blink_show, bln_dim_blink_dump);
+
+
+// dim blink number switch sysfs
+static ssize_t bln_dim_number_show(struct device *dev,
+            struct device_attribute *attr, char *buf)
+{
+      return snprintf(buf, PAGE_SIZE, "%d\n", bln_dim_number);
+}
+      
+static ssize_t bln_dim_number_dump(struct device *dev,
+            struct device_attribute *attr, const char *buf, size_t count)
+{
+      int ret;
+      unsigned long input;
+
+      ret = kstrtoul(buf, 0, &input);
+      if (ret < 0)
+            return ret;
+
+      if (input < 0 || input > BUTTON_BLINK_NUMBER_MAX)
+            input = 0;
+
+      bln_dim_number = input;
+
+      return count;
+}
+
+static DEVICE_ATTR(bln_dim_number, (S_IWUSR|S_IRUGO),
+      bln_dim_number_show, bln_dim_number_dump);
+
+static ssize_t bln_dim_number_max_show(struct device *dev,
+            struct device_attribute *attr, char *buf)
+{
+      return snprintf(buf, PAGE_SIZE, "%d\n", BUTTON_BLINK_NUMBER_MAX);
+}
+
+static ssize_t bln_dim_number_max_dump(struct device *dev,
+            struct device_attribute *attr, const char *buf, size_t count)
+{
+      int ret;
+      unsigned long input;
+
+      ret = kstrtoul(buf, 0, &input);
+      if (ret < 0)
+            return ret;
+
+      return count;
+}
+
+static DEVICE_ATTR(bln_dim_number_max, (S_IWUSR|S_IRUGO),
+      bln_dim_number_max_show, bln_dim_number_max_dump);
+
+
+
+// rgb pulse pattern switch sysfs
+static ssize_t bln_pulse_rgb_pattern_show(struct device *dev,
+            struct device_attribute *attr, char *buf)
+{
+      return snprintf(buf, PAGE_SIZE, "%d\n", pulse_rgb_pattern);
+}
+      
+static ssize_t bln_pulse_rgb_pattern_dump(struct device *dev,
+            struct device_attribute *attr, const char *buf, size_t count)
+{
+      int ret;
+      unsigned long input;
+
+      ret = kstrtoul(buf, 0, &input);
+      if (ret < 0)
+            return ret;
+
+      if (input < 0 || input > RGB_PATTERN_TRIPLE_DOWN)
+            input = 0;
+
+      pulse_rgb_pattern = input;
+
+      return count;
+}
+
+static DEVICE_ATTR(bln_pulse_rgb_pattern, (S_IWUSR|S_IRUGO),
+      bln_pulse_rgb_pattern_show, bln_pulse_rgb_pattern_dump);
+
+static ssize_t bln_pulse_rgb_pattern_max_show(struct device *dev,
+            struct device_attribute *attr, char *buf)
+{
+      return snprintf(buf, PAGE_SIZE, "%d\n", RGB_PATTERN_TRIPLE_DOWN);
+}
+
+static ssize_t bln_pulse_rgb_pattern_max_dump(struct device *dev,
+            struct device_attribute *attr, const char *buf, size_t count)
+{
+      int ret;
+      unsigned long input;
+
+      ret = kstrtoul(buf, 0, &input);
+      if (ret < 0)
+            return ret;
+
+      return count;
+}
+
+static DEVICE_ATTR(bln_pulse_rgb_pattern_max, (S_IWUSR|S_IRUGO),
+      bln_pulse_rgb_pattern_max_show, bln_pulse_rgb_pattern_max_dump);
 
 #endif
 
@@ -2482,6 +2674,12 @@ static int fb_notifier_led_callback(struct notifier_block *self,
         switch (*blank) {
         case FB_BLANK_UNBLANK:
 		screen_on = 1;
+
+#if 0
+		pulse_rgb_pattern++;
+		if (pulse_rgb_pattern > 4) pulse_rgb_pattern = 0;
+#endif
+
 		alarm_cancel(&blinkstopfunc_rtc); // stop pending alarm...
 		I("screen on\n");
             break;
@@ -2659,6 +2857,11 @@ static int lp5562_led_probe(struct i2c_client *client
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_speed_max);
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_rgb_blink_light_level);
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_light_level);
+			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_dim_blink);
+			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_dim_number);
+			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_dim_number_max);
+			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_pulse_rgb_pattern);
+			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_pulse_rgb_pattern_max);
 			g_led_led_data_bln = &cdata->leds[i];
 			alarm_init(&blinkstopfunc_rtc, ALARM_REALTIME,
 				blinkstop_rtc_callback);
