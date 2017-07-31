@@ -123,6 +123,7 @@ static struct lp5562_led *g_led_led_data_bln;
 #endif
 #ifdef CONFIG_FB
 	static int screen_on = 1;
+	static unsigned long screen_off_jiffies = 0;
 	struct notifier_block *fb_notifier_led;
 #endif
 
@@ -677,6 +678,23 @@ static int bln_get_alarm_time(void) {
 		return data;
 }
 
+static unsigned long VK_OFF_TIME = 50;
+static int vk_off_time_passed = 0;
+/*
+*	check if screen is off, and enough time passed for vk led off process... return 1 if all off.
+*/
+static int vk_screen_is_off(void)
+{
+	unsigned int diff_jiffies = 0;
+	if (screen_on) return 0;
+	diff_jiffies = jiffies - screen_off_jiffies;
+	I("jiffies diff passed : %u\n", diff_jiffies);
+	if (!vk_off_time_passed && diff_jiffies < VK_OFF_TIME) return 0;
+	vk_off_time_passed = 1;
+	I("vk_screen_is_off 1\n");
+	return 1;
+}
+
 static void virtual_key_led_blink(int onoff, int dim)
 {
 	struct i2c_client *client = private_lp5562_client;
@@ -690,7 +708,7 @@ static void virtual_key_led_blink(int onoff, int dim)
 
 	I("virtual_key_led_blink +++, onoff = %d\n", onoff);
 
-	if((onoff || dim) && !screen_on) {
+	if((onoff || dim) && vk_screen_is_off()) {
 		vk_led_blink = 1;
 
 //		virtual_key_led_ignore_flag = 1;
@@ -735,7 +753,7 @@ static void virtual_key_led_blink(int onoff, int dim)
 		ret = write_operation_register(client, data, 1);
 		data = 0x42;
 		ret = write_enable_register(client, data, 1);
-	} else if (vk_led_blink && !screen_on) {
+	} else if (vk_led_blink && vk_screen_is_off()) {
 		vk_led_blink = 0;
 
 //		virtual_key_led_ignore_flag = 1;
@@ -2656,6 +2674,7 @@ static int fb_notifier_led_callback(struct notifier_block *self,
         switch (*blank) {
         case FB_BLANK_UNBLANK:
 		screen_on = 1;
+		vk_off_time_passed = 0;
 		alarm_cancel(&blinkstopfunc_rtc); // stop pending alarm...
 		I("screen on -early\n");
             break;
@@ -2664,8 +2683,9 @@ static int fb_notifier_led_callback(struct notifier_block *self,
         case FB_BLANK_HSYNC_SUSPEND:
         case FB_BLANK_VSYNC_SUSPEND:
         case FB_BLANK_NORMAL:
-		screen_on = 0;
-		I("screen off -early\n");
+//		screen_off_jiffies = jiffies;
+//		screen_on = 0;
+//		I("screen off -early\n");
             break;
         }
     }
@@ -2674,7 +2694,7 @@ static int fb_notifier_led_callback(struct notifier_block *self,
         switch (*blank) {
         case FB_BLANK_UNBLANK:
 		screen_on = 1;
-
+		vk_off_time_passed = 0;
 #if 0
 		pulse_rgb_pattern++;
 		if (pulse_rgb_pattern > 4) pulse_rgb_pattern = 0;
@@ -2688,6 +2708,7 @@ static int fb_notifier_led_callback(struct notifier_block *self,
         case FB_BLANK_HSYNC_SUSPEND:
         case FB_BLANK_VSYNC_SUSPEND:
         case FB_BLANK_NORMAL:
+		screen_off_jiffies = jiffies;
 		screen_on = 0;
 		I("screen off\n");
             break;
