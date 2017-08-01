@@ -643,9 +643,6 @@ static int virtual_key_led_change_pwm(struct i2c_client *client, int pwm_diff);
 
 static int vk_led_blink = 0;
 
-static void lp5562_vk_led_set_brightness(struct led_classdev *led_cdev,
-		enum led_brightness brightness);
-
 static uint8_t bln_get_sleep_time(int buttons) {
 		uint8_t data = 0x00;
 		switch (bln_speed) {
@@ -2293,9 +2290,10 @@ static void lp5562_vk_led_set_brightness(struct led_classdev *led_cdev,
 					  enum led_brightness brightness)
 {
 	struct lp5562_led *ldata;
-
+#ifdef CONFIG_LEDS_QPNP_BUTTON_BLINK
+	int divider = bln_coeff_divider>12?4:(bln_coeff_divider<3?1:(bln_coeff_divider/3));
+#endif
 	ldata = container_of(led_cdev, struct lp5562_led, cdev);
-
 	ldata->VK_brightness = brightness == LED_FULL? 256 : brightness;
 
 	if(use_color_table && brightness < table_level_num){
@@ -2305,6 +2303,15 @@ static void lp5562_vk_led_set_brightness(struct led_classdev *led_cdev,
 
 	VK_brightness = brightness == LED_FULL? 256 : brightness;
 	I(" %s , VK_brightness = %u\n" , __func__, VK_brightness);
+#ifdef CONFIG_LEDS_QPNP_BUTTON_BLINK
+	if (ldata->VK_brightness > 0) {
+		ldata->VK_brightness = ldata->VK_brightness / divider;
+		if (ldata->VK_brightness == 0) ldata->VK_brightness = 1;
+	}
+	VK_brightness = VK_brightness / divider;
+	if (VK_brightness < 16) VK_brightness = 16;
+	I(" %s , VK_brightness after bln coeff division = %u\n" , __func__, VK_brightness);
+#endif
 
 	if(!virtual_key_led_ignore_flag)
 		queue_work(g_led_work_queue, &ldata->led_work);
