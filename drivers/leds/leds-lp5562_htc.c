@@ -1033,6 +1033,7 @@ static int last_value = 0;
 static unsigned long MAX_DIFF = 200;
 
 #define FINGERPRINT_VIB_TIME_EXCEPTION 40
+#define SQUEEZE_VIB_TIME_EXCEPTION 15
 
 void register_haptic(int value)
 {
@@ -1042,7 +1043,9 @@ void register_haptic(int value)
 
 //	if this exceptional time is used, it means, fingerprint scanner vibrated with proxomity sensor detection on
 //	and with unregistered finger, so no wake event. In this case, don't start blinking, not a notif, just return
+//	same with squeeze vibration time value.
 	if (value == FINGERPRINT_VIB_TIME_EXCEPTION) return;
+	if (value == SQUEEZE_VIB_TIME_EXCEPTION) return;
 
 	if (screen_on) return;
 	if (last_value == value) {
@@ -2291,7 +2294,7 @@ static void lp5562_vk_led_set_brightness(struct led_classdev *led_cdev,
 {
 	struct lp5562_led *ldata;
 #ifdef CONFIG_LEDS_QPNP_BUTTON_BLINK
-	int divider = bln_coeff_divider>12?4:(bln_coeff_divider<3?1:(bln_coeff_divider/3));
+	int divider = bln_coeff_divider>8?4:(bln_coeff_divider<3?1:(bln_coeff_divider/2));
 #endif
 	ldata = container_of(led_cdev, struct lp5562_led, cdev);
 	ldata->VK_brightness = brightness == LED_FULL? 256 : brightness;
