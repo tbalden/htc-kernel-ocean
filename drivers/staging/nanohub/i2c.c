@@ -117,15 +117,15 @@ int nanohub_i2c_read(struct nanohub_comms *comms, uint8_t *data,
 		return ERROR_NACK;
 
 	do {
-		pr_debug
-		    ("master_recv: read_len=%d, read_cnt=%d, read_total=%d\n",
+		pr_info
+		    ("nanohub_i2c master_recv: cluent %s  read_len=%d, read_cnt=%d, read_total=%d\n", comms->i2c_client->name
 		     read_len, read_cnt, read_total);
 		ret =
 		    i2c_master_recv(comms->i2c_client, &data[read_len],
 				    read_cnt);
-		pr_debug("master_recv: ret=%d\n", ret);
-		pr_debug(
-		    "data: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+		pr_info("nanohub_i2c master_recv: ret=%d\n", ret);
+		pr_info(
+		    "nanohub_i2c data: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
 		    data[0], data[1], data[2], data[3], data[4], data[5],
 		    data[6], data[7], data[8], data[9], data[10], data[11],
 		    data[12], data[13], data[14], data[15], data[16], data[17],

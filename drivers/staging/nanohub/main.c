@@ -337,6 +337,7 @@ static void edge_keyprotect_event(struct input_handle *handle, unsigned int type
 	if (type != EV_KEY)
 		return;
 
+	pr_info("nanohub: EGR keyprotect event type %u code %u value %d\n",type,code,value);
 	if (code >= KEY_VOLUMEDOWN && code <= KEY_POWER && !!value)
 		nanohub_key_status(!!value);
 
@@ -1769,7 +1770,6 @@ static ssize_t nanohub_read(struct file *file, char *buffer, size_t length,
 		ret = buf->length;
 
 	nanohub_io_put_buf(&data->free_pool, buf);
-
 	return ret;
 }
 
@@ -1787,7 +1787,6 @@ static ssize_t nanohub_write(struct file *file, const char *buffer,
 	ret = nanohub_comms_write(data, buffer, length);
 
 	release_wakeup(data);
-
 	return ret;
 }
 
@@ -1800,7 +1799,9 @@ static unsigned int nanohub_poll(struct file *file, poll_table *wait)
 
 	if (nanohub_io_has_buf(io))
 		mask |= POLLIN | POLLRDNORM;
-
+#if 0
+	pr_info("%s nanohub read \n",__func__);
+#endif
 	return mask;
 }
 
@@ -1874,6 +1875,12 @@ static bool nanohub_os_log(char *buffer, int len)
 	}
 }
 
+#if 0
+extern void register_squeeze_wake(int nanohub_flag, int vibrator_flag, unsigned long timestamp, int init_event_flag);
+
+static unsigned long edge_wake_jiffies = 0;
+#endif
+
 static void nanohub_process_buffer(struct nanohub_data *data,
 				   struct nanohub_buf **buf,
 				   int ret)
@@ -1882,9 +1889,13 @@ static void nanohub_process_buffer(struct nanohub_data *data,
 	uint8_t interrupt;
 	bool wakeup = false;
 	struct nanohub_io *io = &data->io[ID_NANOHUB_SENSOR];
+#if 0
+	unsigned int diff_jiffies;
+#endif
 
 	data->err_cnt = 0;
 	if (ret < 4 || nanohub_os_log((*buf)->buffer, ret)) {
+		pr_info("nanohub: buffer too small or os log\n");
 		release_wakeup(data);
 		return;
 	}
@@ -1892,16 +1903,63 @@ static void nanohub_process_buffer(struct nanohub_data *data,
 	(*buf)->length = ret;
 
 	event_id = le32_to_cpu((((uint32_t *)(*buf)->buffer)[0]) & 0x7FFFFFFF);
+#if 0
+	if (event_id != 544 && event_id != 572) 
+		pr_info("%s nanohub: event_id: %d data %d %d %d \n",__func__, event_id, (*buf)->buffer[0], (*buf)->buffer[1], (*buf)->buffer[2] );
+#endif
 
 /* HTC_START */
 	if (event_id == sensorGetMyEventType(SENS_TYPE_PROX)) {
             htc_ps_adc = ((*buf)->buffer[HTC_PROX_DATA_BUFFER_INDEX_START] + ((*buf)->buffer[HTC_PROX_DATA_BUFFER_INDEX_START + 1] << 8));
             htc_ps_pocket_mode = (*buf)->buffer[HTC_PROX_DATA_BUFFER_INDEX_START + 2];
+#if 0
+		pr_info("%s nanoub: pocket_mode: %d \n",__func__, htc_ps_pocket_mode);
+#endif
 	} else if (event_id == sensorGetMyEventType(SENS_TYPE_HTC_EASY_ACCESS)) {
 		pr_info("nanohub: htc_easy_access triggered\n");
 	} else if (event_id == sensorGetMyEventType(SENS_TYPE_HTC_SECOND_DISP)) {
 		pr_info("nanohub: htc_second_disp triggered\n");
+	} 
+#if 0
+	else if (event_id == sensorGetMyEventType(SENS_TYPE_HTC_EDGE)) {
+//		pr_info("nanohub: htc_edge triggered\n");
+	} else if (event_id == sensorGetMyEventType(SENS_TYPE_HTC_EDWK)) {
+		pr_info("nanohub: htc_edge_wake triggered buffer size %d \n", (*buf)->length);
+#if 0
+		pr_info("%s nanohub: event_id: %d data "
+		    "%d %d %d" 		    "%d %d %d"		    "%d %d %d" 		    "%d %d %d" 		    "%d %d %d" 		    "%d %d %d" 		    "%d %d %d" 
+		    "%d %d %d" 		    "%d %d %d" 		    "%d %d %d"		    "%d %d %d" 		    "%d %d %d" 		    "%d %d %d" 		    "%d %d %d" 
+		    "%d %d %d" 		    "%d %d %d"
+		    "\n",__func__, event_id, 
+		    (*buf)->buffer[0], (*buf)->buffer[1], (*buf)->buffer[2],		    (*buf)->buffer[3], (*buf)->buffer[4], (*buf)->buffer[5],
+		    (*buf)->buffer[6], (*buf)->buffer[7], (*buf)->buffer[8],		    (*buf)->buffer[9], (*buf)->buffer[10], (*buf)->buffer[11],
+		    (*buf)->buffer[12], (*buf)->buffer[13], (*buf)->buffer[14],		    (*buf)->buffer[15], (*buf)->buffer[16], (*buf)->buffer[17],
+		    (*buf)->buffer[18], (*buf)->buffer[19], (*buf)->buffer[20],		    (*buf)->buffer[21], (*buf)->buffer[22], (*buf)->buffer[23],
+		    (*buf)->buffer[24], (*buf)->buffer[25], (*buf)->buffer[26],		    (*buf)->buffer[27], (*buf)->buffer[28], (*buf)->buffer[29],
+		    (*buf)->buffer[30], (*buf)->buffer[31], (*buf)->buffer[32],		    (*buf)->buffer[33], (*buf)->buffer[34], (*buf)->buffer[35],
+		    (*buf)->buffer[36], (*buf)->buffer[37], (*buf)->buffer[38],		    (*buf)->buffer[39], (*buf)->buffer[40], (*buf)->buffer[41],
+		    (*buf)->buffer[42], (*buf)->buffer[43], (*buf)->buffer[44],		    (*buf)->buffer[45], (*buf)->buffer[46], (*buf)->buffer[47] 
+		    );
+#endif
+		if ( (*buf)->buffer[18] == 128 ) {
+			// edge wake init event
+			edge_wake_jiffies = jiffies;
+			pr_info("nanohub: htc_edge_wake triggered INIT ++\n");
+			register_squeeze_wake(1,0,jiffies,1);
+		} else 
+		if ( (*buf)->buffer[18] == 0 ) {
+			// edge wake finished event
+			diff_jiffies = jiffies - edge_wake_jiffies;
+			edge_wake_jiffies = 0;
+			pr_info("nanohub: htc_edge_wake triggered INIT diff jiffies = %u--\n", diff_jiffies);
+//			register_squeeze_wake(1,0,jiffies,0);
+//			if (diff_jiffies <= 45) {
+//				pr_info("nanohub: squeeze_wake event !\n");
+//				register_squeeze_wake(1,0,jiffies,0);
+//			}
+		}
 	}
+#endif
 /* HTC_END */
 
 	if (ret >= sizeof(uint32_t) + sizeof(uint64_t) + sizeof(uint32_t) &&
@@ -1961,6 +2019,7 @@ static int nanohub_kthread(void *arg)
 			nanohub_set_state(data, ST_RUNNING);
 			break;
 		case ST_ERROR:
+			pr_info("%s nanohub ST_ERROR !!! \n", __func__);
 			get_monotonic_boottime(&curr_ts);
 			if (curr_ts.tv_sec - first_err_ts.tv_sec > ERR_RESET_TIME_SEC
 				&& data->err_cnt > ERR_RESET_COUNT) {

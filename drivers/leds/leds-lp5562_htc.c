@@ -31,6 +31,10 @@
 #include <linux/of_gpio.h>
 #include <linux/wakelock.h>
 
+#if 1
+#include <linux/stacktrace.h>
+#endif
+
 #define CONFIG_LEDS_QPNP_BUTTON_BLINK
 #ifdef CONFIG_LEDS_QPNP_BUTTON_BLINK
 #include <linux/alarmtimer.h>
@@ -1035,8 +1039,24 @@ static unsigned long MAX_DIFF = 200;
 #define FINGERPRINT_VIB_TIME_EXCEPTION 40
 #define SQUEEZE_VIB_TIME_EXCEPTION 15
 
+
+#define STACK_LENGTH 10
+
+//extern void register_squeeze_wake(int nanohub_flag, int vibrator_flag, unsigned long timestamp, int init_event_flag);
+extern void register_squeeze(unsigned long timestamp, int vibration);
+
 void register_haptic(int value)
 {
+	unsigned long stack_entries[STACK_LENGTH];
+	struct stack_trace trace = {
+		.nr_entries = 0,
+		.entries = &stack_entries[0],
+
+		.max_entries = STACK_LENGTH,
+
+		/* How many "lower entries" to skip. */
+		.skip = 0
+	};
 	unsigned int diff_jiffies = jiffies - last_haptic_jiffies;
 	last_haptic_jiffies = jiffies;
 	I("%s %d - jiffies diff %u \n",__func__,value, diff_jiffies);
@@ -1044,8 +1064,17 @@ void register_haptic(int value)
 //	if this exceptional time is used, it means, fingerprint scanner vibrated with proxomity sensor detection on
 //	and with unregistered finger, so no wake event. In this case, don't start blinking, not a notif, just return
 //	same with squeeze vibration time value.
+
+	save_stack_trace(&trace);
+	//WARN_ON(1);
+
 	if (value == FINGERPRINT_VIB_TIME_EXCEPTION) return;
-	if (value == SQUEEZE_VIB_TIME_EXCEPTION) return;
+	if (value == SQUEEZE_VIB_TIME_EXCEPTION) {
+		last_value = value;
+//		register_squeeze_wake(0,1,jiffies,0);
+		register_squeeze(jiffies,1);
+		return;
+	}
 
 	if (screen_on) return;
 	if (last_value == value) {

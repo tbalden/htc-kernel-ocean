@@ -307,6 +307,185 @@ static bool fpf_input_filter(struct input_handle *handle,
 
 
 
+// ---------------- wakelock method code
+static int squeeze_wake = 1;
+static int squeeze_sleep = 1;
+
+static unsigned long longcount_start = 0;
+static int interrupt_longcount = 0;
+static void squeeze_longcount(struct work_struct * squeeze_longcount_work) {
+	while (1) {
+		if (interrupt_longcount) {
+			return;
+		pr_info("%s squeeze call || longcount interrupted\n",__func__);
+		}
+		if (jiffies - longcount_start > 35) {
+			pr_info("%s squeeze call || longcount VIBRATION !! \n",__func__);
+			fpf_vib();
+			return;
+		}
+		msleep(10);
+	}
+}
+static DECLARE_WORK(squeeze_longcount_work, squeeze_longcount);
+static void squeeze_longcount_trigger(void) {
+	interrupt_longcount = 0;
+	schedule_work(&squeeze_longcount_work);
+        return;
+}
+
+static unsigned long last_squeeze_timestamp = 0;
+static unsigned long last_screen_event_timestamp = 0;
+
+#define STAGE_INIT 0
+#define STAGE_FIRST_WL 1
+#define STAGE_VIB 2
+static int stage = STAGE_INIT;
+
+void register_squeeze(unsigned long timestamp, int vibration) {
+	unsigned int diff = jiffies - last_screen_event_timestamp;
+	pr_info("%s squeeze call ts %u diff %u vibration %d\n", __func__, (unsigned int)timestamp,diff, vibration);
+	if (!squeeze_wake && !squeeze_sleep) return;
+	if (!last_screen_event_timestamp) return;
+	if ((!screen_on && diff < 3) || (screen_on && diff < 30)) return;
+
+	pr_info("%s squeeze call ++ START STAGE : %d\n",__func__,stage);
+	if (stage == STAGE_INIT) {
+		if (!vibration) {
+			stage = STAGE_FIRST_WL;
+			last_squeeze_timestamp = jiffies;
+		}
+		pr_info("%s squeeze call -- END STAGE : %d\n",__func__,stage);
+		return;
+	}
+	diff = jiffies - last_squeeze_timestamp;
+	pr_info("%s squeeze call ++ squeeze diff : %u\n",__func__,diff);
+
+	if (stage == STAGE_FIRST_WL) {
+		if (vibration && diff <5) { 
+			stage = STAGE_VIB;
+			// start longcount trigger
+			longcount_start = last_squeeze_timestamp;
+			squeeze_longcount_trigger();
+			pr_info("%s squeeze call -- END STAGE : %d\n",__func__,stage);
+			return; 
+		} else {
+			if (vibration) { // vibration but too late...back to init state..
+				stage = STAGE_INIT; 
+			} else {
+				// wakelock registered -> start time counting in FIRST_WL stage again...
+				last_squeeze_timestamp = jiffies;
+			}
+			pr_info("%s squeeze call -- END STAGE : %d\n",__func__,stage);
+			return;
+		}
+	}
+	if (stage == STAGE_VIB) {
+		stage = STAGE_INIT;
+		// interrupt longcount
+		interrupt_longcount = 1;
+		if (vibration) {
+			pr_info("%s squeeze call -- exiting because vibration endstage: %d\n",__func__,stage);
+			return;
+		} else if (diff<35) {
+			pr_info("%s squeeze call -- power onoff endstage: %d\n",__func__,stage);
+			last_screen_event_timestamp = jiffies;
+			fpf_pwrtrigger(0);
+		} else if (diff>75) { // time passed way over a normal wakelock cycle... start with second phase instead!
+			stage = STAGE_FIRST_WL;
+			last_squeeze_timestamp = jiffies;
+		} else
+		{
+		}
+		pr_info("%s squeeze call -- END STAGE : %d\n",__func__,stage);
+	}
+
+#if 0
+	if (screen_on && diff > 80) { // enough time passed since screen on...
+		diff = jiffies - last_squeeze_timestamp;
+		pr_info("%s squeeze call press release diff %u\n", __func__, diff);
+		if (diff < 35) { // last squeeze wakelock report happened not so long ago
+			last_screen_event_timestamp = 0;
+			last_squeeze_timestamp = 0;
+			interrupt_longcount = 1;
+			fpf_pwrtrigger(0);
+			return;
+		} else {
+			// start longcount from first press..if 35 passes without releaseing, it will vibrate...
+			if (!last_squeeze_timestamp || diff > 80) {
+				last_squeeze_timestamp = jiffies;
+				longcount_start = last_squeeze_timestamp;
+				squeeze_longcount_trigger();
+			} else {
+				last_squeeze_timestamp = 0;
+				interrupt_longcount = 1;
+			}
+		}
+	}
+	if (!screen_on && diff > 45) { // enough time passed since screen on...
+		diff = jiffies - last_squeeze_timestamp;
+		pr_info("%s squeeze call press release diff %u\n", __func__, diff);
+		if (diff < 35) { // last squeeze wakelock report happened not so long ago
+			last_screen_event_timestamp = 0;
+			last_squeeze_timestamp = 0;
+			interrupt_longcount = 1;
+			fpf_pwrtrigger(0);
+			return;
+		} else {
+			// start longcount from first press..if 35 passes without releaseing, it will vibrate...
+			if (!last_squeeze_timestamp || diff > 45) {
+				last_squeeze_timestamp = jiffies;
+				longcount_start = last_squeeze_timestamp;
+				squeeze_longcount_trigger();
+			} else {
+				last_squeeze_timestamp = 0;
+				interrupt_longcount = 1;
+			}
+		}
+	}
+#endif
+
+}
+EXPORT_SYMBOL(register_squeeze);
+
+#if 0
+// ----------------- nanohub method
+
+static unsigned long last_timestamp = 0;
+#define SQUEEZE_EVENT_TYPE_NANOHUB  0
+#define SQUEEZE_EVENT_TYPE_NANOHUB_INIT  1
+#define SQUEEZE_EVENT_TYPE_VIBRATOR  2
+
+static int last_event = 0;
+
+void register_squeeze_wake(int nanohub_flag, int vibrator_flag, unsigned long timestamp, int init_event_flag)
+{
+	unsigned int diff = timestamp - last_timestamp;
+	int event = nanohub_flag?(init_event_flag?SQUEEZE_EVENT_TYPE_NANOHUB_INIT:SQUEEZE_EVENT_TYPE_NANOHUB):SQUEEZE_EVENT_TYPE_VIBRATOR;
+
+	pr_info("%s squeeze wake call, nano %d vib %d ts %u diff %u init flag %d event %d last_event %d\n", __func__, nanohub_flag,vibrator_flag,(unsigned int)timestamp,diff,init_event_flag, event, last_event);
+	last_timestamp = timestamp;
+	if (!screen_on && vibrator_flag) {
+		if (!squeeze_wake) return;
+		pr_info("%s screen off and vibrator match: pwr off\n",__func__);
+		last_timestamp = 0;
+		fpf_pwrtrigger(0);
+		return;
+	}
+	
+	if (screen_on && diff < 45 && event!=last_event) {
+		if (!squeeze_sleep) return;
+		pr_info("%s screen on and latest event diff small enough: pwr on\n",__func__);
+		last_timestamp = 0;
+		fpf_pwrtrigger(0);
+		return;
+	}
+	last_event = event;
+	pr_info("%s latest event not triggering. diff: %u\n",__func__,diff);
+}
+EXPORT_SYMBOL(register_squeeze_wake);
+#endif
+
 static void fpf_input_disconnect(struct input_handle *handle)
 {
 	input_close_device(handle);
@@ -430,6 +609,61 @@ static ssize_t vib_strength_dump(struct device *dev,
 static DEVICE_ATTR(vib_strength, (S_IWUSR|S_IRUGO),
 	vib_strength_show, vib_strength_dump);
 
+static ssize_t squeeze_sleep_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", squeeze_sleep);
+}
+
+static ssize_t squeeze_sleep_dump(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int ret;
+	unsigned long input;
+
+	ret = kstrtoul(buf, 0, &input);
+	if (ret < 0)
+		return ret;
+
+	if (input < 0 || input > 1)
+		input = 0;				
+
+	squeeze_sleep = input;			
+	
+	return count;
+}
+
+static DEVICE_ATTR(squeeze_sleep, (S_IWUSR|S_IRUGO),
+	squeeze_sleep_show, squeeze_sleep_dump);
+
+static ssize_t squeeze_wake_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", squeeze_wake);
+}
+
+static ssize_t squeeze_wake_dump(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int ret;
+	unsigned long input;
+
+	ret = kstrtoul(buf, 0, &input);
+	if (ret < 0)
+		return ret;
+
+	if (input < 0 || input > 1)
+		input = 0;				
+
+	squeeze_wake = input;			
+	
+	return count;
+}
+
+static DEVICE_ATTR(squeeze_wake, (S_IWUSR|S_IRUGO),
+	squeeze_wake_show, squeeze_wake_dump);
+
+
 static struct kobject *fpf_kobj;
 
 
@@ -466,6 +700,7 @@ static int fb_notifier_callback(struct notifier_block *self,
         switch (*blank) {
         case FB_BLANK_UNBLANK:
 		screen_on = 1;
+		last_screen_event_timestamp = jiffies;
 		pr_info("fpf screen on\n");
             break;
 
@@ -474,6 +709,7 @@ static int fb_notifier_callback(struct notifier_block *self,
         case FB_BLANK_VSYNC_SUSPEND:
         case FB_BLANK_NORMAL:
 		screen_on = 0;
+		last_screen_event_timestamp = jiffies;
 		pr_info("fpf screen off\n");
             break;
         }
@@ -535,6 +771,14 @@ static int __init fpf_init(void)
 	rc = sysfs_create_file(fpf_kobj, &dev_attr_fpf.attr);
 	if (rc)
 		pr_err("%s: sysfs_create_file failed for fpf\n", __func__);
+
+	rc = sysfs_create_file(fpf_kobj, &dev_attr_squeeze_wake.attr);
+	if (rc)
+		pr_err("%s: sysfs_create_file failed for swake\n", __func__);
+
+	rc = sysfs_create_file(fpf_kobj, &dev_attr_squeeze_sleep.attr);
+	if (rc)
+		pr_err("%s: sysfs_create_file failed for ssleep\n", __func__);
 
 	rc = sysfs_create_file(fpf_kobj, &dev_attr_fpf_dt_wait_period.attr);
 	if (rc)
