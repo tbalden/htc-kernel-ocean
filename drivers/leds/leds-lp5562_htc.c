@@ -2311,8 +2311,10 @@ static void lp5562_vk_led_set_brightness(struct led_classdev *led_cdev,
 		ldata->VK_brightness = ldata->VK_brightness / divider;
 		if (ldata->VK_brightness == 0) ldata->VK_brightness = 1;
 	}
-	VK_brightness = VK_brightness / divider;
-	if (VK_brightness < 16) VK_brightness = 16;
+	if (VK_brightness > 0) {
+		VK_brightness = VK_brightness / divider;
+		if (VK_brightness < 16) VK_brightness = 16;
+	}
 	I(" %s , VK_brightness after bln coeff division = %u\n" , __func__, VK_brightness);
 #endif
 
