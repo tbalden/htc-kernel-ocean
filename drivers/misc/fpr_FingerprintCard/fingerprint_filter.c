@@ -362,7 +362,7 @@ void register_squeeze(unsigned long timestamp, int vibration) {
 	pr_info("%s squeeze call ++ squeeze diff : %u\n",__func__,diff);
 
 	if (stage == STAGE_FIRST_WL) {
-		if (vibration && diff <5) { 
+		if (vibration && diff < 3) {
 			stage = STAGE_VIB;
 			// start longcount trigger
 			longcount_start = last_squeeze_timestamp;
