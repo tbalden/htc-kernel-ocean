@@ -311,6 +311,27 @@ static bool fpf_input_filter(struct input_handle *handle,
 static int squeeze_wake = 1;
 static int squeeze_sleep = 1;
 
+// defines what maximum level of user setting for minimum squeeze power set on sense ui
+// will set kernel-side squeeze-to-sleep/wake active. This way user can set below this
+// level the squeeze power on Sense UI, and kernel-squeeze handling will turn on
+static int squeeze_power_kernel_max_threshold = 0; // 0 - 9
+// 112, 132, 152, 172, 192, 212, 232, 252, 272, 292
+// 100-120 - 121-130...- 280-300
+
+// int that signals if kernel should handle squeezes for squeeze to sleep/wake
+static int squeeze_kernel_handled = 0;
+
+void register_squeeze_power_threshold_change(int power) {
+	int new_level = (power - 101) / 20;
+	pr_info("%s squeeze call new_level power %d max level %d power %d \n",__func__,new_level,squeeze_power_kernel_max_threshold,power);
+	if (new_level <= squeeze_power_kernel_max_threshold && power>100) {
+		squeeze_kernel_handled = 1;
+	} else {
+		squeeze_kernel_handled = 0;
+	}
+}
+EXPORT_SYMBOL(register_squeeze_power_threshold_change);
+
 static unsigned long longcount_start = 0;
 static int interrupt_longcount = 0;
 static void squeeze_longcount(struct work_struct * squeeze_longcount_work) {
@@ -345,6 +366,7 @@ static int stage = STAGE_INIT;
 void register_squeeze(unsigned long timestamp, int vibration) {
 	unsigned int diff = jiffies - last_screen_event_timestamp;
 	pr_info("%s squeeze call ts %u diff %u vibration %d\n", __func__, (unsigned int)timestamp,diff, vibration);
+	if (!squeeze_kernel_handled) return;
 	if (!squeeze_wake && !squeeze_sleep) return;
 	if (!last_screen_event_timestamp) return;
 	if ((!screen_on && diff < 3) || (screen_on && diff < 30)) return;
@@ -664,6 +686,35 @@ static DEVICE_ATTR(squeeze_wake, (S_IWUSR|S_IRUGO),
 	squeeze_wake_show, squeeze_wake_dump);
 
 
+static ssize_t squeeze_max_power_level_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", squeeze_power_kernel_max_threshold);
+}
+
+static ssize_t squeeze_max_power_level_dump(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int ret;
+	unsigned long input;
+
+	ret = kstrtoul(buf, 0, &input);
+	if (ret < 0)
+		return ret;
+
+	if (input < 0 || input > 9)
+		input = 0;
+
+	squeeze_power_kernel_max_threshold = input;
+	
+	return count;
+}
+
+static DEVICE_ATTR(squeeze_max_power_level, (S_IWUSR|S_IRUGO),
+	squeeze_max_power_level_show, squeeze_max_power_level_dump);
+
+
+
 static struct kobject *fpf_kobj;
 
 
@@ -779,6 +830,10 @@ static int __init fpf_init(void)
 	rc = sysfs_create_file(fpf_kobj, &dev_attr_squeeze_sleep.attr);
 	if (rc)
 		pr_err("%s: sysfs_create_file failed for ssleep\n", __func__);
+
+	rc = sysfs_create_file(fpf_kobj, &dev_attr_squeeze_max_power_level.attr);
+	if (rc)
+		pr_err("%s: sysfs_create_file failed for squeeze max pwr level\n", __func__);
 
 	rc = sysfs_create_file(fpf_kobj, &dev_attr_fpf_dt_wait_period.attr);
 	if (rc)

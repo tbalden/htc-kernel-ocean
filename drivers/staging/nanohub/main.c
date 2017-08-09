@@ -630,6 +630,10 @@ static ssize_t get_edge_threshold(struct device *dev, struct device_attribute *a
 	return scnprintf(buf, PAGE_SIZE, "edge_threshold = %u\n", data->edge_cfg.threshold);
 }
 
+#if 1
+extern void register_squeeze_power_threshold_change(int power);
+#endif
+
 static ssize_t set_edge_threshold(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t count)
 {
@@ -643,6 +647,9 @@ static ssize_t set_edge_threshold(struct device *dev,
 	}
 
 	pr_info("nanohub: edge_threshold = %u\n", val);
+#if 1
+	register_squeeze_power_threshold_change(val);
+#endif
 
     if(val == 0) {
         pr_info("edge_threshold should not be 0, return\n");
