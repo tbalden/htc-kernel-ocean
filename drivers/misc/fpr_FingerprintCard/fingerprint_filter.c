@@ -41,11 +41,24 @@ static int vib_strength = VIB_STRENGTH;
 // value used to signal that HOME button release event should be synced as well in home button func work if it was not interrupted.
 static int do_home_button_off_too_in_work_func = 0;
 
+static int wait_for_squeeze_power = 0;
+static unsigned long last_squeeze_power_registration_jiffies = 0;
+
 /* PowerKey work func */
 static void fpf_presspwr(struct work_struct * fpf_presspwr_work) {
 
+	unsigned int squeeze_reg_diff = 0;
 	if (!mutex_trylock(&pwrkeyworklock))
                 return;
+	if (wait_for_squeeze_power) {
+		wait_for_squeeze_power = 0;
+		if (screen_on) {
+			msleep(30);
+			squeeze_reg_diff = jiffies - last_squeeze_power_registration_jiffies;
+			pr_info("%s squeeze_reg_diff %u\n",__func__,squeeze_reg_diff);
+			if (squeeze_reg_diff<4) goto exit;
+		}
+	}
 	input_event(fpf_pwrdev, EV_KEY, KEY_POWER, 1);
 	input_event(fpf_pwrdev, EV_SYN, 0, 0);
 	msleep(fpf_PWRKEY_DUR);
@@ -55,6 +68,7 @@ static void fpf_presspwr(struct work_struct * fpf_presspwr_work) {
 	// resetting this do_home_button_off_too_in_work_func when powering down, as it causes the running HOME button func work 
 	//	to trigger a HOME button release sync event to input device, resulting in an unwanted  screen on.
 	do_home_button_off_too_in_work_func = 0;
+	exit:
         mutex_unlock(&pwrkeyworklock);
 	return;
 }
@@ -324,11 +338,12 @@ static int squeeze_kernel_handled = 0;
 void register_squeeze_power_threshold_change(int power) {
 	int new_level = (power - 101) / 20;
 	pr_info("%s squeeze call new_level power %d max level %d power %d \n",__func__,new_level,squeeze_power_kernel_max_threshold,power);
-	if (new_level <= squeeze_power_kernel_max_threshold && power>100) {
+	if (new_level <= squeeze_power_kernel_max_threshold && power>=100) {
 		squeeze_kernel_handled = 1;
 	} else {
 		squeeze_kernel_handled = 0;
 	}
+	last_squeeze_power_registration_jiffies = jiffies;
 }
 EXPORT_SYMBOL(register_squeeze_power_threshold_change);
 
@@ -412,6 +427,8 @@ void register_squeeze(unsigned long timestamp, int vibration) {
 		} else if (diff<35) {
 			pr_info("%s squeeze call -- power onoff endstage: %d\n",__func__,stage);
 			last_screen_event_timestamp = jiffies;
+			wait_for_squeeze_power = 1; // pwr trigger should be canceled if right after squeeze happens a power setting
+			// ..that would mean user is on the settings screen and calibrating.
 			fpf_pwrtrigger(0);
 		} else if (diff>75) { // time passed way over a normal wakelock cycle... start with second phase instead!
 			stage = STAGE_FIRST_WL;
