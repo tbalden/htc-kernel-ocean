@@ -436,7 +436,7 @@ void register_squeeze(unsigned long timestamp, int vibration) {
 			wait_for_squeeze_power = 1; // pwr trigger should be canceled if right after squeeze happens a power setting
 			// ..that would mean user is on the settings screen and calibrating.
 			fpf_pwrtrigger(0);
-		} else if (diff>75) { // time passed way over a normal wakelock cycle... start with second phase instead!
+		} else if (!screen_on || diff>75) { // time passed way over a normal wakelock cycle... start with second phase instead!
 			stage = STAGE_FIRST_WL;
 			last_squeeze_timestamp = jiffies;
 		} else
