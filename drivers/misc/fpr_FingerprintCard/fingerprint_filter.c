@@ -347,20 +347,26 @@ void register_squeeze_power_threshold_change(int power) {
 }
 EXPORT_SYMBOL(register_squeeze_power_threshold_change);
 
+static void squeeze_vib(void) {
+	set_vibrate(vib_strength+5);
+}
+
+
+#define MAX_SQUEEZE_TIME 35
 static unsigned long longcount_start = 0;
 static int interrupt_longcount = 0;
 static void squeeze_longcount(struct work_struct * squeeze_longcount_work) {
 	while (1) {
 		if (interrupt_longcount) {
 			return;
-		pr_info("%s squeeze call || longcount interrupted\n",__func__);
+			pr_info("%s squeeze call || longcount interrupted\n",__func__);
 		}
-		if (jiffies - longcount_start > 35) {
+		if (jiffies - longcount_start > MAX_SQUEEZE_TIME) {
 			pr_info("%s squeeze call || longcount VIBRATION !! \n",__func__);
-			fpf_vib();
+			squeeze_vib();
 			return;
 		}
-		msleep(10);
+		msleep(7);
 	}
 }
 static DECLARE_WORK(squeeze_longcount_work, squeeze_longcount);
@@ -424,7 +430,7 @@ void register_squeeze(unsigned long timestamp, int vibration) {
 		if (vibration) {
 			pr_info("%s squeeze call -- exiting because vibration endstage: %d\n",__func__,stage);
 			return;
-		} else if (diff<35) {
+		} else if (diff<=MAX_SQUEEZE_TIME) {
 			pr_info("%s squeeze call -- power onoff endstage: %d\n",__func__,stage);
 			last_screen_event_timestamp = jiffies;
 			wait_for_squeeze_power = 1; // pwr trigger should be canceled if right after squeeze happens a power setting
