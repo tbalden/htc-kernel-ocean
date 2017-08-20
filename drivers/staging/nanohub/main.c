@@ -1882,7 +1882,7 @@ static bool nanohub_os_log(char *buffer, int len)
 	}
 }
 
-#if 0
+#if 1
 extern void register_squeeze_wake(int nanohub_flag, int vibrator_flag, unsigned long timestamp, int init_event_flag);
 
 static unsigned long edge_wake_jiffies = 0;
@@ -1896,7 +1896,7 @@ static void nanohub_process_buffer(struct nanohub_data *data,
 	uint8_t interrupt;
 	bool wakeup = false;
 	struct nanohub_io *io = &data->io[ID_NANOHUB_SENSOR];
-#if 0
+#if 1
 	unsigned int diff_jiffies;
 #endif
 
@@ -1927,9 +1927,8 @@ static void nanohub_process_buffer(struct nanohub_data *data,
 	} else if (event_id == sensorGetMyEventType(SENS_TYPE_HTC_SECOND_DISP)) {
 		pr_info("nanohub: htc_second_disp triggered\n");
 	} 
-#if 0
+#if 1
 	else if (event_id == sensorGetMyEventType(SENS_TYPE_HTC_EDGE)) {
-//		pr_info("nanohub: htc_edge triggered\n");
 	} else if (event_id == sensorGetMyEventType(SENS_TYPE_HTC_EDWK)) {
 		pr_info("nanohub: htc_edge_wake triggered buffer size %d \n", (*buf)->length);
 #if 0
@@ -1951,19 +1950,24 @@ static void nanohub_process_buffer(struct nanohub_data *data,
 		if ( (*buf)->buffer[18] == 128 ) {
 			// edge wake init event
 			edge_wake_jiffies = jiffies;
-			pr_info("nanohub: htc_edge_wake triggered INIT ++\n");
+			pr_info("nanohub: squeeze htc_edge_wake triggered INIT ++\n");
 			register_squeeze_wake(1,0,jiffies,1);
 		} else 
 		if ( (*buf)->buffer[18] == 0 ) {
 			// edge wake finished event
 			diff_jiffies = jiffies - edge_wake_jiffies;
 			edge_wake_jiffies = 0;
-			pr_info("nanohub: htc_edge_wake triggered INIT diff jiffies = %u--\n", diff_jiffies);
-//			register_squeeze_wake(1,0,jiffies,0);
-//			if (diff_jiffies <= 45) {
-//				pr_info("nanohub: squeeze_wake event !\n");
-//				register_squeeze_wake(1,0,jiffies,0);
-//			}
+			pr_info("nanohub: squeeze htc_edge_wake triggered INIT diff jiffies = %u--\n", diff_jiffies);
+			register_squeeze_wake(1,0,jiffies,0);
+#if 0
+// this part could be used if nanohub events were consistent. But they're not, sometimes events get lost
+// so instead register_squeeze_wake is used above, to gather information about nanohub events and 
+// help detection through user wakelock / vibration detection there, and not check timing here...
+			if (diff_jiffies <= 45) {
+				pr_info("nanohub: squeeze_wake event !\n");
+				register_squeeze_wake(1,0,jiffies,0);
+			}
+#endif
 		}
 	}
 #endif

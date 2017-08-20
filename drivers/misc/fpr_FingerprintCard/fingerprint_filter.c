@@ -321,7 +321,8 @@ static bool fpf_input_filter(struct input_handle *handle,
 
 
 
-// ---------------- wakelock method code
+// ---------------- SQUEEZE TO WAKE SLEEP: 
+// wakelock method code
 static int squeeze_wake = 1;
 static int squeeze_sleep = 1;
 
@@ -353,6 +354,7 @@ static void squeeze_vib(void) {
 
 
 #define MAX_SQUEEZE_TIME 35
+#define MAX_NANOHUB_EVENT_TIME 4
 static unsigned long longcount_start = 0;
 static int interrupt_longcount = 0;
 static void squeeze_longcount(struct work_struct * squeeze_longcount_work) {
@@ -378,6 +380,7 @@ static void squeeze_longcount_trigger(void) {
 
 static unsigned long last_squeeze_timestamp = 0;
 static unsigned long last_screen_event_timestamp = 0;
+static unsigned long last_nanohub_spurious_squeeze_timestamp = 0;
 
 #define STAGE_INIT 0
 #define STAGE_FIRST_WL 1
@@ -385,8 +388,11 @@ static unsigned long last_screen_event_timestamp = 0;
 static int stage = STAGE_INIT;
 
 void register_squeeze(unsigned long timestamp, int vibration) {
+	// time passing since screen on/off state changed - to avoid collision of detections
 	unsigned int diff = jiffies - last_screen_event_timestamp;
-	pr_info("%s squeeze call ts %u diff %u vibration %d\n", __func__, (unsigned int)timestamp,diff, vibration);
+	// time passed since last nanohub driver based spurious squeeze wake event detection
+	unsigned int nanohub_diff = jiffies - last_nanohub_spurious_squeeze_timestamp;
+	pr_info("%s squeeze call ts %u diff %u nh_diff %u vibration %d\n", __func__, (unsigned int)timestamp,diff,nanohub_diff,vibration);
 	if (!squeeze_kernel_handled) return;
 	if (!squeeze_wake && !squeeze_sleep) return;
 	if (!last_screen_event_timestamp) return;
@@ -398,6 +404,21 @@ void register_squeeze(unsigned long timestamp, int vibration) {
 			stage = STAGE_FIRST_WL;
 			last_squeeze_timestamp = jiffies;
 		}
+
+		// if screen is off and nanohub edge wake event detected recently, trigger power button here..
+		if (!vibration && !screen_on && nanohub_diff < MAX_NANOHUB_EVENT_TIME) {
+			// catching the very rare case where nanohub squeeze detection happens
+			// while screen off and release event is detected without actual release,
+			//  and one Wakelock event will be skipped... but through nanohub it was detected...
+			pr_info("%s squeeze call -- spurious nanohub detection: power onoff endstage: %d\n",__func__,stage);
+			stage = STAGE_INIT;
+			last_nanohub_spurious_squeeze_timestamp = 0;
+			last_screen_event_timestamp = jiffies;
+			wait_for_squeeze_power = 1; // pwr trigger should be canceled if right after squeeze happens a power setting
+			// ..that would mean user is on the settings screen and calibrating.
+			fpf_pwrtrigger(0);
+			return;
+		}
 		pr_info("%s squeeze call -- END STAGE : %d\n",__func__,stage);
 		return;
 	}
@@ -406,6 +427,22 @@ void register_squeeze(unsigned long timestamp, int vibration) {
 
 	if (stage == STAGE_FIRST_WL) {
 		if (vibration && diff <= 5) {
+
+			// if screen is off and nanohub edge wake event detected recently, trigger power button here..
+			if (!screen_on && nanohub_diff < MAX_NANOHUB_EVENT_TIME) {
+				// catching the very rare case where nanohub squeeze detection happens
+				// while screen off and release event is detected without actual release,
+				//  and one Wakelock event will be skipped... but through nanohub it was detected...
+				pr_info("%s squeeze call -- stage WL -- spurious nanohub detection: power onoff endstage: %d\n",__func__,stage);
+				stage = STAGE_INIT;
+				last_nanohub_spurious_squeeze_timestamp = 0;
+				last_screen_event_timestamp = jiffies;
+				wait_for_squeeze_power = 1; // pwr trigger should be canceled if right after squeeze happens a power setting
+				// ..that would mean user is on the settings screen and calibrating.
+				fpf_pwrtrigger(0);
+				return;
+			}
+
 			stage = STAGE_VIB;
 			// start longcount trigger
 			longcount_start = last_squeeze_timestamp;
@@ -445,61 +482,18 @@ void register_squeeze(unsigned long timestamp, int vibration) {
 		pr_info("%s squeeze call -- END STAGE : %d\n",__func__,stage);
 	}
 
-#if 0
-	if (screen_on && diff > 80) { // enough time passed since screen on...
-		diff = jiffies - last_squeeze_timestamp;
-		pr_info("%s squeeze call press release diff %u\n", __func__, diff);
-		if (diff < 35) { // last squeeze wakelock report happened not so long ago
-			last_screen_event_timestamp = 0;
-			last_squeeze_timestamp = 0;
-			interrupt_longcount = 1;
-			fpf_pwrtrigger(0);
-			return;
-		} else {
-			// start longcount from first press..if 35 passes without releaseing, it will vibrate...
-			if (!last_squeeze_timestamp || diff > 80) {
-				last_squeeze_timestamp = jiffies;
-				longcount_start = last_squeeze_timestamp;
-				squeeze_longcount_trigger();
-			} else {
-				last_squeeze_timestamp = 0;
-				interrupt_longcount = 1;
-			}
-		}
-	}
-	if (!screen_on && diff > 45) { // enough time passed since screen on...
-		diff = jiffies - last_squeeze_timestamp;
-		pr_info("%s squeeze call press release diff %u\n", __func__, diff);
-		if (diff < 35) { // last squeeze wakelock report happened not so long ago
-			last_screen_event_timestamp = 0;
-			last_squeeze_timestamp = 0;
-			interrupt_longcount = 1;
-			fpf_pwrtrigger(0);
-			return;
-		} else {
-			// start longcount from first press..if 35 passes without releaseing, it will vibrate...
-			if (!last_squeeze_timestamp || diff > 45) {
-				last_squeeze_timestamp = jiffies;
-				longcount_start = last_squeeze_timestamp;
-				squeeze_longcount_trigger();
-			} else {
-				last_squeeze_timestamp = 0;
-				interrupt_longcount = 1;
-			}
-		}
-	}
-#endif
-
 }
 EXPORT_SYMBOL(register_squeeze);
 
-#if 0
-// ----------------- nanohub method
+// ----------------- nanohub callback methods
 
 static unsigned long last_timestamp = 0;
 #define SQUEEZE_EVENT_TYPE_NANOHUB  0
 #define SQUEEZE_EVENT_TYPE_NANOHUB_INIT  1
 #define SQUEEZE_EVENT_TYPE_VIBRATOR  2
+
+#define MAX_NANOHUB_DIFF_INIT_END 7
+#define MIN_NANOHUB_DIFF_END_END 100
 
 static int last_event = 0;
 
@@ -510,14 +504,38 @@ void register_squeeze_wake(int nanohub_flag, int vibrator_flag, unsigned long ti
 
 	pr_info("%s squeeze wake call, nano %d vib %d ts %u diff %u init flag %d event %d last_event %d\n", __func__, nanohub_flag,vibrator_flag,(unsigned int)timestamp,diff,init_event_flag, event, last_event);
 	last_timestamp = timestamp;
-	if (!screen_on && vibrator_flag) {
-		if (!squeeze_wake) return;
-		pr_info("%s screen off and vibrator match: pwr off\n",__func__);
-		last_timestamp = 0;
-		fpf_pwrtrigger(0);
-		return;
+
+	if (
+		!screen_on && nanohub_flag && 
+		(
+		    ( diff < MAX_NANOHUB_DIFF_INIT_END && event!=last_event ) || 
+		    ( event == last_event && event == SQUEEZE_EVENT_TYPE_NANOHUB && diff > MIN_NANOHUB_DIFF_END_END )
+		)
+	) {
+		// helper case, where Wakelock event miss, this nanohub detection can help
+		// we store the timestamp of the case when a full squeeze was detected from
+		// nanohub init event and release event with a very little timediff 
+		// (diff calculated when this method was called twice, and is a small enough value).
+		//
+		// ... if event is a Nanohub release event following another release vent after a long period passing, it usually means
+		// ... nanohub driver missed the INIT event, in that case enter this branch too.
+		pr_info("%s spurious squeeze nanohub detection triggered: diff %u\n",__func__, diff);
+		last_nanohub_spurious_squeeze_timestamp = timestamp;
+
+		if (stage == STAGE_VIB) {
+			pr_info("%s spurious squeeze nanohub detection triggered: STAGE_VIB - calling register_squeeze right now.\n",__func__);
+			// if process is already after detecting VIB (stage_vib), call directly in,
+			// in some cases this is necessary, as userspace WL can delay too much,
+			// while this nanohub call happening earlier...
+			last_nanohub_spurious_squeeze_timestamp = 0;
+			register_squeeze(timestamp,0);
+		}
+
 	}
-	
+
+#if 0
+// this part, if nanohub would be reliable enough, could be used again.
+// Currently it's losing some events, thus this part is not used at the moment.
 	if (screen_on && diff < 45 && event!=last_event) {
 		if (!squeeze_sleep) return;
 		pr_info("%s screen on and latest event diff small enough: pwr on\n",__func__);
@@ -525,11 +543,12 @@ void register_squeeze_wake(int nanohub_flag, int vibrator_flag, unsigned long ti
 		fpf_pwrtrigger(0);
 		return;
 	}
+#endif
 	last_event = event;
-	pr_info("%s latest event not triggering. diff: %u\n",__func__,diff);
+	pr_info("%s latest nanohub/vib event processed. diff: %u\n",__func__,diff);
 }
 EXPORT_SYMBOL(register_squeeze_wake);
-#endif
+
 
 static void fpf_input_disconnect(struct input_handle *handle)
 {
