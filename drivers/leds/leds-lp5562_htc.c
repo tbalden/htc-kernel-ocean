@@ -781,6 +781,8 @@ static void virtual_key_led_blink(int onoff, int dim)
 	}
 }
 
+
+static int blink_running = 0;
 static int vary1 = 1;
 static void vk_unblink_work_func(struct work_struct *work)
 {
@@ -809,7 +811,9 @@ static void vk_unblink_work_func(struct work_struct *work)
 				ktime_to_timeval(wakeup_time).tv_sec);
 		}
 	}
+	blink_running = bln_dim_blink&&full_or_dim;
 	virtual_key_led_blink(0,bln_dim_blink&&full_or_dim);
+
 	full_or_dim = 0;
 }
 
@@ -837,8 +841,12 @@ static int vary = 1;
 static void vk_blink_work_func(struct work_struct *work)
 {
 	I(" %s +++\n" , __func__);
+	if (screen_on) return;
 	full_or_dim = 1;
-	virtual_key_led_blink(1,bln_dim_blink);
+	if (!blink_running) {
+		blink_running = 1;
+		virtual_key_led_blink(1,bln_dim_blink);
+	}
 
 	if (bln_number > 0 && !charging) { // if blink number is not infinite and is not charging, schedule CANCEL work
 		if (!mutex_is_locked(&blinkstopworklock)) {
@@ -1177,7 +1185,7 @@ static void lp5562_color_blink(struct i2c_client *client, uint8_t red, uint8_t g
 #ifdef CONFIG_LEDS_QPNP_BUTTON_BLINK
 		// BLN
 		// sysfs configuation bln_no_charger_switch == 1 -> always blink even if not on charger
-		if (bln_switch && bln_no_charger_switch) {
+		if (bln_switch && bln_no_charger_switch && vk_screen_is_off()) {
 			queue_work(g_led_work_queue, &vk_blink_work);
 		}
 		if (!pulse_rgb_blink) {
@@ -1407,6 +1415,7 @@ static void lp5562_led_off(struct i2c_client *client)
 	ret = i2c_write_block(client, R_PWM_CONTROL, &data, 1);
 #ifdef CONFIG_LEDS_QPNP_BUTTON_BLINK
 	// BLN
+	blink_running = 0;
 	virtual_key_led_blink(0,0);
 #endif
 	ret = i2c_write_block(client, G_PWM_CONTROL, &data, 1);
@@ -2716,6 +2725,7 @@ static int fb_notifier_led_callback(struct notifier_block *self,
         case FB_BLANK_UNBLANK:
 		screen_on = 1;
 		vk_off_time_passed = 0;
+		blink_running = 0;
 		alarm_cancel(&blinkstopfunc_rtc); // stop pending alarm...
 		I("screen on -early\n");
             break;
@@ -2740,7 +2750,7 @@ static int fb_notifier_led_callback(struct notifier_block *self,
 		pulse_rgb_pattern++;
 		if (pulse_rgb_pattern > 4) pulse_rgb_pattern = 0;
 #endif
-
+		blink_running = 0;
 		alarm_cancel(&blinkstopfunc_rtc); // stop pending alarm...
 		I("screen on\n");
             break;
