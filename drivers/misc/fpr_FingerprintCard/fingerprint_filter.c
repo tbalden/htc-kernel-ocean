@@ -33,8 +33,21 @@ static struct workqueue_struct *fpf_input_wq;
 static struct work_struct fpf_input_work;
 static int vib_strength = VIB_STRENGTH;
 
+// touchscreen input handler input work queue and work
+static struct workqueue_struct *ts_input_wq;
+static struct work_struct ts_input_work;
+
+// Signal int when squeeze2peek triggered set to 1, while waiting for time passing, before the automatic screen off.
+// It is used also when a second short squeeze happens, which should interrupt the process by setting this to 0, 
+// and don't let auto screen off happen in squeeze_peekmode function.
+static int squeeze_peek_wait = 0;
+
+
 #ifdef CONFIG_FB
+	// early screen on flag
 	static int screen_on = 1;
+	// full screen on flag
+	static int screen_on_full = 1;
 	struct notifier_block *fb_notifier;
 #endif
 
@@ -50,10 +63,14 @@ static void fpf_presspwr(struct work_struct * fpf_presspwr_work) {
 	unsigned int squeeze_reg_diff = 0;
 	if (!mutex_trylock(&pwrkeyworklock))
                 return;
+	// if wait for squeeze power is on (called from squeeze code)...
 	if (wait_for_squeeze_power) {
 		wait_for_squeeze_power = 0;
+		// if screen is on...
 		if (screen_on) {
+			// ...wait a bit...
 			msleep(30);
+			// .. check if last power resgistration through threshold reg callback happened lately... if so no need to do screen off..
 			squeeze_reg_diff = jiffies - last_squeeze_power_registration_jiffies;
 			pr_info("%s squeeze_reg_diff %u\n",__func__,squeeze_reg_diff);
 			if (squeeze_reg_diff<4) goto exit;
@@ -94,7 +111,7 @@ static void fpf_input_event(struct input_handle *handle, unsigned int type,
 				unsigned int code, int value) {
 }
 
-static int input_dev_filter(struct input_dev *dev) {
+static int fpf_input_dev_filter(struct input_dev *dev) {
 	if (strstr(dev->name, "uinput-fpc")) {
 		return 0;
 	} else {
@@ -107,7 +124,7 @@ static int fpf_input_connect(struct input_handler *handler,
 	struct input_handle *handle;
 	int error;
 
-	if (input_dev_filter(dev))
+	if (fpf_input_dev_filter(dev))
 		return -ENODEV;
 
 	handle = kzalloc(sizeof(struct input_handle), GFP_KERNEL);
@@ -246,6 +263,8 @@ static bool fpf_input_filter(struct input_handle *handle,
                                     unsigned int type, unsigned int code,
                                     int value)
 {
+	if (screen_on_full) squeeze_peek_wait = 0; // interrupt peek wait, touchscreen was interacted, don't turn screen off after peek time over...
+
 	// if it's not on, don't filter anything...
 	if (fpf_switch == 0) return false;
 
@@ -254,7 +273,8 @@ static bool fpf_input_filter(struct input_handle *handle,
 
 	if (code == KEY_WAKEUP) {
 		pr_debug("fpf - wakeup %d %d \n",code,value);
-	}            
+	}
+
 
 	if (fpf_switch == 2) {
 	//standalone kernel mode. double tap means switch off
@@ -325,11 +345,13 @@ static bool fpf_input_filter(struct input_handle *handle,
 // wakelock method code
 static int squeeze_wake = 1;
 static int squeeze_sleep = 1;
+static int squeeze_peek = 1;
+static int squeeze_peek_halfseconds = 4;
 
 // defines what maximum level of user setting for minimum squeeze power set on sense ui
 // will set kernel-side squeeze-to-sleep/wake active. This way user can set below this
 // level the squeeze power on Sense UI, and kernel-squeeze handling will turn on
-static int squeeze_power_kernel_max_threshold = 0; // 0 - 9
+static int squeeze_power_kernel_max_threshold = 1;// 0 - 9
 // 112, 132, 152, 172, 192, 212, 232, 252, 272, 292
 // 100-120 - 121-130...- 280-300
 
@@ -354,6 +376,7 @@ static void squeeze_vib(void) {
 
 
 #define MAX_SQUEEZE_TIME 35
+#define MAX_SQUEEZE_TIME_LONG 69
 #define MAX_NANOHUB_EVENT_TIME 4
 static unsigned long longcount_start = 0;
 static int interrupt_longcount = 0;
@@ -375,8 +398,40 @@ static DECLARE_WORK(squeeze_longcount_work, squeeze_longcount);
 static void squeeze_longcount_trigger(void) {
 	interrupt_longcount = 0;
 	schedule_work(&squeeze_longcount_work);
-        return;
 }
+
+
+static void squeeze_peekmode(struct work_struct * squeeze_peekmode_work) {
+	unsigned int squeeze_reg_diff = 0;
+	squeeze_peek_wait = 1;
+	if (wait_for_squeeze_power) {
+		// wait_for_squeeze_power = 0; not reset "wait_for..." here.. it will be done in fpf_pwrtrigger part!
+		// if screen is on...
+		if (screen_on) {
+			// ...wait a bit...
+			msleep(30);
+			// .. check if last power resgistration through threshold reg callback happened lately... if so no need to do screen off..
+			squeeze_reg_diff = jiffies - last_squeeze_power_registration_jiffies;
+			pr_info("%s squeeze_reg_diff %u\n",__func__,squeeze_reg_diff);
+			if (squeeze_reg_diff<4) return;
+		}
+	}
+	msleep(squeeze_peek_halfseconds * 500);
+	// screen still on and sqeueeze peek wait was not interrupted...
+	if (screen_on && squeeze_peek_wait) fpf_pwrtrigger(0);
+	squeeze_peek_wait = 0;
+}
+static DECLARE_WORK(squeeze_peekmode_work, squeeze_peekmode);
+static void squeeze_peekmode_trigger(void) {
+	schedule_work(&squeeze_peekmode_work);
+}
+
+// this callback allows registration of FP vibration, in which case peek timeout auto screen off should be canceled...
+void register_fp_vibration(void) {
+	// fp scanner pressed, cancel peek timeout
+	squeeze_peek_wait = 0;
+}
+EXPORT_SYMBOL(register_fp_vibration);
 
 static unsigned long last_squeeze_timestamp = 0;
 static unsigned long last_screen_event_timestamp = 0;
@@ -394,7 +449,11 @@ void register_squeeze(unsigned long timestamp, int vibration) {
 	unsigned int nanohub_diff = jiffies - last_nanohub_spurious_squeeze_timestamp;
 	pr_info("%s squeeze call ts %u diff %u nh_diff %u vibration %d\n", __func__, (unsigned int)timestamp,diff,nanohub_diff,vibration);
 	if (!squeeze_kernel_handled) return;
+
 	if (!squeeze_wake && !squeeze_sleep) return;
+	if (!squeeze_wake && !screen_on) return;
+	if (!squeeze_sleep && screen_on) return;
+
 	if (!last_screen_event_timestamp) return;
 	if ((!screen_on && diff < 3) || (screen_on && diff < 30)) return;
 
@@ -416,7 +475,14 @@ void register_squeeze(unsigned long timestamp, int vibration) {
 			last_screen_event_timestamp = jiffies;
 			wait_for_squeeze_power = 1; // pwr trigger should be canceled if right after squeeze happens a power setting
 			// ..that would mean user is on the settings screen and calibrating.
-			fpf_pwrtrigger(0);
+			if (!screen_on && squeeze_peek) {
+				squeeze_peekmode_trigger();
+			}
+			if (screen_on && squeeze_peek_wait) { // checking if short squeeze happening while peeking the screen with squeeze2peek...
+				squeeze_peek_wait = 0; // yes, so interrupt peek sleep, screen should remain on after a second short squeeze happened still in time window of peek...
+			} else {
+				fpf_pwrtrigger(0);
+			}
 			return;
 		}
 		pr_info("%s squeeze call -- END STAGE : %d\n",__func__,stage);
@@ -439,7 +505,14 @@ void register_squeeze(unsigned long timestamp, int vibration) {
 				last_screen_event_timestamp = jiffies;
 				wait_for_squeeze_power = 1; // pwr trigger should be canceled if right after squeeze happens a power setting
 				// ..that would mean user is on the settings screen and calibrating.
-				fpf_pwrtrigger(0);
+				if (!screen_on && squeeze_peek) {
+					squeeze_peekmode_trigger();
+				}
+				if (screen_on && squeeze_peek_wait) { // screen on and squeeze peek going on?
+					squeeze_peek_wait = 0; // interrupt peek sleep, screen should remain on after a second short squeeze while still in time window of peek...
+				} else {
+					fpf_pwrtrigger(0);
+				}
 				return;
 			}
 
@@ -469,6 +542,23 @@ void register_squeeze(unsigned long timestamp, int vibration) {
 			return;
 		} else if (diff<=MAX_SQUEEZE_TIME) {
 			pr_info("%s squeeze call -- power onoff endstage: %d\n",__func__,stage);
+			last_screen_event_timestamp = jiffies;
+			wait_for_squeeze_power = 1; // pwr trigger should be canceled if right after squeeze happens a power setting
+			// ..that would mean user is on the settings screen and calibrating.
+			// also...
+			// if peek mode is on, and between long squeeze and short squeeze, peek
+			if (!screen_on && squeeze_peek) {
+				pr_info("%s squeeze call -- power onoff - PEEK MODE - PEEK wake: %d\n",__func__,stage);
+				squeeze_peekmode_trigger();
+			}
+			if (screen_on && squeeze_peek_wait) { // screen on and squeeze peek going on?
+				squeeze_peek_wait = 0; // interrupt peek sleep, screen should remain on after a second short squeeze while still in time window of peek...
+			} else {
+				fpf_pwrtrigger(0);
+			}
+		} else if (!screen_on && diff>MAX_SQUEEZE_TIME && diff<=MAX_SQUEEZE_TIME_LONG && squeeze_peek) { // TODO add PEEK_MODE switch checkinh here..
+			// if peek mode is on, and between long squeeze and short squeeze, peek
+			pr_info("%s squeeze call -- power onoff endstage PEEK MODE - full wake! %d\n",__func__,stage);
 			last_screen_event_timestamp = jiffies;
 			wait_for_squeeze_power = 1; // pwr trigger should be canceled if right after squeeze happens a power setting
 			// ..that would mean user is on the settings screen and calibrating.
@@ -550,12 +640,17 @@ void register_squeeze_wake(int nanohub_flag, int vibrator_flag, unsigned long ti
 EXPORT_SYMBOL(register_squeeze_wake);
 
 
+// ==================================
+// ---------------fingerprint handler
+// ==================================
+
 static void fpf_input_disconnect(struct input_handle *handle)
 {
 	input_close_device(handle);
 	input_unregister_handle(handle);
 	kfree(handle);
 }
+
 
 static const struct input_device_id fpf_ids[] = {
 	{ .driver_info = 1 },
@@ -570,6 +665,89 @@ static struct input_handler fpf_input_handler = {
 	.name		= "fpf_inputreq",
 	.id_table	= fpf_ids,
 };
+
+// ==================================
+// ------------- touch screen handler
+// ==================================
+
+static bool ts_input_filter(struct input_handle *handle,
+                                    unsigned int type, unsigned int code,
+                                    int value)
+{
+#if 0
+	pr_info("%s ts input filter called t %d c %d v %d",__func__, type,code,value);
+#endif
+	if (screen_on_full) squeeze_peek_wait = 0; // interrupt peek wait, touchscreen was interacted, don't turn screen off after peek time over...
+	return false;
+}
+
+static void ts_input_callback(struct work_struct *unused) {
+	return;
+}
+
+static void ts_input_event(struct input_handle *handle, unsigned int type,
+				unsigned int code, int value) {
+}
+
+static int ts_input_dev_filter(struct input_dev *dev) {
+	if (
+		strstr(dev->name, "himax-touchscreen") ||
+		strstr(dev->name, "cyttsp")
+	    ) {
+		return 0;
+	} else {
+		return 1;
+	}
+}
+
+
+static int ts_input_connect(struct input_handler *handler,
+				struct input_dev *dev, const struct input_device_id *id) {
+	struct input_handle *handle;
+	int error;
+
+	if (ts_input_dev_filter(dev))
+		return -ENODEV;
+
+	handle = kzalloc(sizeof(struct input_handle), GFP_KERNEL);
+	if (!handle)
+		return -ENOMEM;
+
+	handle->dev = dev;
+	handle->handler = handler;
+	handle->name = "fpf";
+
+	error = input_register_handle(handle);
+
+	error = input_open_device(handle);
+
+	return 0;
+
+}
+
+static void ts_input_disconnect(struct input_handle *handle)
+{
+	input_close_device(handle);
+	input_unregister_handle(handle);
+	kfree(handle);
+}
+
+
+static const struct input_device_id ts_ids[] = {
+	{ .driver_info = 1 },
+	{ },
+};
+
+static struct input_handler ts_input_handler = {
+	.filter		= ts_input_filter,
+	.event		= ts_input_event,
+	.connect	= ts_input_connect,
+	.disconnect	= ts_input_disconnect,
+	.name		= "ts_inputreq",
+	.id_table	= ts_ids,
+};
+
+// ------------------------------------------------------
 
 static ssize_t fpf_dt_wait_period_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
@@ -755,6 +933,59 @@ static ssize_t squeeze_max_power_level_dump(struct device *dev,
 static DEVICE_ATTR(squeeze_max_power_level, (S_IWUSR|S_IRUGO),
 	squeeze_max_power_level_show, squeeze_max_power_level_dump);
 
+static ssize_t squeeze_peek_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", squeeze_peek);
+}
+
+static ssize_t squeeze_peek_dump(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int ret;
+	unsigned long input;
+
+	ret = kstrtoul(buf, 0, &input);
+	if (ret < 0)
+		return ret;
+
+	if (input < 0 || input > 1)
+		input = 0;				
+
+	squeeze_peek = input;			
+	
+	return count;
+}
+
+static DEVICE_ATTR(squeeze_peek, (S_IWUSR|S_IRUGO),
+	squeeze_peek_show, squeeze_peek_dump);
+
+static ssize_t squeeze_peek_halfseconds_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", squeeze_peek_halfseconds);
+}
+
+static ssize_t squeeze_peek_halfseconds_dump(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int ret;
+	unsigned long input;
+
+	ret = kstrtoul(buf, 0, &input);
+	if (ret < 0)
+		return ret;
+
+	if (input < 0 || input > 6)
+		input = 0;				
+
+	squeeze_peek_halfseconds = input;			
+	
+	return count;
+}
+
+static DEVICE_ATTR(squeeze_peek_halfseconds, (S_IWUSR|S_IRUGO),
+	squeeze_peek_halfseconds_show, squeeze_peek_halfseconds_dump);
 
 
 static struct kobject *fpf_kobj;
@@ -784,6 +1015,7 @@ static int fb_notifier_callback(struct notifier_block *self,
         case FB_BLANK_VSYNC_SUSPEND:
         case FB_BLANK_NORMAL:
 		screen_on = 0;
+		screen_on_full = 0;
 		pr_info("fpf screen off -early\n");
             break;
         }
@@ -793,6 +1025,7 @@ static int fb_notifier_callback(struct notifier_block *self,
         switch (*blank) {
         case FB_BLANK_UNBLANK:
 		screen_on = 1;
+		screen_on_full = 1;
 		last_screen_event_timestamp = jiffies;
 		pr_info("fpf screen on\n");
             break;
@@ -802,6 +1035,7 @@ static int fb_notifier_callback(struct notifier_block *self,
         case FB_BLANK_VSYNC_SUSPEND:
         case FB_BLANK_NORMAL:
 		screen_on = 0;
+		screen_on_full = 0;
 		last_screen_event_timestamp = jiffies;
 		pr_info("fpf screen off\n");
             break;
@@ -838,6 +1072,7 @@ static int __init fpf_init(void)
 		goto err_input_dev;
 	}
 
+	// fpf handler
 	fpf_input_wq = create_workqueue("fpf_iwq");
 	if (!fpf_input_wq) {
 		pr_err("%s: Failed to create workqueue\n", __func__);
@@ -848,6 +1083,18 @@ static int __init fpf_init(void)
 	rc = input_register_handler(&fpf_input_handler);
 	if (rc)
 		pr_err("%s: Failed to register fpf_input_handler\n", __func__);
+
+	// ts handler
+	ts_input_wq = create_workqueue("ts_iwq");
+	if (!ts_input_wq) {
+		pr_err("%s: Failed to create workqueue\n", __func__);
+		return -EFAULT;
+	}
+	INIT_WORK(&ts_input_work, ts_input_callback);
+
+	rc = input_register_handler(&ts_input_handler);
+	if (rc)
+		pr_err("%s: Failed to register ts_input_handler\n", __func__);
 
 
 #ifdef CONFIG_FB
@@ -868,6 +1115,14 @@ static int __init fpf_init(void)
 	rc = sysfs_create_file(fpf_kobj, &dev_attr_squeeze_wake.attr);
 	if (rc)
 		pr_err("%s: sysfs_create_file failed for swake\n", __func__);
+
+	rc = sysfs_create_file(fpf_kobj, &dev_attr_squeeze_peek.attr);
+	if (rc)
+		pr_err("%s: sysfs_create_file failed for speek\n", __func__);
+
+	rc = sysfs_create_file(fpf_kobj, &dev_attr_squeeze_peek_halfseconds.attr);
+	if (rc)
+		pr_err("%s: sysfs_create_file failed for speek_halfs\n", __func__);
 
 	rc = sysfs_create_file(fpf_kobj, &dev_attr_squeeze_sleep.attr);
 	if (rc)

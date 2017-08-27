@@ -1053,6 +1053,9 @@ static unsigned long MAX_DIFF = 200;
 //extern void register_squeeze_wake(int nanohub_flag, int vibrator_flag, unsigned long timestamp, int init_event_flag);
 extern void register_squeeze(unsigned long timestamp, int vibration);
 
+// callback to register fingerprint vibration
+extern void register_fp_vibration(void);
+
 void register_haptic(int value)
 {
 	unsigned long stack_entries[STACK_LENGTH];
@@ -1076,7 +1079,10 @@ void register_haptic(int value)
 	save_stack_trace(&trace);
 	//WARN_ON(1);
 
-	if (value == FINGERPRINT_VIB_TIME_EXCEPTION) return;
+	if (value == FINGERPRINT_VIB_TIME_EXCEPTION) {
+		register_fp_vibration();
+		return;
+	}
 	if (value == SQUEEZE_VIB_TIME_EXCEPTION) {
 		last_value = value;
 //		register_squeeze_wake(0,1,jiffies,0);
