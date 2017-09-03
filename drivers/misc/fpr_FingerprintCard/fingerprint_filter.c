@@ -36,6 +36,8 @@ static int vib_strength = VIB_STRENGTH;
 // touchscreen input handler input work queue and work
 static struct workqueue_struct *ts_input_wq;
 static struct work_struct ts_input_work;
+static struct input_dev *ts_device = NULL;
+
 
 // Signal int when squeeze2peek triggered set to 1, while waiting for time passing, before the automatic screen off.
 // It is used also when a second short squeeze happens, which should interrupt the process by setting this to 0, 
@@ -371,8 +373,234 @@ void register_squeeze_power_threshold_change(int power) {
 EXPORT_SYMBOL(register_squeeze_power_threshold_change);
 
 static void squeeze_vib(void) {
-	set_vibrate(vib_strength+5);
+	set_vibrate(35); // a bit stronger vibration to allow user releasing it
 }
+
+
+// ===========
+// Swipe
+// ===========
+
+// sysfs parameters
+static int squeeze_swipe = 1;
+static int squeeze_swipe_vibration = 1;
+
+// members...
+static int squeeze_swipe_dir = 1;
+int last_mt_slot = 0;
+int pseudo_rnd = 0;
+
+int swipe_step_wait_time_mul = 100; // tune this to find optimal slowness of swipe for all kinds of apps
+
+unsigned long last_scroll_emulate_timestamp = 0;
+static DEFINE_MUTEX(squeeze_swipe_lock);
+
+#define SWIPE_ACCELERATED_TIME_LIMIT 150
+int interrupt_swipe_longcount = 0;
+int swipe_longcount_finished = 0;
+unsigned long swipe_longcount_start = 0;
+static void swipe_longcount(struct work_struct * swipe_longcount_work) {
+	while (1) {
+		if (interrupt_swipe_longcount) {
+			interrupt_swipe_longcount = 0;
+			return;
+			pr_info("%s ######## squeeze call || swipe_longcount interrupted\n",__func__);
+		}
+		if (jiffies - swipe_longcount_start > SWIPE_ACCELERATED_TIME_LIMIT) {
+			pr_info("%s ######## squeeze call || swipe_longcount VIBRATION !! \n",__func__);
+			swipe_longcount_finished = 1;
+			if (squeeze_swipe_vibration) {
+				set_vibrate(1);
+			}
+			return;
+		}
+		msleep(1);
+	}
+}
+static DECLARE_WORK(swipe_longcount_work, swipe_longcount);
+static void swipe_longcount_trigger(void) {
+	swipe_longcount_finished = 0;
+	interrupt_swipe_longcount = 0;
+	schedule_work(&swipe_longcount_work);
+}
+
+
+#if 1
+#define TS_MAP_SIZE 200
+static int ts_current_type[TS_MAP_SIZE], ts_current_code[TS_MAP_SIZE], ts_current_value[TS_MAP_SIZE];
+static int ts_current_count = 0;
+static void ts_call_input_event(void *p, int type, int code, int value)
+{
+	ts_current_type[ts_current_count] = type;
+	ts_current_code[ts_current_count] = code;
+	ts_current_value[ts_current_count] = value;
+	ts_current_count = ts_current_count==(TS_MAP_SIZE-1) ? 0 : (ts_current_count+1);
+	input_event(ts_device,type,code,value);
+}
+
+static int longcount_squeeze_swipe_dir_change = 0;
+
+static int last_swipe_very_quick = 0;
+
+/*
+START
+type: 3 EV_ABS
+code: 57
+v: 325-324 : touching screen
+
+LOOP:
+
+type: 3 EV_ABS
+code: 53 -> X coordinate 800
+type: 3 EV_ABS
+code: 54 -> Y value : 1300 to 1000 --> 20 steps
+type: 3 EV_ABS
+code: 58 -> ? strength? 70
+
+type: 0 code: 0 v:0 	sync
+END LOOP
+
+type: 3 EV_ABS
+code: 57
+v: -1 : leaving screen
+
+type: 0 code: 0 v:0 	sync
+END ALL
+*/
+static void ts_scroll_emulate(int down, int full) {
+
+	int y_diff;
+	int y_delta;
+	int y_steps; // tune this for optimal page size of scrolling
+	int rounds = 1;
+	int i = 0;
+	int allow_speedup_next = full?1:0;
+	unsigned int last_scroll_time_diff = jiffies - last_scroll_emulate_timestamp;
+	int double_swipe = 0;
+
+
+	pr_info("%s ts_input ######### squeeze try_lock #########\n",__func__);
+	if (!mutex_trylock(&squeeze_swipe_lock)) {
+		return;
+	}
+
+
+	// if last scroll close enough, double round of swipe, if it's intended to be a full swipe...
+	if (last_scroll_time_diff <= SWIPE_ACCELERATED_TIME_LIMIT && !swipe_longcount_finished && full) {
+		pr_info("%s ts_input ###### double speed swipe ####### diff %u swipe longcount finished %d\n",__func__, last_scroll_time_diff, swipe_longcount_finished);
+		rounds = 2;
+		double_swipe = 1;
+	}
+
+	swipe_longcount_start = jiffies;
+	swipe_longcount_trigger();
+
+	// reset filtering store used by ts input filtering...
+	ts_current_count = 0;
+	for (i=0; i<TS_MAP_SIZE; i++) {
+		ts_current_type[i]=100;
+	}
+
+	if (last_scroll_time_diff > 5000) { // a higher value...passed?
+		if (full == 1) {
+			if (longcount_squeeze_swipe_dir_change == 0) {
+				// if last direction change was not done by middle long squeeze, then...
+				full = -1; // long time passed, scroll only a bit to demo the direction...
+			} else {
+				longcount_squeeze_swipe_dir_change = 0;
+			}
+		}
+	}
+	while (--rounds>=0) {
+		y_diff = down?300:0;
+		y_delta = down?-2:2;
+		y_steps = full>0?400:(full==0?70:60);
+		pr_info("%s ts_input ######### squeeze emulation started ######### rounds %d \n",__func__, rounds);
+
+		// speedy swipe for doubled rounds...
+		if (double_swipe) {
+			y_delta *= 2; // bigger delta for speed
+			y_steps /= 3; // fewer steps, to not run out of screen
+			swipe_step_wait_time_mul = 300 - ( ((SWIPE_ACCELERATED_TIME_LIMIT - last_scroll_time_diff)*2)/1 ); // 300 - 0
+			if (swipe_step_wait_time_mul > 85) last_swipe_very_quick = 0;
+			if (!last_swipe_very_quick && swipe_step_wait_time_mul < 85) last_swipe_very_quick = 1;
+			if (last_swipe_very_quick && swipe_step_wait_time_mul < 85) swipe_step_wait_time_mul = (swipe_step_wait_time_mul*2)/3; // speed up on the extreme of fast value multiplier < 80, divide it
+			pr_info("%s ts_input ######### squeeze emulation SPEED %d \n",__func__, swipe_step_wait_time_mul);
+			if (swipe_step_wait_time_mul > 300) swipe_step_wait_time_mul = 300; // to avoid concurrency problem with last_scroll_time_diff
+			if (swipe_step_wait_time_mul < 0) swipe_step_wait_time_mul = 0;
+
+
+		} else {
+			if (full>0) {
+				swipe_step_wait_time_mul = 100;
+			} else {
+				swipe_step_wait_time_mul = 150;
+			}
+		}
+
+		// update last scroll ts
+		last_scroll_emulate_timestamp = allow_speedup_next?jiffies:0; // if small turning swipe, avoid double speed swipe on the next occasion, setting here timestamp to 0
+
+		// TODO how to determine portrait/landscape mode? currently only portrait
+
+		if (screen_on) {
+			pr_info("fpf %s ts DOWN 1 \n",__func__);
+			ts_call_input_event(ts_device, EV_ABS, ABS_MT_TRACKING_ID, --last_mt_slot);
+			while (y_steps-->0) {
+				ts_call_input_event(ts_device, EV_ABS, ABS_MT_POSITION_X, 800+ (pseudo_rnd++)%2);
+				ts_call_input_event(ts_device, EV_ABS, ABS_MT_POSITION_Y, 1000+y_diff);
+				y_diff += y_delta;
+				ts_call_input_event(ts_device, EV_ABS, ABS_MT_PRESSURE, 70+ (pseudo_rnd%2));
+				ts_call_input_event(ts_device, EV_SYN, 0, 0);
+				usleep_range(5 * swipe_step_wait_time_mul , (5 * swipe_step_wait_time_mul) + 1);
+				if (y_steps%10==0) {
+					pr_info("%s ts_input squeeze emulation step = %d POS_Y = %d \n",__func__,y_steps, 1000+y_diff);
+				}
+			}
+
+			pr_info("fpf %s ts DOWN 0 \n",__func__);
+			ts_call_input_event(ts_device, EV_ABS, ABS_MT_TRACKING_ID, -1);
+			ts_call_input_event(ts_device, EV_SYN, 0, 0);
+			msleep(1);
+		}
+		pr_info("%s ts_input ######### squeeze emulation ended #########\n",__func__);
+	}
+	if (pseudo_rnd>4) pseudo_rnd = 0;
+	msleep(1);
+	mutex_unlock(&squeeze_swipe_lock);
+	pr_info("%s ts_input ######### squeeze unlock #########\n",__func__);
+}
+#endif
+
+static void squeeze_swipe_func(struct work_struct * squeeze_swipe_work) {
+	ts_scroll_emulate(squeeze_swipe_dir, 1);
+}
+static DECLARE_WORK(squeeze_swipe_work, squeeze_swipe_func);
+static void squeeze_swipe_trigger(void) {
+	pr_info("%s ts_input squeeze swipe trigger is_locked...\n",__func__);
+	if (mutex_is_locked(&squeeze_swipe_lock)) {
+		return;
+	}
+	interrupt_swipe_longcount = 1;
+	pr_info("%s ts_input squeeze swipe trigger is_locked NOT..scheduling work...\n",__func__);
+	schedule_work(&squeeze_swipe_work);
+}
+
+
+static void squeeze_swipe_short_func(struct work_struct * squeeze_swipe_short_work) {
+	ts_scroll_emulate(squeeze_swipe_dir, 0);
+}
+static DECLARE_WORK(squeeze_swipe_short_work, squeeze_swipe_short_func);
+static void squeeze_swipe_short_trigger(void) {
+	pr_info("%s ts_input squeeze swipe trigger is_locked...\n",__func__);
+	if (mutex_is_locked(&squeeze_swipe_lock)) {
+		return;
+	}
+	interrupt_swipe_longcount = 1;
+	pr_info("%s ts_input squeeze swipe trigger is_locked NOT..scheduling work...\n",__func__);
+	schedule_work(&squeeze_swipe_short_work);
+}
+
 
 
 #define MAX_SQUEEZE_TIME 35
@@ -380,6 +608,7 @@ static void squeeze_vib(void) {
 #define MAX_NANOHUB_EVENT_TIME 4
 static unsigned long longcount_start = 0;
 static int interrupt_longcount = 0;
+static int longcount_finished = 0;
 static void squeeze_longcount(struct work_struct * squeeze_longcount_work) {
 	while (1) {
 		if (interrupt_longcount) {
@@ -388,6 +617,7 @@ static void squeeze_longcount(struct work_struct * squeeze_longcount_work) {
 		}
 		if (jiffies - longcount_start > MAX_SQUEEZE_TIME) {
 			pr_info("%s squeeze call || longcount VIBRATION !! \n",__func__);
+			longcount_finished = 1;
 			squeeze_vib();
 			return;
 		}
@@ -396,6 +626,7 @@ static void squeeze_longcount(struct work_struct * squeeze_longcount_work) {
 }
 static DECLARE_WORK(squeeze_longcount_work, squeeze_longcount);
 static void squeeze_longcount_trigger(void) {
+	longcount_finished = 0;
 	interrupt_longcount = 0;
 	schedule_work(&squeeze_longcount_work);
 }
@@ -442,6 +673,7 @@ static unsigned long last_nanohub_spurious_squeeze_timestamp = 0;
 #define STAGE_VIB 2
 static int stage = STAGE_INIT;
 
+
 void register_squeeze(unsigned long timestamp, int vibration) {
 	// time passing since screen on/off state changed - to avoid collision of detections
 	unsigned int diff = jiffies - last_screen_event_timestamp;
@@ -450,9 +682,9 @@ void register_squeeze(unsigned long timestamp, int vibration) {
 	pr_info("%s squeeze call ts %u diff %u nh_diff %u vibration %d\n", __func__, (unsigned int)timestamp,diff,nanohub_diff,vibration);
 	if (!squeeze_kernel_handled) return;
 
-	if (!squeeze_wake && !squeeze_sleep) return;
+	if (!squeeze_wake && !squeeze_sleep && !squeeze_swipe) return;
 	if (!squeeze_wake && !screen_on) return;
-	if (!squeeze_sleep && screen_on) return;
+	if (!squeeze_sleep && !squeeze_swipe && screen_on) return;
 
 	if (!last_screen_event_timestamp) return;
 	if ((!screen_on && diff < 3) || (screen_on && diff < 30)) return;
@@ -472,16 +704,22 @@ void register_squeeze(unsigned long timestamp, int vibration) {
 			pr_info("%s squeeze call -- spurious nanohub detection: power onoff endstage: %d\n",__func__,stage);
 			stage = STAGE_INIT;
 			last_nanohub_spurious_squeeze_timestamp = 0;
-			last_screen_event_timestamp = jiffies;
 			wait_for_squeeze_power = 1; // pwr trigger should be canceled if right after squeeze happens a power setting
 			// ..that would mean user is on the settings screen and calibrating.
 			if (!screen_on && squeeze_peek) {
+				last_screen_event_timestamp = jiffies;
 				squeeze_peekmode_trigger();
 			}
 			if (screen_on && squeeze_peek_wait) { // checking if short squeeze happening while peeking the screen with squeeze2peek...
+				last_screen_event_timestamp = jiffies;
 				squeeze_peek_wait = 0; // yes, so interrupt peek sleep, screen should remain on after a second short squeeze happened still in time window of peek...
 			} else {
-				fpf_pwrtrigger(0);
+				if (screen_on && squeeze_swipe) {
+					squeeze_swipe_trigger();
+				} else {
+					last_screen_event_timestamp = jiffies;
+					fpf_pwrtrigger(0);
+				}
 			}
 			return;
 		}
@@ -502,16 +740,22 @@ void register_squeeze(unsigned long timestamp, int vibration) {
 				pr_info("%s squeeze call -- stage WL -- spurious nanohub detection: power onoff endstage: %d\n",__func__,stage);
 				stage = STAGE_INIT;
 				last_nanohub_spurious_squeeze_timestamp = 0;
-				last_screen_event_timestamp = jiffies;
 				wait_for_squeeze_power = 1; // pwr trigger should be canceled if right after squeeze happens a power setting
 				// ..that would mean user is on the settings screen and calibrating.
 				if (!screen_on && squeeze_peek) {
+					last_screen_event_timestamp = jiffies;
 					squeeze_peekmode_trigger();
 				}
 				if (screen_on && squeeze_peek_wait) { // screen on and squeeze peek going on?
+					last_screen_event_timestamp = jiffies;
 					squeeze_peek_wait = 0; // interrupt peek sleep, screen should remain on after a second short squeeze while still in time window of peek...
 				} else {
-					fpf_pwrtrigger(0);
+					if (screen_on && squeeze_swipe) {
+						squeeze_swipe_trigger();
+					} else {
+						last_screen_event_timestamp = jiffies;
+						fpf_pwrtrigger(0);
+					}
 				}
 				return;
 			}
@@ -519,6 +763,12 @@ void register_squeeze(unsigned long timestamp, int vibration) {
 			stage = STAGE_VIB;
 			// start longcount trigger
 			longcount_start = last_squeeze_timestamp;
+			if (squeeze_swipe && !swipe_longcount_finished) {
+				// in swipe mode first vibration should stop swipe longcount, because the start of the squeeze should stop 
+				// so that while a middle long gesture goes on, it won't finish with swipe_longcount_finished == 1 output, that would prevent direction change, and go
+				// into screen off, while the swipe longcount vibration was not present at starting the next squeeze...
+				interrupt_swipe_longcount = 1;
+			}
 			squeeze_longcount_trigger();
 			pr_info("%s squeeze call -- END STAGE : %d\n",__func__,stage);
 			return; 
@@ -540,34 +790,67 @@ void register_squeeze(unsigned long timestamp, int vibration) {
 		if (vibration) {
 			pr_info("%s squeeze call -- exiting because vibration endstage: %d\n",__func__,stage);
 			return;
-		} else if (diff<=MAX_SQUEEZE_TIME) {
+		} else if ( (diff<=MAX_SQUEEZE_TIME) || (screen_on && !longcount_finished) ) {
 			pr_info("%s squeeze call -- power onoff endstage: %d\n",__func__,stage);
-			last_screen_event_timestamp = jiffies;
 			wait_for_squeeze_power = 1; // pwr trigger should be canceled if right after squeeze happens a power setting
 			// ..that would mean user is on the settings screen and calibrating.
 			// also...
 			// if peek mode is on, and between long squeeze and short squeeze, peek
 			if (!screen_on && squeeze_peek) {
 				pr_info("%s squeeze call -- power onoff - PEEK MODE - PEEK wake: %d\n",__func__,stage);
+				last_screen_event_timestamp = jiffies;
 				squeeze_peekmode_trigger();
 			}
 			if (screen_on && squeeze_peek_wait) { // screen on and squeeze peek going on?
+				last_screen_event_timestamp = jiffies;
 				squeeze_peek_wait = 0; // interrupt peek sleep, screen should remain on after a second short squeeze while still in time window of peek...
 			} else {
-				fpf_pwrtrigger(0);
+				if (screen_on && squeeze_swipe) {
+					squeeze_swipe_trigger();
+				} else {
+					last_screen_event_timestamp = jiffies;
+					fpf_pwrtrigger(0);
+				}
 			}
-		} else if (!screen_on && diff>MAX_SQUEEZE_TIME && diff<=MAX_SQUEEZE_TIME_LONG && squeeze_peek) { // TODO add PEEK_MODE switch checkinh here..
+		} else if (!screen_on && diff>MAX_SQUEEZE_TIME && diff<=MAX_SQUEEZE_TIME_LONG && squeeze_peek) {
 			// if peek mode is on, and between long squeeze and short squeeze, peek
 			pr_info("%s squeeze call -- power onoff endstage PEEK MODE - full wake! %d\n",__func__,stage);
 			last_screen_event_timestamp = jiffies;
 			wait_for_squeeze_power = 1; // pwr trigger should be canceled if right after squeeze happens a power setting
 			// ..that would mean user is on the settings screen and calibrating.
 			fpf_pwrtrigger(0);
+		} else if (screen_on && diff>MAX_SQUEEZE_TIME && diff<=MAX_SQUEEZE_TIME_LONG && squeeze_swipe) {
+			if (squeeze_sleep) {
+				//unsigned int last_scroll_time_diff = jiffies - last_scroll_emulate_timestamp;
+				wait_for_squeeze_power = 1; // pwr trigger should be canceled if right after squeeze happens a power setting
+				// ..that would mean user is on the settings screen and calibrating.
+				if (!swipe_longcount_finished) {
+				// if quickly squeezing before last squeeze swipe ended, turn direction, instead of power off
+					// turn direction as NO squeeze sleep is set on
+					longcount_squeeze_swipe_dir_change = 1;
+					squeeze_swipe_dir = !squeeze_swipe_dir;
+					// call a bit of scrolling to show which direction it will go (full param = 0)
+					squeeze_swipe_short_trigger();
+					pr_info("%s squeeze TURN SWIPE DIRECTION -- END STAGE : %d\n",__func__,stage);
+					return; // exit with turning...
+				}
+				// if swipe mode is on, and between long squeeze and short squeeze, power off
+				pr_info("%s squeeze call -- power onoff endstage SWIPE - full sleep - swipe mode middle long gesture! %d\n",__func__,stage);
+				last_screen_event_timestamp = jiffies;
+				fpf_pwrtrigger(0);
+				return;
+			} else {
+				// turn direction as NO squeeze sleep is set on
+				longcount_squeeze_swipe_dir_change = 1;
+				squeeze_swipe_dir = !squeeze_swipe_dir;
+				// call a bit of scrolling to show which direction it will go (full param = 0)
+				squeeze_swipe_short_trigger();
+				pr_info("%s squeeze TURN SWIPE DIRECTION -- END STAGE : %d\n",__func__,stage);
+				return;
+			}
 		} else if (!screen_on || diff>75) { // time passed way over a normal wakelock cycle... start with second phase instead!
 			stage = STAGE_FIRST_WL;
 			last_squeeze_timestamp = jiffies;
-		} else
-		{
 		}
 		pr_info("%s squeeze call -- END STAGE : %d\n",__func__,stage);
 	}
@@ -666,18 +949,78 @@ static struct input_handler fpf_input_handler = {
 	.id_table	= fpf_ids,
 };
 
+
+/* check stored map of ts_current_X maps for matching values */
+static bool check_ts_current_map(int type, int code, int value) {
+	int i = 0;
+	for (i=0; i<TS_MAP_SIZE; i++) {
+		if (ts_current_type[i]==type && ts_current_code[i]==code && ts_current_value[i]==value) return true;
+	}
+	return false;
+}
+
 // ==================================
 // ------------- touch screen handler
 // ==================================
+
+static int last_x = 0, last_y = 0;
+static int c_x = 0, c_y = 0;
+static unsigned long last_ts_timestamp = 0;
 
 static bool ts_input_filter(struct input_handle *handle,
                                     unsigned int type, unsigned int code,
                                     int value)
 {
-#if 0
-	pr_info("%s ts input filter called t %d c %d v %d",__func__, type,code,value);
+#if 1
+	//pr_info("%s ts input filter called t %d c %d v %d\n",__func__, type,code,value);
+	if (type == EV_ABS && code == ABS_MT_TRACKING_ID && value!=-1) {
+		last_mt_slot = value;
+	}
+
+	if (mutex_is_locked(&squeeze_swipe_lock)) {
+		// in emulated swipe...block event that is not the event matching emulation event values...
+		if (!check_ts_current_map(type,code,value)) {
+			pr_info("%s ts_input filtering ts input while emulated scroll! %d %d %d\n",__func__,type,code,value);
+			return true;
+		}
+	} else 
+	{
+		if (code == ABS_MT_POSITION_X) {
+			c_x = value;
+		}
+		if (code == ABS_MT_POSITION_Y) {
+			c_y = value;
+		}
+		if (type == EV_SYN) {
+			unsigned int ts_ts_diff = jiffies - last_ts_timestamp;
+			if (ts_ts_diff < 2) {
+				if (abs(last_x-c_x)>abs(last_y-c_y)) {
+					// X direction TODO
+				} else {
+					// Y direction
+					if (last_y>c_y) { // swiping up
+						if (squeeze_swipe_dir == 0) {
+							last_scroll_emulate_timestamp = 0; // direction change, make the first scroll slow by putting this timestamp 0
+							squeeze_swipe_dir = 1; // SCROLL DOWN
+						}
+					} else if (last_y < c_y) { // swiping down
+						if (squeeze_swipe_dir == 1) {
+							last_scroll_emulate_timestamp = 0; // direction change, make the first scroll slow by putting this timestamp 0
+							squeeze_swipe_dir = 0; // SCROLL UP
+						}
+					}
+				}
+			}
+			last_ts_timestamp = jiffies;
+			last_x = c_x;
+			last_y = c_y;
+		}
+	}
+
 #endif
-	if (screen_on_full) squeeze_peek_wait = 0; // interrupt peek wait, touchscreen was interacted, don't turn screen off after peek time over...
+	if (screen_on_full) {
+		squeeze_peek_wait = 0; // interrupt peek wait, touchscreen was interacted, don't turn screen off after peek time over...
+	}
 	return false;
 }
 
@@ -694,6 +1037,8 @@ static int ts_input_dev_filter(struct input_dev *dev) {
 		strstr(dev->name, "himax-touchscreen") ||
 		strstr(dev->name, "cyttsp")
 	    ) {
+		// storing static ts_device for using outside this handle context as well
+		if (strstr(dev->name, "cyttsp")) ts_device = dev;
 		return 0;
 	} else {
 		return 1;
@@ -715,7 +1060,8 @@ static int ts_input_connect(struct input_handler *handler,
 
 	handle->dev = dev;
 	handle->handler = handler;
-	handle->name = "fpf";
+	handle->name = "fpf_ts";
+
 
 	error = input_register_handle(handle);
 
@@ -988,6 +1334,62 @@ static DEVICE_ATTR(squeeze_peek_halfseconds, (S_IWUSR|S_IRUGO),
 	squeeze_peek_halfseconds_show, squeeze_peek_halfseconds_dump);
 
 
+
+static ssize_t squeeze_swipe_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", squeeze_swipe);
+}
+
+static ssize_t squeeze_swipe_dump(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int ret;
+	unsigned long input;
+
+	ret = kstrtoul(buf, 0, &input);
+	if (ret < 0)
+		return ret;
+
+	if (input < 0 || input > 1)
+		input = 0;				
+
+	squeeze_swipe = input;			
+	
+	return count;
+}
+
+static DEVICE_ATTR(squeeze_swipe, (S_IWUSR|S_IRUGO),
+	squeeze_swipe_show, squeeze_swipe_dump);
+
+static ssize_t squeeze_swipe_vibration_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", squeeze_swipe_vibration);
+}
+
+static ssize_t squeeze_swipe_vibration_dump(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int ret;
+	unsigned long input;
+
+	ret = kstrtoul(buf, 0, &input);
+	if (ret < 0)
+		return ret;
+
+	if (input < 0 || input > 1)
+		input = 0;				
+
+	squeeze_swipe_vibration = input;			
+	
+	return count;
+}
+
+static DEVICE_ATTR(squeeze_swipe_vibration, (S_IWUSR|S_IRUGO),
+	squeeze_swipe_vibration_show, squeeze_swipe_vibration_dump);
+
+
 static struct kobject *fpf_kobj;
 
 
@@ -1037,6 +1439,7 @@ static int fb_notifier_callback(struct notifier_block *self,
 		screen_on = 0;
 		screen_on_full = 0;
 		last_screen_event_timestamp = jiffies;
+		last_scroll_emulate_timestamp = 0;
 		pr_info("fpf screen off\n");
             break;
         }
@@ -1061,7 +1464,6 @@ static int __init fpf_init(void)
 	
 	set_bit(EV_KEY, fpf_pwrdev->evbit);
 	set_bit(KEY_HOME, fpf_pwrdev->keybit);
-
 
 	fpf_pwrdev->name = "qwerty";
 	fpf_pwrdev->phys = "qwerty/input0";
@@ -1127,6 +1529,14 @@ static int __init fpf_init(void)
 	rc = sysfs_create_file(fpf_kobj, &dev_attr_squeeze_sleep.attr);
 	if (rc)
 		pr_err("%s: sysfs_create_file failed for ssleep\n", __func__);
+
+	rc = sysfs_create_file(fpf_kobj, &dev_attr_squeeze_swipe.attr);
+	if (rc)
+		pr_err("%s: sysfs_create_file failed for sswipe\n", __func__);
+
+	rc = sysfs_create_file(fpf_kobj, &dev_attr_squeeze_swipe_vibration.attr);
+	if (rc)
+		pr_err("%s: sysfs_create_file failed for sswipevibr\n", __func__);
 
 	rc = sysfs_create_file(fpf_kobj, &dev_attr_squeeze_max_power_level.attr);
 	if (rc)
