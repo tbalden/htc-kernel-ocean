@@ -87,7 +87,7 @@ static int bln_dim_number = 0;//BUTTON_BLINK_NUMBER_DEFAULT * 2; // infinite = 0
 static int full_or_dim = 1;
 
 static int rgb_coeff_divider = 1; // value between 1 - 20
-static int bln_coeff_divider = 2; // value between 1 - 20
+static int bln_coeff_divider = 6; // value between 1 - 20
 
 static int pulse_rgb_blink = 1;  // 0 - normal stock blinking / 1 - pulsating
 static int pulse_rgb_pattern =  RGB_PATTERN_NORMAL;
@@ -628,6 +628,33 @@ static void lp5562_red_long_blink(struct i2c_client *client)
 }
 
 #ifdef CONFIG_LEDS_QPNP_BUTTON_BLINK
+#if 1
+static uint8_t *lp5562_get_ramp_program(uint8_t *data, int prescale, int step_time, int increment, int steps, int dimness) {
+	data[0] = 0x00;
+	data[1] = 0x00;
+	if (prescale) {
+		data[0] += 0x40;
+	}
+	step_time = step_time * dimness;
+	if (prescale) {
+		if (step_time > 0x3f) {
+			step_time /= 30;
+			data[0] = 0x00; // don't prescale for that much long step_time
+		}
+	}
+	if (step_time > 0x3f) step_time = 0x3f;
+	data[0] += step_time;
+	if (!increment)  {
+		data[1] += 0x80;
+	}
+	steps = steps / dimness;
+	if (steps > 0x7f) steps = 0x7f;
+	data[1] += steps;
+	return data;
+}
+#endif
+
+
 /* BLN - VK blink codes */
 static int vk_led_step(uint8_t command_data[], int reg_index, uint8_t brightness, uint8_t time, int set_brightness)
 {
@@ -701,7 +728,10 @@ static void virtual_key_led_blink(int onoff, int dim)
 	struct i2c_client *client = private_lp5562_client;
 	int ret = 0, reg_index = 0;
 	int dim_division = (onoff?0:dim)?8:1;
+	int dimming = (dim_division * bln_coeff_divider);
+	int step_time = pulse_rgb_pattern == RGB_PATTERN_ONEPLUS5 ? 7:3;
 	uint8_t data;
+	uint8_t ramp_data[2] = {0x00,0x00};
 	uint8_t command_data[50] = {0};
 
 	if(!client)
@@ -723,20 +753,68 @@ static void virtual_key_led_blink(int onoff, int dim)
 
 		if (short_vib_notif) {
 			short_vib_notif = 0; // reset, so if next time vibration is off, it doesn't accidentally trigger a double blink short notfi...
-			reg_index = vk_led_step(command_data, reg_index, 0x40 / dim_division, 0x44, 1);
-			reg_index = vk_led_step(command_data, reg_index, 0xc8 / dim_division, 0x44, 1);
-			reg_index = vk_led_step(command_data, reg_index, 0x50 / dim_division, 0x4a, 1);
-			reg_index = vk_led_step(command_data, reg_index, 0xc8 / dim_division, 0x4e, 1);
-			reg_index = vk_led_step(command_data, reg_index, 0xb0 / dim_division, 0x44, 1);
-			reg_index = vk_led_step(command_data, reg_index, 0x40 / dim_division, 0x44, 1);
+			if (pulse_rgb_pattern>RGB_PATTERN_ONEPLUS5) {
+				reg_index = vk_led_step(command_data, reg_index, 0x40 / dim_division, 0x44, 1);
+				reg_index = vk_led_step(command_data, reg_index, 0xc8 / dim_division, 0x44, 1);
+				reg_index = vk_led_step(command_data, reg_index, 0x50 / dim_division, 0x4a, 1);
+				reg_index = vk_led_step(command_data, reg_index, 0xc8 / dim_division, 0x4e, 1);
+				reg_index = vk_led_step(command_data, reg_index, 0xb0 / dim_division, 0x44, 1);
+				reg_index = vk_led_step(command_data, reg_index, 0x40 / dim_division, 0x44, 1);
+			} else {
+// set PWM start vaue to 5
+				command_data[reg_index++] = 0x40;
+				command_data[reg_index++]  = 0x05;
+// Ramp up
+				lp5562_get_ramp_program(&(ramp_data[0]),0,step_time,1,112,dimming);
+				command_data[reg_index++] = ramp_data[0];
+				command_data[reg_index++]  = ramp_data[1];
+// down quick
+				lp5562_get_ramp_program(&(ramp_data[0]),0,step_time,0,88,dimming);
+				command_data[reg_index++] = ramp_data[0];
+				command_data[reg_index++]  = ramp_data[1];
+
+// up quick
+				lp5562_get_ramp_program(&(ramp_data[0]),0,step_time,1,88,dimming);
+				command_data[reg_index++] = ramp_data[0];
+				command_data[reg_index++]  = ramp_data[1];
+// Ramp down
+				lp5562_get_ramp_program(&(ramp_data[0]),0,step_time,0,112,dimming);
+				command_data[reg_index++] = ramp_data[0];
+				command_data[reg_index++]  = ramp_data[1];
+			}
+
 		} else {
-			reg_index = vk_led_step(command_data, reg_index, 0x20 / dim_division, pattern_time_button[pulse_rgb_pattern][0], 1);
-			reg_index = vk_led_step(command_data, reg_index, 0x70 / dim_division, pattern_time_button[pulse_rgb_pattern][1], 1);
-			reg_index = vk_led_step(command_data, reg_index, 0xb0 / dim_division, pattern_time_button[pulse_rgb_pattern][2], 1);
-			reg_index = vk_led_step(command_data, reg_index, 0xc8 / dim_division, pattern_time_button[pulse_rgb_pattern][3], 1);
-			reg_index = vk_led_step(command_data, reg_index, 0xb0 / dim_division, pattern_time_button[pulse_rgb_pattern][4], 1);
-			reg_index = vk_led_step(command_data, reg_index, 0x40 / dim_division, pattern_time_button[pulse_rgb_pattern][5], 1);
+			if (pulse_rgb_pattern>RGB_PATTERN_ONEPLUS5 || dim_division != 1) {
+				reg_index = vk_led_step(command_data, reg_index, 0x20 / dim_division, pattern_time_button[pulse_rgb_pattern][0], 1);
+				reg_index = vk_led_step(command_data, reg_index, 0x70 / dim_division, pattern_time_button[pulse_rgb_pattern][1], 1);
+				reg_index = vk_led_step(command_data, reg_index, 0xb0 / dim_division, pattern_time_button[pulse_rgb_pattern][2], 1);
+				reg_index = vk_led_step(command_data, reg_index, 0xc8 / dim_division, pattern_time_button[pulse_rgb_pattern][3], 1);
+				reg_index = vk_led_step(command_data, reg_index, 0xb0 / dim_division, pattern_time_button[pulse_rgb_pattern][4], 1);
+				reg_index = vk_led_step(command_data, reg_index, 0x40 / dim_division, pattern_time_button[pulse_rgb_pattern][5], 1);
+			} else {
+// set PWM start vaue to 5
+				command_data[reg_index++] = 0x40;
+				command_data[reg_index++]  = 0x05;
+// Ramp command will be: 0100 0010 0000 0100b
+//= 4240h
+				lp5562_get_ramp_program(&(ramp_data[0]),0,step_time,1,112,dimming);
+				command_data[reg_index++] = ramp_data[0];
+				command_data[reg_index++]  = ramp_data[1];
+
+				lp5562_get_ramp_program(&(ramp_data[0]),0,step_time,1,88,dimming);
+				command_data[reg_index++] = ramp_data[0];
+				command_data[reg_index++]  = ramp_data[1];
+// Ramp down 42c0h
+				lp5562_get_ramp_program(&(ramp_data[0]),0,step_time,0,112,dimming);
+				command_data[reg_index++] = ramp_data[0];
+				command_data[reg_index++]  = ramp_data[1];
+
+				lp5562_get_ramp_program(&(ramp_data[0]),0,step_time,0,88,dimming);
+				command_data[reg_index++] = ramp_data[0];
+				command_data[reg_index++]  = ramp_data[1];
+			}
 		}
+
 		data = bln_get_sleep_time(1);
 		reg_index = vk_led_step(command_data, reg_index, 0x00, data, 1);
 		reg_index = vk_led_step(command_data, reg_index, 0x00, 0x7f, 0);
@@ -1131,6 +1209,9 @@ static int color_blink_step(struct i2c_client *client, uint8_t brightness, uint8
 static void lp5562_color_blink(struct i2c_client *client, uint8_t red, uint8_t green, uint8_t blue)
 {
 	uint8_t data = 0x00;
+	uint8_t ramp_data[2] = {0x00,0x00};
+	int dimming = rgb_coeff_divider;
+
 	int ret, reg_index = 0;
 	uint8_t mode = 0x00;
 	I(" %s +++ red:%d, green:%d, blue:%d\n" , __func__, red, green, blue);
@@ -1231,13 +1312,47 @@ static void lp5562_color_blink(struct i2c_client *client, uint8_t red, uint8_t g
 		} else {
 		I(" %s BLINK +++ red:%d, green:%d, blue:%d\n" , __func__, red, green, blue);
 		/* # === set green blink === */
-		reg_index = color_blink_step(client, pattern_brightness[pulse_rgb_pattern][0], pattern_time[pulse_rgb_pattern][0], reg_index);
-		reg_index = color_blink_step(client, pattern_brightness[pulse_rgb_pattern][1], pattern_time[pulse_rgb_pattern][1], reg_index);
-		reg_index = color_blink_step(client, pattern_brightness[pulse_rgb_pattern][2], pattern_time[pulse_rgb_pattern][2], reg_index);
-		reg_index = color_blink_step(client, pattern_brightness[pulse_rgb_pattern][3], pattern_time[pulse_rgb_pattern][3], reg_index);
-		reg_index = color_blink_step(client, pattern_brightness[pulse_rgb_pattern][4], pattern_time[pulse_rgb_pattern][4], reg_index);
-		reg_index = color_blink_step(client, pattern_brightness[pulse_rgb_pattern][5], pattern_time[pulse_rgb_pattern][5], reg_index);
-		// TODO add speed variation here later...
+		if (pulse_rgb_pattern>RGB_PATTERN_ONEPLUS5) {
+			reg_index = color_blink_step(client, pattern_brightness[pulse_rgb_pattern][0], pattern_time[pulse_rgb_pattern][0], reg_index);
+			reg_index = color_blink_step(client, pattern_brightness[pulse_rgb_pattern][1], pattern_time[pulse_rgb_pattern][1], reg_index);
+			reg_index = color_blink_step(client, pattern_brightness[pulse_rgb_pattern][2], pattern_time[pulse_rgb_pattern][2], reg_index);
+			reg_index = color_blink_step(client, pattern_brightness[pulse_rgb_pattern][3], pattern_time[pulse_rgb_pattern][3], reg_index);
+			reg_index = color_blink_step(client, pattern_brightness[pulse_rgb_pattern][4], pattern_time[pulse_rgb_pattern][4], reg_index);
+			reg_index = color_blink_step(client, pattern_brightness[pulse_rgb_pattern][5], pattern_time[pulse_rgb_pattern][5], reg_index);
+		} else {
+			int step_time = pulse_rgb_pattern == RGB_PATTERN_ONEPLUS5 ? 7:3;
+// set PWM start vaue to 5
+			data = 0x40;
+			ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
+			data = 0x05;
+			ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
+// Ramp command will be: 0100 0010 0000 0100b
+//= 4240h
+			lp5562_get_ramp_program(&(ramp_data[0]),0,step_time,1,112,dimming);
+			data = ramp_data[0]; // prescale 01000000b + 0x08 step time
+			ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
+			data = ramp_data[1]; // increment 00000000b + 0x70 steps
+			ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
+
+			lp5562_get_ramp_program(&(ramp_data[0]),0,step_time,1,88,dimming);
+			data = ramp_data[0];
+			ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
+			data = ramp_data[1]; // increment 00000000b + 0x58 steps
+			ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
+// Ramp down 42c0h
+
+			lp5562_get_ramp_program(&(ramp_data[0]),0,step_time,0,112,dimming);
+			data = ramp_data[0]; // prescale 01000000b + 0x08 step time
+			ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
+			data = ramp_data[1]; // increment 00000000b + 0x70 steps
+			ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
+
+			lp5562_get_ramp_program(&(ramp_data[0]),0,step_time,0,88,dimming);
+			data = ramp_data[0];
+			ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
+			data = ramp_data[1]; // increment 00000000b + 0x58 steps
+			ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
+		}
 		data = bln_get_sleep_time(0);
 		reg_index = color_blink_step(client, 0x00, data, reg_index);//0x7c, reg_index);
 		/* === wait 0.999s === */
