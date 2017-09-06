@@ -681,10 +681,10 @@ static uint8_t bln_get_sleep_time(int buttons) {
 			data = 0x44;
 			break;
 			case 1:
-			data = pulse_rgb_pattern==RGB_PATTERN_ONEPLUS5 || pulse_rgb_pattern==RGB_PATTERN_TRIPLE_UP || pulse_rgb_pattern==RGB_PATTERN_TRIPLE_DOWN ? 44 : (buttons?0x7d:0x7c);
+			data = pulse_rgb_pattern==RGB_PATTERN_TRIPLE_UP || pulse_rgb_pattern==RGB_PATTERN_TRIPLE_DOWN ? 44 : (buttons?0x7c:0x7c);
 			break;
 			case 0:
-			data = buttons?0x7d:0x7c;
+			data = pulse_rgb_pattern==RGB_PATTERN_TRIPLE_UP || pulse_rgb_pattern==RGB_PATTERN_TRIPLE_DOWN ? (buttons?0x7d:0x7c) : (buttons?0x7c:0x7c);
 			break;
 		}
 		return data;
@@ -765,7 +765,7 @@ static void virtual_key_led_blink(int onoff, int dim)
 				command_data[reg_index++] = 0x40;
 				command_data[reg_index++]  = 0x05;
 // Ramp up
-				lp5562_get_ramp_program(&(ramp_data[0]),0,step_time,1,112,dimming);
+				lp5562_get_ramp_program(&(ramp_data[0]),0,step_time,1,108,dimming);
 				command_data[reg_index++] = ramp_data[0];
 				command_data[reg_index++]  = ramp_data[1];
 // down quick
@@ -778,7 +778,7 @@ static void virtual_key_led_blink(int onoff, int dim)
 				command_data[reg_index++] = ramp_data[0];
 				command_data[reg_index++]  = ramp_data[1];
 // Ramp down
-				lp5562_get_ramp_program(&(ramp_data[0]),0,step_time,0,112,dimming);
+				lp5562_get_ramp_program(&(ramp_data[0]),0,step_time,0,107,dimming);
 				command_data[reg_index++] = ramp_data[0];
 				command_data[reg_index++]  = ramp_data[1];
 			}
@@ -797,7 +797,7 @@ static void virtual_key_led_blink(int onoff, int dim)
 				command_data[reg_index++]  = 0x05;
 // Ramp command will be: 0100 0010 0000 0100b
 //= 4240h
-				lp5562_get_ramp_program(&(ramp_data[0]),0,step_time,1,112,dimming);
+				lp5562_get_ramp_program(&(ramp_data[0]),0,step_time,1,108,dimming);
 				command_data[reg_index++] = ramp_data[0];
 				command_data[reg_index++]  = ramp_data[1];
 
@@ -805,7 +805,7 @@ static void virtual_key_led_blink(int onoff, int dim)
 				command_data[reg_index++] = ramp_data[0];
 				command_data[reg_index++]  = ramp_data[1];
 // Ramp down 42c0h
-				lp5562_get_ramp_program(&(ramp_data[0]),0,step_time,0,112,dimming);
+				lp5562_get_ramp_program(&(ramp_data[0]),0,step_time,0,107,dimming);
 				command_data[reg_index++] = ramp_data[0];
 				command_data[reg_index++]  = ramp_data[1];
 
