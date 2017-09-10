@@ -1132,9 +1132,9 @@ static unsigned long MAX_DIFF = 200;
 extern void register_squeeze(unsigned long timestamp, int vibration);
 
 // callback to register fingerprint vibration
-extern void register_fp_vibration(void);
+extern int register_fp_vibration(void);
 
-void register_haptic(int value)
+int register_haptic(int value)
 {
 	unsigned long stack_entries[STACK_LENGTH];
 	struct stack_trace trace = {
@@ -1158,17 +1158,17 @@ void register_haptic(int value)
 	//WARN_ON(1);
 
 	if (value == FINGERPRINT_VIB_TIME_EXCEPTION) {
-		register_fp_vibration();
-		return;
+		int vib_strength = register_fp_vibration();
+		if (vib_strength > 0 && vib_strength<=FINGERPRINT_VIB_TIME_EXCEPTION*2) return vib_strength/2; else return vib_strength>0?FINGERPRINT_VIB_TIME_EXCEPTION:0;
 	}
 	if (value == SQUEEZE_VIB_TIME_EXCEPTION) {
 		last_value = value;
 //		register_squeeze_wake(0,1,jiffies,0);
 		register_squeeze(jiffies,1);
-		return;
+		return value;
 	}
 
-	if (screen_on) return;
+	if (screen_on) return value;
 	if (last_value == value) {
 		if (diff_jiffies < MAX_DIFF) {
 			if (value <= 200) {
@@ -1182,6 +1182,7 @@ void register_haptic(int value)
 		}
 	}
 	last_value = value;
+	return value;
 }
 
 EXPORT_SYMBOL(register_haptic);

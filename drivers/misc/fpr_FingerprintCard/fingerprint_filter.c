@@ -94,7 +94,8 @@ static void fpf_presspwr(struct work_struct * fpf_presspwr_work) {
 static DECLARE_WORK(fpf_presspwr_work, fpf_presspwr);
 
 static void fpf_vib(void) {
-	set_vibrate(vib_strength);
+	// avoid using squeeze vib length 15...
+	set_vibrate(vib_strength==15?14:vib_strength);
 }
 
 /* PowerKey trigger */
@@ -658,9 +659,10 @@ static void squeeze_peekmode_trigger(void) {
 }
 
 // this callback allows registration of FP vibration, in which case peek timeout auto screen off should be canceled...
-void register_fp_vibration(void) {
+int register_fp_vibration(void) {
 	// fp scanner pressed, cancel peek timeout
 	squeeze_peek_wait = 0;
+	return vib_strength;
 }
 EXPORT_SYMBOL(register_fp_vibration);
 
@@ -1186,7 +1188,7 @@ static ssize_t vib_strength_dump(struct device *dev,
 	if (ret < 0)
 		return ret;
 
-	if (input < 0 || input > 90)
+	if (input < 0 || input > 90) 
 		input = 20;				
 
 	vib_strength = input;			
