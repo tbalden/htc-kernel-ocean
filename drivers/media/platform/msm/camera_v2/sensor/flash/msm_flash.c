@@ -20,6 +20,11 @@
 #include "msm_camera_dt_util.h"
 #include "msm_cci.h"
 
+#define CONFIG_LEDS_QPNP_BUTTON_BLINK
+#ifdef CONFIG_LEDS_QPNP_BUTTON_BLINK
+#include <linux/alarmtimer.h>
+#endif
+
 //HTC_START
 #include <linux/htc_flashlight.h>
 #define CONFIG_HTC_FLASHLIGHT_COMMON
@@ -34,6 +39,12 @@ static struct kobject *led_status_obj; // tmp remove for fc-1
 #define CDBG(fmt, args...) pr_debug(fmt, ##args)
 
 DEFINE_MSM_MUTEX(msm_flash_mutex);
+
+#if 1
+static struct alarm flash_blink_rtc;
+static struct work_struct flash_blink_work;
+static struct workqueue_struct *flash_blink_workqueue;
+#endif
 
 static struct v4l2_file_operations msm_flash_v4l2_subdev_fops;
 static struct led_trigger *torch_trigger;
@@ -93,6 +104,161 @@ static struct led_classdev msm_torch_led[MAX_LED_TRIGGERS] = {
 		.brightness	= LED_OFF,
 	},
 };
+
+#if 1
+
+static int currently_torch_mode = 0;
+static int currently_blinking = 0;
+
+static int flash_blink_on  = 1;
+static int flash_blink_number = 0;
+static int flash_blink_wait_sec = 2;
+static int flash_blink_wait_inc = 1;
+
+void set_flash_blink_on(int value) {
+	flash_blink_on = !!value;
+}
+EXPORT_SYMBOL(set_flash_blink_on);
+int get_flash_blink_on(void) {
+	return flash_blink_on;
+}
+EXPORT_SYMBOL(get_flash_blink_on);
+
+void set_flash_blink_number(int value) {
+	flash_blink_number = value;
+}
+EXPORT_SYMBOL(set_flash_blink_number);
+int get_flash_blink_number(void) {
+	return flash_blink_number;
+}
+EXPORT_SYMBOL(get_flash_blink_number);
+
+
+
+static int current_blink_num = 0;
+
+void do_flash_blink(void) {
+	ktime_t wakeup_time;
+	ktime_t curr_time = { .tv64 = 0 };
+	int count = 0;
+	int limit = 3;
+
+	pr_info("%s flash_blink\n",__func__);
+	if (currently_torch_mode) return;
+	htc_flash_main(0,0);
+
+	// while in the first fast paced periodicity, don't do that much of flashing in one blink...
+	if (current_blink_num < 16) limit = 2;
+	if (current_blink_num > 30) limit = 4;
+	if (current_blink_num > 40) limit = 5;
+
+	while (count++<limit) {
+	htc_torch_main(150,0);  // [o] [ ]
+	udelay(129);
+	htc_torch_main(0,0);	// [ ] [ ]
+	udelay(15000);
+
+	htc_torch_main(0,150);  // [ ] [o]
+	udelay(129);
+	htc_torch_main(0,0);	// [ ] [ ]
+	udelay(15000);
+
+	htc_torch_main(150,0);  // [o] [ ]
+	udelay(129);
+	htc_torch_main(0,0);	// [ ] [ ]
+	udelay(15000);
+
+	htc_torch_main(0,150);  // [ ] [o]
+	udelay(129);
+	htc_torch_main(0,0);	// [ ] [ ]
+	udelay(15000);
+
+	htc_torch_main(150,0);  // [o] [ ]
+	udelay(129);
+	htc_torch_main(0,0);	// [ ] [ ]
+	if (count==1) {
+		udelay(15000);
+	}
+	}
+
+	if (flash_blink_number > 0 && current_blink_num > flash_blink_number) {
+		currently_blinking = 0;
+		return;
+	}
+	current_blink_num++;
+
+	wakeup_time = ktime_add_us(curr_time,
+		( (flash_blink_wait_sec + min(max(((current_blink_num-10)/5),0),6) * flash_blink_wait_inc) * 1000LL * 1000LL)); // msec to usec 
+
+// TODO time sysfs
+// TODO check against flashlight / camera flash state
+
+	alarm_cancel(&flash_blink_rtc); // stop pending alarm...
+	alarm_start_relative(&flash_blink_rtc, wakeup_time); // start new...
+
+	pr_info("%s: Current Time tv_sec: %ld, Alarm set to tv_sec: %ld\n",
+		__func__,
+                    ktime_to_timeval(curr_time).tv_sec,
+                    ktime_to_timeval(wakeup_time).tv_sec);
+
+//	htc_torch_main(150,0);
+//	udelay(100);
+//	htc_torch_main(0,0);
+//	udelay(15000);
+}
+static int interrupt_retime = 0;
+
+void flash_blink(void) {
+	pr_info("%s flash_blink\n",__func__);
+	if (!flash_blink_on) return;
+	if (currently_torch_mode) return;
+
+	if (currently_blinking) {
+		// already blinking, check if we should go back with blink num count to a faster pace...
+		if (current_blink_num>8) {
+			// if started blinking already over a lot of blinks, move back to the beginning, 
+			// to shorter periodicity...
+			current_blink_num = 5;
+		} // otherwise if only a few blinks yet, don't reset count...
+	}
+	if (!currently_blinking) {
+		currently_blinking = 1;
+
+		current_blink_num = 0;
+		interrupt_retime = 0;
+		queue_work(flash_blink_workqueue, &flash_blink_work);
+	}
+}
+EXPORT_SYMBOL(flash_blink);
+
+static void flash_blink_work_func(struct work_struct *work)
+{
+	pr_info("%s flash_blink\n",__func__);
+	do_flash_blink();
+}
+
+static enum alarmtimer_restart flash_blink_rtc_callback(struct alarm *al, ktime_t now)
+{
+	pr_info("%s flash_blink\n",__func__);
+	if (!interrupt_retime) {
+		queue_work(flash_blink_workqueue, &flash_blink_work);
+	}
+	return ALARMTIMER_NORESTART;
+}
+
+
+void flash_stop_blink(void) {
+	pr_info("%s flash_blink\n",__func__);
+	if (!flash_blink_on) return;
+	if (currently_torch_mode) return;
+	currently_blinking = 0;
+	htc_torch_main(0,0);
+	interrupt_retime = 1;
+	alarm_cancel(&flash_blink_rtc); // stop pending alarm...
+}
+EXPORT_SYMBOL(flash_stop_blink);
+
+#endif
 
 static int32_t msm_torch_create_classdev(struct platform_device *pdev,
 				void *data)
@@ -441,6 +607,10 @@ static int32_t msm_flash_off(struct msm_flash_ctrl_t *flash_ctrl,
 	#endif
 	//HTC_END
 	CDBG("Exit\n");
+#if 1
+	currently_blinking = 0;
+	currently_torch_mode = 0;
+#endif
 	return 0;
 }
 
@@ -713,6 +883,10 @@ static int32_t msm_flash_low(
 	//HTC_END
 
 	CDBG("Exit\n");
+#if 1
+	currently_blinking = 0;
+	currently_torch_mode = 1;
+#endif
 	return 0;
 }
 
@@ -1650,6 +1824,13 @@ static int __init msm_flash_init_module(void)
 		pr_info("%s:%d rc %d\n", __func__, __LINE__, rc);
 	}
 	//HTC_END
+
+#if 1
+	alarm_init(&flash_blink_rtc, ALARM_REALTIME,
+		flash_blink_rtc_callback);
+	flash_blink_workqueue = alloc_workqueue("flash_blink", WQ_HIGHPRI, 1);
+	INIT_WORK(&flash_blink_work, flash_blink_work_func);
+#endif
 
 	return rc;
 }
