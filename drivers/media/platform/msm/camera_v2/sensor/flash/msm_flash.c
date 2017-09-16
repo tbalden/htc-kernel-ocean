@@ -43,6 +43,8 @@ DEFINE_MSM_MUTEX(msm_flash_mutex);
 #if 1
 static struct alarm flash_blink_rtc;
 static struct work_struct flash_blink_work;
+static struct work_struct flash_start_blink_work;
+static struct work_struct flash_stop_blink_work;
 static struct workqueue_struct *flash_blink_workqueue;
 #endif
 
@@ -136,6 +138,8 @@ EXPORT_SYMBOL(get_flash_blink_number);
 
 
 static int current_blink_num = 0;
+static int interrupt_retime = 0;
+static DEFINE_MUTEX(flash_blink_lock);
 
 void do_flash_blink(void) {
 	ktime_t wakeup_time;
@@ -144,7 +148,9 @@ void do_flash_blink(void) {
 	int limit = 3;
 
 	pr_info("%s flash_blink\n",__func__);
-	if (currently_torch_mode) return;
+	if (currently_torch_mode || interrupt_retime) return;
+
+
 	htc_flash_main(0,0);
 
 	// while in the first fast paced periodicity, don't do that much of flashing in one blink...
@@ -181,17 +187,18 @@ void do_flash_blink(void) {
 	}
 	}
 
-	if (flash_blink_number > 0 && current_blink_num > flash_blink_number) {
+	mutex_lock(&flash_blink_lock);
+	pr_info("%s flash_blink lock\n",__func__);
+	// make sure this part is running in a few cycles, as blocking the lock will block vibrator driver resulting in kernel freeze and panic
+
+	if ( (flash_blink_number > 0 && current_blink_num > flash_blink_number) || interrupt_retime) {
 		currently_blinking = 0;
-		return;
+		goto exit;
 	}
 	current_blink_num++;
 
 	wakeup_time = ktime_add_us(curr_time,
 		( (flash_blink_wait_sec + min(max(((current_blink_num-10)/5),0),6) * flash_blink_wait_inc) * 1000LL * 1000LL)); // msec to usec 
-
-// TODO time sysfs
-// TODO check against flashlight / camera flash state
 
 	alarm_cancel(&flash_blink_rtc); // stop pending alarm...
 	alarm_start_relative(&flash_blink_rtc, wakeup_time); // start new...
@@ -201,18 +208,19 @@ void do_flash_blink(void) {
                     ktime_to_timeval(curr_time).tv_sec,
                     ktime_to_timeval(wakeup_time).tv_sec);
 
-//	htc_torch_main(150,0);
-//	udelay(100);
-//	htc_torch_main(0,0);
-//	udelay(15000);
+exit:
+	mutex_unlock(&flash_blink_lock);
+	pr_info("%s flash_blink unlock\n",__func__);
+
 }
-static int interrupt_retime = 0;
 
-void flash_blink(void) {
+static void flash_start_blink_work_func(struct work_struct *work)
+{
 	pr_info("%s flash_blink\n",__func__);
-	if (!flash_blink_on) return;
-	if (currently_torch_mode) return;
+	mutex_lock(&flash_blink_lock);
+	pr_info("%s flash_blink lock\n",__func__);
 
+	interrupt_retime = 0;
 	if (currently_blinking) {
 		// already blinking, check if we should go back with blink num count to a faster pace...
 		if (current_blink_num>8) {
@@ -220,14 +228,40 @@ void flash_blink(void) {
 			// to shorter periodicity...
 			current_blink_num = 5;
 		} // otherwise if only a few blinks yet, don't reset count...
+		mutex_unlock(&flash_blink_lock);
+		pr_info("%s flash_blink unlock\n",__func__);
 	}
 	if (!currently_blinking) {
 		currently_blinking = 1;
-
 		current_blink_num = 0;
-		interrupt_retime = 0;
+		mutex_unlock(&flash_blink_lock);
 		queue_work(flash_blink_workqueue, &flash_blink_work);
+		pr_info("%s flash_blink unlock\n",__func__);
 	}
+}
+
+static void flash_stop_blink_work_func(struct work_struct *work)
+{
+	pr_info("%s flash_blink\n",__func__);
+	mutex_lock(&flash_blink_lock);
+	pr_info("%s flash_blink lock\n",__func__);
+
+	if (!flash_blink_on && !currently_blinking) goto exit;
+	if (currently_torch_mode) goto exit;
+	currently_blinking = 0;
+	htc_torch_main(0,0);
+	interrupt_retime = 1;
+	alarm_cancel(&flash_blink_rtc); // stop pending alarm...
+exit:
+	mutex_unlock(&flash_blink_lock);
+	pr_info("%s flash_blink unlock\n",__func__);
+}
+
+void flash_blink(void) {
+	pr_info("%s flash_blink\n",__func__);
+	if (!flash_blink_on) return;
+	if (currently_torch_mode) return;
+	queue_work(flash_blink_workqueue, &flash_start_blink_work);
 }
 EXPORT_SYMBOL(flash_blink);
 
@@ -249,12 +283,7 @@ static enum alarmtimer_restart flash_blink_rtc_callback(struct alarm *al, ktime_
 
 void flash_stop_blink(void) {
 	pr_info("%s flash_blink\n",__func__);
-	if (!flash_blink_on) return;
-	if (currently_torch_mode) return;
-	currently_blinking = 0;
-	htc_torch_main(0,0);
-	interrupt_retime = 1;
-	alarm_cancel(&flash_blink_rtc); // stop pending alarm...
+	queue_work(flash_blink_workqueue, &flash_stop_blink_work);
 }
 EXPORT_SYMBOL(flash_stop_blink);
 
@@ -1830,6 +1859,8 @@ static int __init msm_flash_init_module(void)
 		flash_blink_rtc_callback);
 	flash_blink_workqueue = alloc_workqueue("flash_blink", WQ_HIGHPRI, 1);
 	INIT_WORK(&flash_blink_work, flash_blink_work_func);
+	INIT_WORK(&flash_start_blink_work, flash_start_blink_work_func);
+	INIT_WORK(&flash_stop_blink_work, flash_stop_blink_work_func);
 #endif
 
 	return rc;
