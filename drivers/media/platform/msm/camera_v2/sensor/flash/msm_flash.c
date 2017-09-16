@@ -112,10 +112,16 @@ static struct led_classdev msm_torch_led[MAX_LED_TRIGGERS] = {
 static int currently_torch_mode = 0;
 static int currently_blinking = 0;
 
+#define DEFAULT_BLINK_NUMBER 0
+#define DEFAULT_BLINK_WAIT_SEC 2
+#define DEFAULT_WAIT_INC 1
+#define DEFAULT_WAIT_INC_MAX 4
+
 static int flash_blink_on  = 1;
-static int flash_blink_number = 0;
-static int flash_blink_wait_sec = 2;
-static int flash_blink_wait_inc = 1;
+static int flash_blink_number = DEFAULT_BLINK_NUMBER;
+static int flash_blink_wait_sec = DEFAULT_BLINK_WAIT_SEC;
+static int flash_blink_wait_inc = DEFAULT_WAIT_INC;
+static int flash_blink_wait_inc_max = DEFAULT_WAIT_INC_MAX;
 
 void set_flash_blink_on(int value) {
 	flash_blink_on = !!value;
@@ -127,13 +133,40 @@ int get_flash_blink_on(void) {
 EXPORT_SYMBOL(get_flash_blink_on);
 
 void set_flash_blink_number(int value) {
-	flash_blink_number = value;
+	flash_blink_number = value%51; // max 50
 }
 EXPORT_SYMBOL(set_flash_blink_number);
 int get_flash_blink_number(void) {
 	return flash_blink_number;
 }
 EXPORT_SYMBOL(get_flash_blink_number);
+
+void set_flash_blink_wait_sec(int value) {
+	flash_blink_wait_sec = max(1,value%11); // min 1/max 10
+}
+EXPORT_SYMBOL(set_flash_blink_wait_sec);
+int get_flash_blink_wait_sec(void) {
+	return flash_blink_wait_sec;
+}
+EXPORT_SYMBOL(get_flash_blink_wait_sec);
+
+void set_flash_blink_wait_inc(int value) {
+	flash_blink_wait_inc = !!value;
+}
+EXPORT_SYMBOL(set_flash_blink_wait_inc);
+int get_flash_blink_wait_inc(void) {
+	return flash_blink_wait_inc;
+}
+EXPORT_SYMBOL(get_flash_blink_wait_inc);
+
+void set_flash_blink_wait_inc_max(int value) {
+	flash_blink_wait_inc_max = max(1,value%9); // min 1/max 8
+}
+EXPORT_SYMBOL(set_flash_blink_wait_inc_max);
+int get_flash_blink_wait_inc_max(void) {
+	return flash_blink_wait_inc_max;
+}
+EXPORT_SYMBOL(get_flash_blink_wait_inc_max);
 
 
 
@@ -153,10 +186,12 @@ void do_flash_blink(void) {
 
 	htc_flash_main(0,0);
 
-	// while in the first fast paced periodicity, don't do that much of flashing in one blink...
-	if (current_blink_num < 16) limit = 2;
-	if (current_blink_num > 30) limit = 4;
-	if (current_blink_num > 40) limit = 5;
+	if (flash_blink_wait_inc) {
+		// while in the first fast paced periodicity, don't do that much of flashing in one blink...
+		if (current_blink_num < 16) limit = 2;
+		if (current_blink_num > 30) limit = 4;
+		if (current_blink_num > 40) limit = 5;
+	}
 
 	while (count++<limit) {
 	htc_torch_main(150,0);  // [o] [ ]
@@ -198,7 +233,7 @@ void do_flash_blink(void) {
 	current_blink_num++;
 
 	wakeup_time = ktime_add_us(curr_time,
-		( (flash_blink_wait_sec + min(max(((current_blink_num-10)/5),0),6) * flash_blink_wait_inc) * 1000LL * 1000LL)); // msec to usec 
+		( (flash_blink_wait_sec + min(max(((current_blink_num-10)/6),0),flash_blink_wait_inc_max) * flash_blink_wait_inc) * 1000LL * 1000LL)); // msec to usec 
 
 	alarm_cancel(&flash_blink_rtc); // stop pending alarm...
 	alarm_start_relative(&flash_blink_rtc, wakeup_time); // start new...

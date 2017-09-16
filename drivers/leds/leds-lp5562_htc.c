@@ -1890,6 +1890,14 @@ extern int get_flash_blink_on(void);
 extern void set_flash_blink_number(int value);
 extern int get_flash_blink_number(void);
 
+extern void set_flash_blink_wait_sec(int value);
+extern int get_flash_blink_wait_sec(void);
+
+extern void set_flash_blink_wait_inc(int value);
+extern int get_flash_blink_wait_inc(void);
+extern void set_flash_blink_wait_inc_max(int value);
+extern int get_flash_blink_wait_inc_max(void);
+
 static ssize_t flash_blink_show(struct device *dev,
             struct device_attribute *attr, char *buf)
 {
@@ -1944,6 +1952,90 @@ static ssize_t flash_blink_number_dump(struct device *dev,
 
 static DEVICE_ATTR(bln_flash_blink_number, (S_IWUSR|S_IRUGO),
       flash_blink_number_show, flash_blink_number_dump);
+
+
+static ssize_t flash_blink_wait_inc_show(struct device *dev,
+            struct device_attribute *attr, char *buf)
+{
+      return snprintf(buf, PAGE_SIZE, "%d\n", get_flash_blink_wait_inc());
+}
+
+static ssize_t flash_blink_wait_inc_dump(struct device *dev,
+            struct device_attribute *attr, const char *buf, size_t count)
+{
+      int ret;
+      unsigned long input;
+
+      ret = kstrtoul(buf, 0, &input);
+      if (ret < 0)
+            return ret;
+
+      if (input < 0 || input > 1)
+            input = 1;
+
+	set_flash_blink_wait_inc(input);
+
+      return count;
+}
+
+static DEVICE_ATTR(bln_flash_blink_wait_inc, (S_IWUSR|S_IRUGO),
+      flash_blink_wait_inc_show, flash_blink_wait_inc_dump);
+
+
+static ssize_t flash_blink_wait_inc_max_show(struct device *dev,
+            struct device_attribute *attr, char *buf)
+{
+      return snprintf(buf, PAGE_SIZE, "%d\n", get_flash_blink_wait_inc_max());
+}
+
+static ssize_t flash_blink_wait_inc_max_dump(struct device *dev,
+            struct device_attribute *attr, const char *buf, size_t count)
+{
+      int ret;
+      unsigned long input;
+
+      ret = kstrtoul(buf, 0, &input);
+      if (ret < 0)
+            return ret;
+
+      if (input < 1 || input > 8)
+            input = 4;
+
+      set_flash_blink_wait_inc_max(input);
+
+      return count;
+}
+
+static DEVICE_ATTR(bln_flash_blink_wait_inc_max, (S_IWUSR|S_IRUGO),
+      flash_blink_wait_inc_max_show, flash_blink_wait_inc_max_dump);
+
+static ssize_t flash_blink_wait_sec_show(struct device *dev,
+            struct device_attribute *attr, char *buf)
+{
+      return snprintf(buf, PAGE_SIZE, "%d\n", get_flash_blink_wait_sec());
+}
+
+static ssize_t flash_blink_wait_sec_dump(struct device *dev,
+            struct device_attribute *attr, const char *buf, size_t count)
+{
+      int ret;
+      unsigned long input;
+
+      ret = kstrtoul(buf, 0, &input);
+      if (ret < 0)
+            return ret;
+
+      if (input < 1 || input > 10)
+            input = 2;
+
+      set_flash_blink_wait_sec(input);
+
+      return count;
+}
+
+static DEVICE_ATTR(bln_flash_blink_wait_sec, (S_IWUSR|S_IRUGO),
+      flash_blink_wait_sec_show, flash_blink_wait_sec_dump);
+
 
 // bln on/off settings
 static ssize_t bln_show(struct device *dev,
@@ -3128,6 +3220,9 @@ static int lp5562_led_probe(struct i2c_client *client
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_pulse_rgb_pattern_max);
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_flash_blink);
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_flash_blink_number);
+			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_flash_blink_wait_sec);
+			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_flash_blink_wait_inc);
+			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_flash_blink_wait_inc_max);
 			g_led_led_data_bln = &cdata->leds[i];
 			alarm_init(&blinkstopfunc_rtc, ALARM_REALTIME,
 				blinkstop_rtc_callback);
