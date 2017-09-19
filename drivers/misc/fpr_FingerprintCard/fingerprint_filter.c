@@ -19,8 +19,14 @@ MODULE_DESCRIPTION(DRIVER_DESCRIPTION);
 MODULE_VERSION(DRIVER_VERSION);
 MODULE_LICENSE("GPL");
 
+#ifdef CONFIG_HZ_300
+#define JIFFY_MUL 3
+#else
+#define JIFFY_MUL 1
+#endif
+
 #define fpf_PWRKEY_DUR          60
-#define FUNC_CYCLE_DUR          9
+#define FUNC_CYCLE_DUR          9 + JIFFY_MUL
 #define VIB_STRENGTH		20
 
 extern void set_vibrate(int value);
@@ -75,7 +81,7 @@ static void fpf_presspwr(struct work_struct * fpf_presspwr_work) {
 			// .. check if last power resgistration through threshold reg callback happened lately... if so no need to do screen off..
 			squeeze_reg_diff = jiffies - last_squeeze_power_registration_jiffies;
 			pr_info("%s squeeze_reg_diff %u\n",__func__,squeeze_reg_diff);
-			if (squeeze_reg_diff<4) goto exit;
+			if (squeeze_reg_diff< 4*JIFFY_MUL ) goto exit;
 		}
 	}
 	input_event(fpf_pwrdev, EV_KEY, KEY_POWER, 1);
@@ -396,7 +402,7 @@ int swipe_step_wait_time_mul = 100; // tune this to find optimal slowness of swi
 unsigned long last_scroll_emulate_timestamp = 0;
 static DEFINE_MUTEX(squeeze_swipe_lock);
 
-#define SWIPE_ACCELERATED_TIME_LIMIT 150
+#define SWIPE_ACCELERATED_TIME_LIMIT 150 * JIFFY_MUL
 int interrupt_swipe_longcount = 0;
 int swipe_longcount_finished = 0;
 unsigned long swipe_longcount_start = 0;
@@ -502,7 +508,7 @@ static void ts_scroll_emulate(int down, int full) {
 		ts_current_type[i]=100;
 	}
 
-	if (last_scroll_time_diff > 5000) { // a higher value...passed?
+	if (last_scroll_time_diff > 5000 * JIFFY_MUL) { // a higher value...passed?
 		if (full == 1) {
 			if (longcount_squeeze_swipe_dir_change == 0) {
 				// if last direction change was not done by middle long squeeze, then...
@@ -522,7 +528,7 @@ static void ts_scroll_emulate(int down, int full) {
 		if (double_swipe) {
 			y_delta *= 2; // bigger delta for speed
 			y_steps /= 3; // fewer steps, to not run out of screen
-			swipe_step_wait_time_mul = 300 - ( ((SWIPE_ACCELERATED_TIME_LIMIT - last_scroll_time_diff)*2)/1 ); // 300 - 0
+			swipe_step_wait_time_mul = 300 - ( (( (SWIPE_ACCELERATED_TIME_LIMIT/JIFFY_MUL) - (last_scroll_time_diff/JIFFY_MUL))*2)/1 ); // 300 - 0
 			if (swipe_step_wait_time_mul > 85) last_swipe_very_quick = 0;
 			if (!last_swipe_very_quick && swipe_step_wait_time_mul < 85) last_swipe_very_quick = 1;
 			if (last_swipe_very_quick && swipe_step_wait_time_mul < 85) swipe_step_wait_time_mul = (swipe_step_wait_time_mul*2)/3; // speed up on the extreme of fast value multiplier < 80, divide it
@@ -604,9 +610,9 @@ static void squeeze_swipe_short_trigger(void) {
 
 
 
-#define MAX_SQUEEZE_TIME 35
-#define MAX_SQUEEZE_TIME_LONG 69
-#define MAX_NANOHUB_EVENT_TIME 4
+#define MAX_SQUEEZE_TIME 35 * JIFFY_MUL
+#define MAX_SQUEEZE_TIME_LONG 69 * JIFFY_MUL
+#define MAX_NANOHUB_EVENT_TIME 4 * JIFFY_MUL
 static unsigned long longcount_start = 0;
 static int interrupt_longcount = 0;
 static int longcount_finished = 0;
@@ -645,7 +651,7 @@ static void squeeze_peekmode(struct work_struct * squeeze_peekmode_work) {
 			// .. check if last power resgistration through threshold reg callback happened lately... if so no need to do screen off..
 			squeeze_reg_diff = jiffies - last_squeeze_power_registration_jiffies;
 			pr_info("%s squeeze_reg_diff %u\n",__func__,squeeze_reg_diff);
-			if (squeeze_reg_diff<4) return;
+			if (squeeze_reg_diff<4*JIFFY_MUL) return;
 		}
 	}
 	msleep(squeeze_peek_halfseconds * 500);
@@ -689,7 +695,7 @@ void register_squeeze(unsigned long timestamp, int vibration) {
 	if (!squeeze_sleep && !squeeze_swipe && screen_on) return;
 
 	if (!last_screen_event_timestamp) return;
-	if ((!screen_on && diff < 3) || (screen_on && diff < 30)) return;
+	if ((!screen_on && diff < 3 * JIFFY_MUL) || (screen_on && diff < 30 * JIFFY_MUL)) return;
 
 	pr_info("%s squeeze call ++ START STAGE : %d\n",__func__,stage);
 	if (stage == STAGE_INIT) {
@@ -732,7 +738,7 @@ void register_squeeze(unsigned long timestamp, int vibration) {
 	pr_info("%s squeeze call ++ squeeze diff : %u\n",__func__,diff);
 
 	if (stage == STAGE_FIRST_WL) {
-		if (vibration && diff <= 5) {
+		if (vibration && diff <= 5 * JIFFY_MUL) {
 
 			// if screen is off and nanohub edge wake event detected recently, trigger power button here..
 			if (!screen_on && nanohub_diff < MAX_NANOHUB_EVENT_TIME) {
@@ -850,7 +856,7 @@ void register_squeeze(unsigned long timestamp, int vibration) {
 				pr_info("%s squeeze TURN SWIPE DIRECTION -- END STAGE : %d\n",__func__,stage);
 				return;
 			}
-		} else if (!screen_on || diff>75) { // time passed way over a normal wakelock cycle... start with second phase instead!
+		} else if (!screen_on || diff>75 * JIFFY_MUL) { // time passed way over a normal wakelock cycle... start with second phase instead!
 			stage = STAGE_FIRST_WL;
 			last_squeeze_timestamp = jiffies;
 		}
@@ -867,8 +873,8 @@ static unsigned long last_timestamp = 0;
 #define SQUEEZE_EVENT_TYPE_NANOHUB_INIT  1
 #define SQUEEZE_EVENT_TYPE_VIBRATOR  2
 
-#define MAX_NANOHUB_DIFF_INIT_END 7
-#define MIN_NANOHUB_DIFF_END_END 100
+#define MAX_NANOHUB_DIFF_INIT_END 7 * JIFFY_MUL
+#define MIN_NANOHUB_DIFF_END_END 100 * JIFFY_MUL
 
 static int last_event = 0;
 
@@ -911,7 +917,7 @@ void register_squeeze_wake(int nanohub_flag, int vibrator_flag, unsigned long ti
 #if 0
 // this part, if nanohub would be reliable enough, could be used again.
 // Currently it's losing some events, thus this part is not used at the moment.
-	if (screen_on && diff < 45 && event!=last_event) {
+	if (screen_on && diff < 45 * JIFFY_MUL && event!=last_event) {
 		if (!squeeze_sleep) return;
 		pr_info("%s screen on and latest event diff small enough: pwr on\n",__func__);
 		last_timestamp = 0;
@@ -995,7 +1001,7 @@ static bool ts_input_filter(struct input_handle *handle,
 		}
 		if (type == EV_SYN) {
 			unsigned int ts_ts_diff = jiffies - last_ts_timestamp;
-			if (ts_ts_diff < 2) {
+			if (ts_ts_diff < 2 * JIFFY_MUL) {
 				if (abs(last_x-c_x)>abs(last_y-c_y)) {
 					// X direction TODO
 				} else {

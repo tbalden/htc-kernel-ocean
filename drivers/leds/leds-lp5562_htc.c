@@ -40,6 +40,12 @@
 #include <linux/alarmtimer.h>
 #endif
 
+#ifdef CONFIG_HZ_300
+#define JIFFY_MUL 3
+#else
+#define JIFFY_MUL 1
+#endif
+
 #ifdef CONFIG_FB
 #include <linux/notifier.h>
 #include <linux/fb.h>
@@ -706,7 +712,7 @@ static int bln_get_alarm_time(void) {
 		return data;
 }
 
-static unsigned long VK_OFF_TIME = 50;
+static unsigned long VK_OFF_TIME = 50 * JIFFY_MUL;
 static int vk_off_time_passed = 0;
 /*
 *	check if screen is off, and enough time passed for vk led off process... return 1 if all off.
@@ -1122,7 +1128,7 @@ EXPORT_SYMBOL(register_charge_level);
 // handling haptic notifications if enabled to register notifications even when RGB led is already blinking, or on charger
 static unsigned long last_haptic_jiffies = 0;
 static int last_value = 0;
-static unsigned long MAX_DIFF = 200;
+static unsigned long MAX_DIFF = 200 * JIFFY_MUL;
 
 #define FINGERPRINT_VIB_TIME_EXCEPTION 40
 #define SQUEEZE_VIB_TIME_EXCEPTION 15
