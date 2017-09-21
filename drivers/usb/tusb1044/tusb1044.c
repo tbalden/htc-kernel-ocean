@@ -46,8 +46,10 @@ struct tusb1044_chip {
 
 	struct work_struct	update_work;
 	struct workqueue_struct	*tusb_wq;
+	struct mutex		state_lock;
 
 	bool			usb3_disable;
+	bool			probe_done;
 	//bool			vdd_state;
 	enum cc_state		cc_state;
 	enum cc_orientation	cc_orientation;
@@ -177,12 +179,12 @@ static void tusb1044_dp_update_state(void)
 		dev_info(chip->device, "%s - i2c write USB3 TX2(0x20) failed\n", __func__);
 	}
 
-	ret = i2c_smbus_write_byte_data(chip->i2c_client, REG_DP_TX1, 0x70);
+	ret = i2c_smbus_write_byte_data(chip->i2c_client, REG_DP_TX1, 0x77);
 	if (ret < 0) {
 		dev_info(chip->device, "%s - i2c write TX1(0x11) failed\n", __func__);
 	}
 
-	ret = i2c_smbus_write_byte_data(chip->i2c_client, REG_DP_TX2, 0x70);
+	ret = i2c_smbus_write_byte_data(chip->i2c_client, REG_DP_TX2, 0x77);
 	if (ret < 0) {
 		dev_info(chip->device, "%s - i2c write TX2(0x10) failed\n", __func__);
 	}
@@ -347,30 +349,20 @@ void tusb1044_update_state(enum cc_state cc_state, enum cc_orientation cc_orient
 {
 	struct tusb1044_chip *chip = tusb_chip;
 
+	mutex_lock(&chip->state_lock);
+
 	chip->cc_state = cc_state;
 	chip->cc_orientation = cc_orientation;
 
-/*	if (chip->cc_state == CC_STATE_USB3) {
-		if (chip->usb3_disable == true) {
-			tusb1044_vdd_switch(chip, false);
-			chip->vdd_state = false;
-			return;
-		}
-	} else if (chip->cc_state == CC_STATE_OPEN) {
-		tusb1044_vdd_switch(chip, false);
-		chip->vdd_state = false;
-		return;
-	}
-
-	tusb1044_vdd_switch(chip, true);
-	chip->vdd_state = true;
-*/
-
-	if (cc_state != CC_STATE_DP) {
+	if (!chip->probe_done) {
 		queue_work(chip->tusb_wq, &chip->update_work);
+	} else if (cc_state != CC_STATE_DP) {
+		tusb1044_usb3_ui_update_state();
 	} else {
 		tusb1044_dp_update_state();
 	}
+
+	mutex_unlock(&chip->state_lock);
 	return;
 }
 
@@ -436,9 +428,11 @@ static int tusb1044_i2c_probe(struct i2c_client *client,
 	if (!chip)
 		return -ENOMEM;
 
+	chip->probe_done = false;
 	chip->device = &client->dev;
 	chip->i2c_client = client;
 	i2c_set_clientdata(client, chip);
+	mutex_init(&chip->state_lock);
 	chip->pinctrl = pinctrl;
 	chip->pinctrl_active_state = pinctrl_active_state;
 	chip->pinctrl_sleep_state = pinctrl_sleep_state;
@@ -468,6 +462,7 @@ static int tusb1044_i2c_probe(struct i2c_client *client,
 		chip->vdd_state = false;
 	}
 */
+	chip->probe_done = true;
 
 	dev_err(&client->dev,
 		 "TUSB1044 %s - probing TUSB1044 i2c driver done\n", __func__);

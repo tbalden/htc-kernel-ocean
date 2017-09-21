@@ -41,7 +41,6 @@ static irqreturn_t mmc_gpio_cd_irqt(int irq, void *dev_id)
 	host->removed_cnt = 0;
 	/* Recover Host capabilities */
 	host->caps |= host->caps_uhs;
-	host->crc_count = 0;
 
 	return IRQ_HANDLED;
 }

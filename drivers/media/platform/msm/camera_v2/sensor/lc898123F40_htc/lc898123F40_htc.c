@@ -196,10 +196,9 @@ void htc_ext_FlashInt32Write(struct msm_camera_i2c_client *i2c_client, UINT_32 a
 	pr_info("[EEPROM][write] addr:0x%x data:0x%x\n", address, data);
 	FlashInt32Write(address, &data, 1);
 }
-#define VERNUM 0x11 // LGIT HTC original
+#define VERNUM 0x19 // LGIT HTC original
 #define CALID_CM1 0x00000006 // Calibration ID
 #define CALID_CM2 0x00000008 // Calibration ID
-//#define BASEVWNUM_M 0x000B
 int htc_checkFWUpdate(struct msm_camera_i2c_client *i2c_client)
 {
     UINT_8 rc = 0;

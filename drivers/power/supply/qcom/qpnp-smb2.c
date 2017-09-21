@@ -2328,6 +2328,11 @@ bool is_cool_charger(void)
 {
 	return (vadc_usb_in_isen_channel == 0)? false : true;
 }
+
+int smblib_typec_first_debounce_result(void)
+{
+	return the_chip->chg.cc_first_det_sts;
+}
 #endif //CONFIG_HTC_BATT
 
 #if defined(CONFIG_DEBUG_FS)

@@ -423,9 +423,11 @@ void htc_dump_chg_reg(void);
 void htc_notify_unknown_charger(bool is_unknown);
 bool htc_battery_get_discharging_reason(void);
 void htc_ftm_disable_charger(bool disable);
+bool htc_get_htcchg_sts(void);
 
 int charger_dump_all(void);
 int charger_register_write(u16 addr, u8 mask, u8 val);
 int charger_register_read(u16 addr, u8 *val);
+int smblib_typec_first_debounce_result(void);
 
 bool is_cool_charger(void);

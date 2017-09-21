@@ -296,6 +296,7 @@ struct usb_ep_caps {
 
 struct usb_ep {
 	void			*driver_data;
+	bool			is_ncm;
 
 	const char		*name;
 	const struct usb_ep_ops	*ops;

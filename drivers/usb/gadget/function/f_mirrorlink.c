@@ -21,6 +21,20 @@ static unsigned short *test_frame;
 static int touch_init_ml = 0;
 static struct mirrorlink_dev *_ml_dev = NULL;
 
+int mirrorlink_check_state(void) {
+	struct mirrorlink_dev *dev = _ml_dev;
+
+	if (!dev)
+		return -EINVAL;
+
+	return atomic_read(&dev->ml_enable_HSML);
+}
+
+void mirrorlink_reset_state(void) {
+	switch_set_state(&ml_switch, 0);
+	return;
+}
+
 static struct usb_request *mirrorlink_request_new(struct usb_ep *ep,
 		int buffer_size)
 {

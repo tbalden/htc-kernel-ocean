@@ -48,6 +48,39 @@ static struct msm_actuator *actuators[] = {
 	&msm_bivcm_actuator_table,
 };
 
+//HTC_START, AF FW update
+static struct msm_camera_i2c_reg_array lc898214xd_fw_setting[] = {
+{0x42, 0x02, 0x00},
+{0x43, 0x90, 0x00},
+{0x44, 0x7A, 0x00},
+{0x48, 0x40, 0x00},
+{0x49, 0x30, 0x00},
+{0x4C, 0x8C, 0x00},
+{0x4D, 0xB0, 0x00},
+{0x4E, 0x73, 0x00},
+{0x4F, 0xF0, 0x00},
+{0x50, 0x67, 0x00},
+{0x51, 0x30, 0x00},
+{0x52, 0x2D, 0x00},
+{0x53, 0x70, 0x00},
+{0x58, 0x39, 0x00},
+{0x59, 0x30, 0x00},
+{0x5A, 0xC6, 0x00},
+{0x5B, 0xD5, 0x00},
+{0x60, 0x04, 0x00},
+{0x61, 0xA0, 0x00},
+{0x62, 0x76, 0x00},
+{0x63, 0xB0, 0x00},
+{0x6E, 0x40, 0x00},
+{0x6F, 0x30, 0x00},
+{0x54, 0x1B, 0x00},
+{0x1E, 0x00, 0x00},
+{0x1A, 0x30, 0x00},
+{0x2D, 0x60, 0x00},
+{0x2F, 0x78, 0x00},
+};
+//HTC_END
+
 static int32_t msm_actuator_piezo_set_default_focus(
 	struct msm_actuator_ctrl_t *a_ctrl,
 	struct msm_actuator_move_params_t *move_params)
@@ -357,17 +390,23 @@ static int msm_actuator_bivcm_handle_i2c_ops(
 #define AF_EEPROM_I2C_ADDR_WRITE 0xE6
 static void msm_actuator_fw_update(struct msm_actuator_ctrl_t *a_ctrl)
 {
-    int32_t rc = 0;
-	uint16_t reg_data = 0;
+	int32_t rc = 0;
+	int32_t i = 0;
+	uint16_t reg_data = 0, reg_data2 = 0, reg_data3 = 0;
 	uint16_t cci_client_sid_backup;
 
-	rc = a_ctrl->i2c_client.i2c_func_tbl->i2c_read(&a_ctrl->i2c_client, 0xAB, &reg_data, MSM_CAMERA_I2C_BYTE_DATA);
-	if (rc < 0) {
-		pr_err("%s: i2c read 0xAB error:%d\n", __func__, rc);
-		return;
+	//Validate fw version and judge if need to update FW
+	cci_client_sid_backup = a_ctrl->i2c_client.cci_client->sid;
+	a_ctrl->i2c_client.cci_client->sid = AF_EEPROM_I2C_ADDR_WRITE >> 1;
+	rc = a_ctrl->i2c_client.i2c_func_tbl->i2c_read(&a_ctrl->i2c_client, 0x2F, &reg_data, MSM_CAMERA_I2C_BYTE_DATA);
+	rc = a_ctrl->i2c_client.i2c_func_tbl->i2c_read(&a_ctrl->i2c_client, 0x42, &reg_data2, MSM_CAMERA_I2C_BYTE_DATA);
+	rc = a_ctrl->i2c_client.i2c_func_tbl->i2c_read(&a_ctrl->i2c_client, 0x54, &reg_data3, MSM_CAMERA_I2C_BYTE_DATA);
+	a_ctrl->i2c_client.cci_client->sid = cci_client_sid_backup;
+	if(reg_data == 0x78 && reg_data2 == 0x02 && reg_data3 == 0x1B)
+	{
+		pr_err("%s: No need to update AF FW\n", __func__);
 	}
-
-	if(reg_data != 0x0)	//need to update AF FW
+	else	//need to update AF FW
 	{
 		pr_err("%s: Update AF FW...\n", __func__);
 		a_ctrl->i2c_client.i2c_func_tbl->i2c_write(&a_ctrl->i2c_client, 0x84, 0x0, MSM_CAMERA_I2C_BYTE_DATA);
@@ -381,34 +420,17 @@ static void msm_actuator_fw_update(struct msm_actuator_ctrl_t *a_ctrl)
 		cci_client_sid_backup = a_ctrl->i2c_client.cci_client->sid;
 		/* Replace the I2C slave address with AF EEPROM */
 		a_ctrl->i2c_client.cci_client->sid = AF_EEPROM_I2C_ADDR_WRITE >> 1;
-		a_ctrl->i2c_client.i2c_func_tbl->i2c_write(&a_ctrl->i2c_client, 0x1E, 0x0, MSM_CAMERA_I2C_BYTE_DATA);
-		usleep_range(3000, 4000);
-		rc = a_ctrl->i2c_client.i2c_func_tbl->i2c_poll(&a_ctrl->i2c_client, 0xED, 0x0, MSM_CAMERA_I2C_BYTE_DATA,10);	//wait 10ms
-		if (rc < 0) {
-			pr_err("%s: i2c poll failed after wrtie 0x1E\n", __func__);
-			return;
+		for (i = 0; i < ARRAY_SIZE(lc898214xd_fw_setting); i++)
+		{
+			a_ctrl->i2c_client.i2c_func_tbl->i2c_write(&a_ctrl->i2c_client, lc898214xd_fw_setting[i].reg_addr, lc898214xd_fw_setting[i].reg_data, MSM_CAMERA_I2C_BYTE_DATA);
+			usleep_range(3000, 4000);
+			rc = a_ctrl->i2c_client.i2c_func_tbl->i2c_poll(&a_ctrl->i2c_client, 0xED, 0x0, MSM_CAMERA_I2C_BYTE_DATA,10);	//wait 10ms
+			if (rc < 0) {
+				pr_err("%s: i2c poll failed after wrtie 0x%x\n", __func__, lc898214xd_fw_setting[i].reg_addr);
+				return;
+			}
 		}
-		a_ctrl->i2c_client.i2c_func_tbl->i2c_write(&a_ctrl->i2c_client, 0x1A, 0x30, MSM_CAMERA_I2C_BYTE_DATA);
-		usleep_range(3000, 4000);
-		rc = a_ctrl->i2c_client.i2c_func_tbl->i2c_poll(&a_ctrl->i2c_client, 0xED, 0x0, MSM_CAMERA_I2C_BYTE_DATA,10);	//wait 10ms
-		if (rc < 0) {
-			pr_err("%s: i2c poll failed after wrtie 0x1A\n", __func__);
-			return;
-		}
-		a_ctrl->i2c_client.i2c_func_tbl->i2c_write(&a_ctrl->i2c_client, 0x2D, 0x60, MSM_CAMERA_I2C_BYTE_DATA);
-		usleep_range(3000, 4000);
-		rc = a_ctrl->i2c_client.i2c_func_tbl->i2c_poll(&a_ctrl->i2c_client, 0xED, 0x0, MSM_CAMERA_I2C_BYTE_DATA,10);	//wait 10ms
-		if (rc < 0) {
-			pr_err("%s: i2c poll failed after wrtie 0x2D\n", __func__);
-			return;
-		}
-		a_ctrl->i2c_client.i2c_func_tbl->i2c_write(&a_ctrl->i2c_client, 0x2F, 0x78, MSM_CAMERA_I2C_BYTE_DATA);
-		usleep_range(3000, 4000);
-		rc = a_ctrl->i2c_client.i2c_func_tbl->i2c_poll(&a_ctrl->i2c_client, 0xED, 0x0, MSM_CAMERA_I2C_BYTE_DATA,10);	//wait 10ms
-		if (rc < 0) {
-			pr_err("%s: i2c poll failed after wrtie 0x2F\n", __func__);
-			return;
-		}
+
 		/* Restore the I2C slave address */
 		a_ctrl->i2c_client.cci_client->sid = cci_client_sid_backup;
 		a_ctrl->i2c_client.i2c_func_tbl->i2c_write(&a_ctrl->i2c_client, 0x9C, 0x0, MSM_CAMERA_I2C_BYTE_DATA);
@@ -434,6 +456,9 @@ static int32_t msm_actuator_init_focus(struct msm_actuator_ctrl_t *a_ctrl,
 	int32_t i = 0;
 	enum msm_camera_i2c_reg_addr_type save_addr_type;
 	CDBG("Enter\n");
+	//HTC_START, AF FW update
+	msm_actuator_fw_update(a_ctrl);
+	//HTC_END
 
 	save_addr_type = a_ctrl->i2c_client.addr_type;
 	for (i = 0; i < size; i++) {
@@ -485,10 +510,6 @@ static int32_t msm_actuator_init_focus(struct msm_actuator_ctrl_t *a_ctrl,
 			break;
 		}
 	}
-
-	//HTC_START, AF FW update
-	msm_actuator_fw_update(a_ctrl);
-	//HTC_END
 
 	a_ctrl->curr_step_pos = 0;
 	/*

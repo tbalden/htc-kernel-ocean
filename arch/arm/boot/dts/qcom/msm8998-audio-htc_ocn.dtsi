@@ -43,7 +43,7 @@
 		reg = <0xd000 0x100>;
 		qcom,pin-num = <17>;
 		qcom,mode = <0>;		/* Digital input */
-		qcom,pull = <5>;		/* No Pull */
+		qcom,pull = <4>;		/* Pull Down */
 		qcom,src-sel = <0>;		/* QPNP_PIN_SEL_FUNC_CONSTANT */
 		qcom,vin-sel = <0>;
 		qcom,ain-route = <3>;		/* QPNP_PIN_AIN_AMUX_CH */
@@ -56,7 +56,7 @@
 		reg = <0xd100 0x100>;
 		qcom,pin-num = <18>;
 		qcom,mode = <0>;		/* Digital input */
-		qcom,pull = <5>;		/* No Pull */
+		qcom,pull = <4>;		/* Pull Down */
 		qcom,src-sel = <0>;		/* QPNP_PIN_SEL_FUNC_CONSTANT */
 		qcom,vin-sel = <0>;
 		qcom,ain-route = <3>;		/* QPNP_PIN_AIN_AMUX_CH */

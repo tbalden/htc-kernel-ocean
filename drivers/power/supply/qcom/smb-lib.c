@@ -985,9 +985,15 @@ static int smblib_usb_icl_vote_callback(struct votable *votable, void *data,
 			if (rc< 0)
 				return rc;
 
-			if (chg->pd_active)
+			if (chg->pd_active) {
+				rc = smblib_masked_write(chg, USBIN_LOAD_CFG_REG,
+					ICL_OVERRIDE_AFTER_APSD_BIT, ICL_OVERRIDE_AFTER_APSD_BIT);
+				if (rc < 0) {
+					smblib_err(chg, "Couldn't set ICL_OVERRIDE after APSD rc=%d\n", rc);
+					return rc;
+				}
 				smblib_dbg(chg, PR_INTERRUPT, "Set PD ICL = %d\n", icl_ua);
-			else {
+			} else {
 				smblib_dbg(chg, PR_INTERRUPT, "Set TYPEC ICL = %d\n", icl_ua);
 				if (delayed_work_pending(&chg->type_c_aicl_chk_work))
 					cancel_delayed_work_sync(&chg->type_c_aicl_chk_work);
@@ -1873,6 +1879,9 @@ int smblib_get_prop_batt_capacity(struct smb_charger *chg,
 	return rc;
 }
 
+#ifdef CONFIG_HTC_BATT
+#define CHG_STATUS_STOP_REASON	(BIT(6) | BIT(8))
+#endif //CONFIG_HTC_BATT
 int smblib_get_prop_batt_status(struct smb_charger *chg,
 				union power_supply_propval *val)
 {
@@ -1949,10 +1958,13 @@ int smblib_get_prop_batt_status(struct smb_charger *chg,
 		break;
 	case DISABLE_CHARGE:
 #ifdef CONFIG_HTC_BATT
-		if (htc_battery_get_discharging_reason())
-			val->intval = POWER_SUPPLY_STATUS_CHARGING;
-		else
+		if (htc_battery_get_discharging_reason() & CHG_STATUS_STOP_REASON)
 			val->intval = POWER_SUPPLY_STATUS_DISCHARGING;
+		else
+			if (level == 100)
+				val->intval = POWER_SUPPLY_STATUS_FULL;
+			else
+				val->intval = POWER_SUPPLY_STATUS_CHARGING;
 #else
 		val->intval = POWER_SUPPLY_STATUS_NOT_CHARGING;
 #endif //CONFIG_HTC_BATT
@@ -2279,6 +2291,12 @@ int smblib_rerun_aicl(struct smb_charger *chg)
 				max(settled_icl_ua - chg->param.usb_icl.step_u,
 				chg->param.usb_icl.step_u));
 		vote(chg->usb_icl_votable, AICL_RERUN_VOTER, false, 0);
+#ifdef CONFIG_HTC_BATT
+		if (delayed_work_pending(&chg->type_c_aicl_chk_work)) {
+			cancel_delayed_work_sync(&chg->type_c_aicl_chk_work);
+			schedule_delayed_work(&chg->type_c_aicl_chk_work, msecs_to_jiffies(TYPE_C_AICL_CHK_DELAY_MS));
+		}
+#endif //CONFIG_HTC_BATT
 		break;
 	case PM660_SUBTYPE:
 		/*
@@ -3706,6 +3724,11 @@ irqreturn_t smblib_handle_usb_plugin(int irq, void *data)
 				smblib_err(chg, "Couldn't enable dpdm regulator rc=%d\n",
 					rc);
 		}
+#ifdef CONFIG_HTC_BATT
+		if (delayed_work_pending(&chg->type_c_no_debounce_work))
+			cancel_delayed_work_sync(&chg->type_c_no_debounce_work);
+		schedule_delayed_work(&chg->type_c_no_debounce_work, msecs_to_jiffies(20000));
+#endif //CONFIG_HTC_BATT
 	} else {
 		if (chg->wa_flags & BOOST_BACK_WA)
 			vote(chg->usb_icl_votable, BOOST_BACK_VOTER, false, 0);
@@ -3764,6 +3787,9 @@ irqreturn_t smblib_handle_usb_plugin(int irq, void *data)
 
 			// Clear CC detection result
 			chg->cc_first_det_sts = CC_DET_NONE;
+
+			// No debounce-done
+			cancel_delayed_work_sync(&chg->type_c_no_debounce_work);
 #endif //CONFIG_HTC_BATT
 	}
 
@@ -4368,6 +4394,9 @@ static void smblib_handle_typec_debounce_done(struct smb_charger *chg,
 		   rising ? "rising" : "falling",
 		   smblib_typec_mode_name[pval.intval]);
 #ifdef CONFIG_HTC_BATT
+	if (rising)
+		cancel_delayed_work_sync(&chg->type_c_no_debounce_work);
+
 	if (rising && (pval.intval == POWER_SUPPLY_TYPEC_NONE) && (g_cc_floating_cnt == 0)) {
 		if (!delayed_work_pending(&chg->cc_floating_chk_work))
 			schedule_delayed_work(&chg->cc_floating_chk_work, msecs_to_jiffies(3000));
@@ -4845,6 +4874,9 @@ static void smblib_type_c_aicl_chk_work(struct work_struct *work)
 	int rc = 0;
 	union power_supply_propval val = {0, };
 
+	if (chg->pd_active)
+		return;
+
 	rc = smblib_get_prop_input_current_settled(chg, &val);
 	if (rc) {
 		smblib_err(chg, "Failed to read AICL result, rc=%d\n", rc);
@@ -4870,6 +4902,97 @@ static void smblib_type_c_aicl_chk_work(struct work_struct *work)
 	}
 
 	return;
+
+}
+
+static void smblib_type_c_no_debounce_work(struct work_struct *work)
+{
+	struct smb_charger *chg = container_of(work, struct smb_charger,
+						type_c_no_debounce_work.work);
+	int rc = 0;
+	union power_supply_propval val = {0, };
+	bool internal_otg = false;
+	bool external_otg = false;
+	bool usb_present = false;
+
+	rc = smblib_get_prop_otg_state(chg, &val);
+	if (rc) {
+		smblib_err(chg, "Couldn't read internal otg status rc=%d\n", rc);
+		return;
+	}
+	internal_otg = (val.intval)? true: false;
+
+	rc = smblib_get_ext_otg_control(chg, &val);
+	if (rc) {
+		smblib_err(chg, "Couldn't read external otg status rc=%d\n", rc);
+		return;
+	}
+	external_otg = (val.intval)? true: false;
+
+	rc = smblib_get_prop_usb_present(chg, &val);
+	if (rc) {
+		smblib_err(chg, "Couldn't read usb present status rc=%d\n", rc);
+		return;
+	}
+	usb_present = (val.intval)? true: false;
+
+	smblib_dbg(chg, PR_INTERRUPT, "present=%d,int_otg=%d,ext_otg=%d\n",
+			usb_present, internal_otg, external_otg);
+
+	if (!internal_otg && !external_otg && usb_present) {
+		smblib_err(chg, "[CC FLOAT] No CC pin debunce done, change to micro-USB mode rc=%d\n", rc);
+		schedule_delayed_work(&chg->cc_floating_chk_work, msecs_to_jiffies(0));
+	}
+
+	return;
+}
+
+#define REBOOT_SUSPEND_CHK_DELAY_MS	3000
+static void smblib_reboot_suspend_chk_work(struct work_struct *work)
+{
+	struct smb_charger *chg = container_of(work, struct smb_charger,
+						reboot_suspend_chk_work.work);
+	int rc = 0;
+	union power_supply_propval val = {0, };
+	u8 usb_cmd_il_sts = 0;
+	u8 misc_pwr_path_sts = 0;
+
+	rc = smblib_get_prop_usb_present(chg, &val);
+	if (rc) {
+		smblib_err(chg, "Failed to read usb present status, rc=%d\n", rc);
+		return;
+	}
+
+	rc = smblib_read(chg, USBIN_CMD_IL_REG, &usb_cmd_il_sts);
+	if (rc < 0) {
+		smblib_err(chg, "Couldn't read USB_CMD_IL rc=%d\n", rc);
+		return;
+	}
+
+	rc = smblib_read(chg, POWER_PATH_STATUS_REG, &misc_pwr_path_sts);
+	if (rc < 0) {
+		smblib_err(chg, "Couldn't read MISC_POWER_PATH_STATUS rc=%d\n", rc);
+		return;
+	}
+
+
+	if (!(usb_cmd_il_sts & USBIN_SUSPEND_BIT) &&
+			(misc_pwr_path_sts & USBIN_SUSPEND_STS_BIT) && val.intval) {
+		smblib_err(chg, "REBOOT suspend detected, clear 0x1380[7]\n");
+		rc = smblib_masked_write(chg, USBIN_AICL_OPTIONS_CFG_REG,
+			SUSPEND_ON_COLLAPSE_USBIN_BIT, 0);
+		msleep(5000);
+		if (htc_get_htcchg_sts()){
+			smblib_err(chg, "UNDER COOL CHARGE, keep 0x1380[7] off\n");
+		} else {
+			smblib_err(chg, "REBOOT suspend detected, recover 0x1380[7]\n");
+			rc = smblib_masked_write(chg, USBIN_AICL_OPTIONS_CFG_REG,
+				SUSPEND_ON_COLLAPSE_USBIN_BIT, SUSPEND_ON_COLLAPSE_USBIN_BIT);
+
+		}
+	}
+
+	return;
 }
 
 /***************
@@ -4882,12 +5005,12 @@ int smblib_get_bat_fet_off(struct smb_charger *chg, int *suspend)
 	int rc = 0;
 	u8 temp;
 
-	rc = smblib_read(chg, USBIN_CMD_IL_REG, &temp);
+	rc = smblib_read(chg, CHARGING_ENABLE_CMD_REG, &temp);
 	if (rc < 0) {
 		dev_err(chg->dev, "Couldn't read BAT_2_SYS_FET_DIS_BIT rc=%d\n", rc);
 		return rc;
 	}
-	*suspend = temp & BAT_2_SYS_FET_DIS_BIT;
+	*suspend = temp & CHARGING_ENABLE_CMD_BIT;
 
 	return rc;
 }
@@ -4896,11 +5019,7 @@ int smblib_set_bat_fet_off(struct smb_charger *chg, bool suspend)
 {
 	int rc = 0;
 
-	rc = smblib_masked_write(chg, USBIN_CMD_IL_REG, BAT_2_SYS_FET_DIS_BIT,
-			suspend ? BAT_2_SYS_FET_DIS_BIT : 0);
-	if (rc < 0)
-		dev_err(chg->dev, "Couldn't write %s to BAT_2_SYS_FET_DIS_BIT rc=%d\n",
-			suspend ? "suspend" : "resume", rc);
+	vote(chg->chg_disable_votable, USER_VOTER, suspend, 0);
 
 	return rc;
 }
@@ -5425,6 +5544,8 @@ int smblib_init(struct smb_charger *chg)
 	INIT_DELAYED_WORK(&chg->reverse_boost_chk_work, smblib_boost_chk_work);
 	INIT_DELAYED_WORK(&chg->cc_floating_chk_work, smblib_cc_floating_chk_work);
 	INIT_DELAYED_WORK(&chg->type_c_aicl_chk_work, smblib_type_c_aicl_chk_work);
+	INIT_DELAYED_WORK(&chg->type_c_no_debounce_work, smblib_type_c_no_debounce_work);
+	INIT_DELAYED_WORK(&chg->reboot_suspend_chk_work, smblib_reboot_suspend_chk_work);
 	chg->float_chk_sts = FLOAT_NONE;
 	chg->float_chk_cnt = 0;
 	chg->abnormal_cc_check_sts = false;
@@ -5469,6 +5590,10 @@ int smblib_init(struct smb_charger *chg)
 		smblib_err(chg, "Unsupported mode %d\n", chg->mode);
 		return -EINVAL;
 	}
+
+#ifdef CONFIG_HTC_BATT
+	schedule_delayed_work(&chg->reboot_suspend_chk_work, msecs_to_jiffies(REBOOT_SUSPEND_CHK_DELAY_MS));
+#endif //CONFIG_HTC_BATT
 
 	return rc;
 }

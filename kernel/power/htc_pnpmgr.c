@@ -113,6 +113,7 @@ extern void set_ktm_freq_limit(uint32_t freq_limit);
 
 static char activity_buf[MAX_BUF];
 static char vr_mode_buf[MAX_BUF];
+static char vr_device_buf[MAX_BUF];
 static char non_activity_buf[MAX_BUF];
 static char profile_buf[MAX_BUF];
 static char media_mode_buf[MAX_BUF];
@@ -141,6 +142,10 @@ power_attr(activity_trigger);
 define_string_show(vr_mode, vr_mode_buf);
 define_string_store(vr_mode, vr_mode_buf, null_cb);
 power_attr(vr_mode);
+
+define_string_show(vr_device, vr_device_buf);
+define_string_store(vr_device, vr_device_buf, null_cb);
+power_attr(vr_device);
 
 define_string_show(non_activity_trigger, non_activity_buf);
 define_string_store(non_activity_trigger, non_activity_buf, null_cb);
@@ -179,6 +184,16 @@ void set_call_sync(const char *buf)
 	sysfs_notify(apps_kobj, NULL, "call_sync");
 }
 EXPORT_SYMBOL(set_call_sync);
+
+void set_vr_device(const char *buf)
+{
+	strcpy(vr_device_buf, buf);
+	vr_device_buf[strlen(buf)] = '\0';
+
+	sysfs_notify(pnpmgr_kobj, NULL, "vr_device");
+}
+EXPORT_SYMBOL(set_vr_device);
+
 
 static int thermal_g0_value = MAX_VALUE;
 static int thermal_final_bcpu_value = MAX_VALUE;
@@ -1288,6 +1303,7 @@ static struct attribute *pnpmgr_g[] = {
 	&long_duration_touch_boost_duration_attr.attr,
 	&interactive_boost_attr.attr,
 	&vr_mode_attr.attr,
+	&vr_device_attr.attr,
 	NULL,
 };
 

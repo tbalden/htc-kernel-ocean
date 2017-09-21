@@ -1592,8 +1592,13 @@ static void pingpong_done_work(struct work_struct *work)
 	struct mdss_mdp_ctl *ctl = ctx->ctl;
 
 	if (ctl) {
-		while (atomic_add_unless(&ctx->pp_done_cnt, -1, 0))
+		while (atomic_add_unless(&ctx->pp_done_cnt, -1, 0)){
 			mdss_mdp_ctl_notify(ctx->ctl, MDP_NOTIFY_FRAME_DONE);
+			if(atomic_read(&ctx->pp_done_cnt) < 0){
+				pr_err("%s: pp done count is abnormal %d, reset the pp done count to prevent CPU busy loop\n", __func__, atomic_read(&ctx->pp_done_cnt));
+				atomic_set(&ctx->pp_done_cnt,0);
+			}
+		}
 
 		status = mdss_mdp_ctl_perf_get_transaction_status(ctx->ctl);
 		if (status == 0)

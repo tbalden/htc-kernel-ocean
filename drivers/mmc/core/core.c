@@ -635,6 +635,7 @@ int mmc_clk_update_freq(struct mmc_host *host,
 	mmc_host_clk_hold(host);
 	cmdq_mode = mmc_card_cmdq(host->card);
 
+#if 0
 	/* make sure the card supports the frequency we want */
 	if (unlikely(freq > host->card->clk_scaling_highest)) {
 		freq = host->card->clk_scaling_highest;
@@ -642,7 +643,7 @@ int mmc_clk_update_freq(struct mmc_host *host,
 				mmc_hostname(host), __func__,
 				host->card->clk_scaling_highest);
 	}
-
+#endif
 	if (unlikely(freq < host->card->clk_scaling_lowest)) {
 		freq = host->card->clk_scaling_lowest;
 		pr_warn("%s: %s: frequency was overridden to %lu\n",
@@ -2574,6 +2575,13 @@ void mmc_ungate_clock(struct mmc_host *host)
 		WARN_ON(host->ios.clock);
 		/* This call will also set host->clk_gated to false */
 		__mmc_set_clock(host, host->clk_old);
+		/*
+		 * We have seen that host controller's clock tuning circuit may
+		 * go out of sync if controller clocks are gated.
+		 * To workaround this issue, we are triggering retuning of the
+		 * tuning circuit after ungating the controller clocks.
+		 */
+		mmc_retune_needed(host);
 	}
 }
 
@@ -4366,30 +4374,6 @@ void mmc_rescan(struct work_struct *work)
 			mmc_hostname(host), __func__, host->rescan_disable,
 			(host->caps & MMC_CAP_NONREMOVABLE) ? 1 : 0, host->rescan_entered);
 
-	if (host->card && host->card->force_remove) {
-		pr_info("%s: %s remove card (removed_cnt = %d)\n", mmc_hostname(host),
-			__func__, host->removed_cnt);
-		mmc_bus_get(host);
-		if (host->bus_ops && host->bus_ops->remove)
-			host->bus_ops->remove(host);
-		mmc_claim_host(host);
-		mmc_detach_bus(host);
-		mmc_power_off(host);
-		mmc_release_host(host);
-		mmc_bus_put(host);
-		if (host->ops->get_cd && (host->ops->get_cd(host) == 0
-			|| host->removed_cnt > MMC_DETECT_RETRIES)) {
-			pr_info("%s : SD status was (%d), or rescan up to limit (%d)\n",
-				mmc_hostname(host), host->ops->get_cd(host),
-				host->removed_cnt);
-			return;
-		} else if ((host->caps & MMC_CAP_NONREMOVABLE) &&
-			(host->removed_cnt > MMC_DETECT_RETRIES)) {
-			pr_info("%s : rescan up to limit (%d)\n",
-				mmc_hostname(host),	host->removed_cnt);
-			return;
-		}
-	}
 	if (host->trigger_card_event && host->ops->card_event) {
 		host->ops->card_event(host);
 		host->trigger_card_event = false;

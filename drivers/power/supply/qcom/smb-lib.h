@@ -316,6 +316,8 @@ struct smb_charger {
 	struct delayed_work	reverse_boost_chk_work;
 	struct delayed_work	cc_floating_chk_work;
 	struct delayed_work	type_c_aicl_chk_work;
+	struct delayed_work	type_c_no_debounce_work;
+	struct delayed_work	reboot_suspend_chk_work;
 #endif //CONFIG_HTC_BATT
 	struct work_struct	otg_oc_work;
 	struct work_struct	vconn_oc_work;

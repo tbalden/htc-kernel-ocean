@@ -2336,6 +2336,9 @@ static int icnss_modem_notifier_nb(struct notifier_block *nb,
 	icnss_pr_dbg("Modem-Notify: event %lu\n", code);
 
 	if (code == SUBSYS_AFTER_SHUTDOWN &&
+#if defined(CONFIG_HTC_FEATURES_SSR)
+		notif->enable_ramdump == ENABLE_RAMDUMP &&
+#endif
 		notif->crashed == CRASH_STATUS_ERR_FATAL) {
 		icnss_remove_msa_permissions(priv);
 		icnss_pr_info("Collecting msa0 segment dump\n");

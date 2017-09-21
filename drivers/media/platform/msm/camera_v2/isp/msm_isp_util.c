@@ -907,7 +907,7 @@ static long msm_isp_ioctl_unlocked(struct v4l2_subdev *sd,
 			if (!rc && rc2)
 				rc = rc2;
 		} else {
-			pr_err_ratelimited("%s: no HW reset, halt enforced.\n",
+			pr_err("%s: no HW reset, halt enforced.\n",
 				__func__);
 		}
 		MSM_ISP_DUAL_VFE_MUTEX_UNLOCK(vfe_dev);
@@ -923,7 +923,7 @@ static long msm_isp_ioctl_unlocked(struct v4l2_subdev *sd,
 			if (!rc && rc2)
 				rc = rc2;
 		} else {
-			pr_err_ratelimited("%s: no AXI restart, halt enforced.\n",
+			pr_err("%s: no AXI restart, halt enforced.\n",
 				__func__);
 		}
 		MSM_ISP_DUAL_VFE_MUTEX_UNLOCK(vfe_dev);
@@ -2075,7 +2075,10 @@ irqreturn_t msm_isp_process_irq(int irq_num, void *data)
 			__func__, vfe_dev->pdev->id);
 		return IRQ_HANDLED;
 	}
-
+	if (vfe_dev->hw_info->vfe_ops.irq_ops.preprocess_camif_irq) {
+		vfe_dev->hw_info->vfe_ops.irq_ops.preprocess_camif_irq(
+				vfe_dev, irq_status0);
+	}
 	if (msm_isp_process_overflow_irq(vfe_dev,
 		&irq_status0, &irq_status1, 0)) {
 		/* if overflow initiated no need to handle the interrupts */
@@ -2193,15 +2196,18 @@ static void msm_vfe_iommu_fault_handler(struct iommu_domain *domain,
 		}
 
 		mutex_lock(&vfe_dev->core_mutex);
-		if (vfe_dev->vfe_open_cnt > 0) {
+		if (vfe_dev->vfe_open_cnt > 0 &&
+			(atomic_read(&vfe_dev->error_info.overflow_state) != OVERFLOW_DETECTED)) {
+			pr_err("%s: overflow_state = %d\n",
+				__func__, atomic_read(&vfe_dev->error_info.overflow_state));
 			atomic_set(&vfe_dev->error_info.overflow_state,
 				HALT_ENFORCED);
 			pr_err_ratelimited("%s: fault address is %lx\n",
 				__func__, iova);
 			msm_isp_process_iommu_page_fault(vfe_dev);
 		} else {
-			pr_err("%s: no handling, vfe open cnt = %d\n",
-				__func__, vfe_dev->vfe_open_cnt);
+			pr_err("%s: no handling, vfe open cnt = %d, overflow_state = %d\n",
+				__func__, vfe_dev->vfe_open_cnt, atomic_read(&vfe_dev->error_info.overflow_state));
 		}
 		mutex_unlock(&vfe_dev->core_mutex);
 	} else {

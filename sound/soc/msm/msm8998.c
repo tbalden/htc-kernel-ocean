@@ -752,6 +752,12 @@ static int msm_htc_misc_stereo_put(struct snd_kcontrol *kcontrol,
 			__func__, HTC_ADM_EFFECT_AS_STEREO_MONO_441, rc);
 	}
 
+	rc = htc_adm_set_payload(HTC_ADM_EFFECT_HD_STEREO_MONO_BT, params_length, params_value);
+	if (rc) {
+		pr_err("%s: call htc_adm_effect_control to port 0x%x, rc %d\n",
+			__func__, HTC_ADM_EFFECT_HD_STEREO_MONO_BT, rc);
+	}
+
 	kfree(params_value);
 	return rc;
 }

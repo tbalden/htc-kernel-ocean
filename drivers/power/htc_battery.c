@@ -487,7 +487,6 @@ static void batt_level_adjust(unsigned long time_since_last_update_ms)
 		return;
 	}
 
-
 	/* In discharging case, to store the very first difference
 	 * between UI and Raw level.
 	 * In case of Overload follow the remap logic.
@@ -502,6 +501,25 @@ static void batt_level_adjust(unsigned long time_since_last_update_ms)
 		s_stored_level_flag = true;
 	} else if (htc_batt_info.rep.charging_source > 0)
 		s_stored_level_flag = false;
+
+	/* ++++ For cc pin no debounce done WA ++++ */
+	if ((htc_batt_info.rep.charging_source == 0) && (htc_batt_info.rep.status == POWER_SUPPLY_STATUS_CHARGING) &&
+			(get_property(htc_batt_info.usb_psy, POWER_SUPPLY_PROP_PRESENT))) {
+		if ((htc_batt_info.rep.level_raw == 100) ||
+				((htc_batt_info.rep.level_raw > htc_batt_info.prev.level_raw) &&
+				(htc_batt_info.rep.level_raw >= (htc_batt_info.rep.level + 2)))) {
+			// Set UI level = raw level when
+			// 1. raw is 100%
+			// 2. raw increase & raw > UI 2%
+			s_store_level = 0;
+			htc_batt_info.rep.level = htc_batt_info.rep.level_raw;
+
+			htc_batt_info.prev.level = htc_batt_info.rep.level;
+			htc_batt_info.prev.level_raw = htc_batt_info.rep.level_raw;
+			return;
+		}
+	}
+	/* ---- For cc pin no debounce done WA ---- */
 
 	/* Let it enter charging state to prevent reporting 100% directly
 	   if soc is 100% if cable is just inserted or boot up with cable in.
@@ -788,6 +806,9 @@ static void batt_level_adjust(unsigned long time_since_last_update_ms)
 		if ((htc_batt_info.rep.batt_vol < 3900)){
 			BATT_LOG("Force report 0 for temp < 0 and raw = 0\n");
 			htc_batt_info.rep.level = 0;
+		} else if (htc_batt_info.rep.level == 0) {
+			BATT_LOG("Force report 1 for temp < 0 and raw = 0 but vbat > 3.9V\n");
+			htc_batt_info.rep.level = 1;
 		}
 	}
 
@@ -1072,6 +1093,8 @@ int update_ibat_setting (void)
 			ibat_ma = ibat_map_qc2[idx][batt_thermal];
 			break;
 		case POWER_SUPPLY_TYPE_USB_DCP:
+		case POWER_SUPPLY_TYPE_USB_PD:
+		case POWER_SUPPLY_TYPE_TYPEC:
 			ibat_ma = ibat_map_5v[idx][batt_thermal];
 			break;
 		default:
@@ -1145,19 +1168,28 @@ static void is_usb_overheat_worker(struct work_struct *work)
         }
 }
 
-#define HTC_USB_OVERHEAT_POLLING_THRES 750
-#define HTC_USB_OVERHEAT_POLLING_TIME_MS 1000
-#define HTC_USB_OVERHEAT_TRIGGER_THRES 900
+extern void htc_typec_enable(bool enable);
+
+#define HTC_USB_OVERHEAT_POLLING_THRES 550
+#define HTC_USB_OVERHEAT_POLLING_CONN_BATT_DELTA_TEMP_THRES 100
+#define HTC_USB_OVERHEAT_POLLING_TIME_MS 5000
+#define HTC_USB_OVERHEAT_TRIGGER_THRES 680
+#define HTC_USB_OVERHEAT_TRIGGER_BATT_DELTA_TEMP_THRES 150
+#define HTC_USB_OVERHEAT_RECOVER_THRES 600
 static void htc_usb_overheat_routine(void)
 {
 	bool b_sched_quick_polling = false;
 	unsigned int prev_state = g_htc_usb_overheat_check_state;
 	int usb_conn_temp = get_property(htc_batt_info.batt_psy, POWER_SUPPLY_PROP_USB_CONN_TEMP);
+	int batt_temp = get_property(htc_batt_info.batt_psy, POWER_SUPPLY_PROP_TEMP);
+	int usb_conn_batt_delta_temp = usb_conn_temp - batt_temp;
 
 	switch (g_htc_usb_overheat_check_state) {
 		case USB_CONN_STAT_INIT:
-			if (usb_conn_temp >= HTC_USB_OVERHEAT_POLLING_THRES) {
-				BATT_LOG("[USBOH] Trigger quick polling, usb_temp=%d\n", usb_conn_temp);
+			// start polling when temp reach 55 degree or delta temp between battery and connector reache 10 degree
+			if ((usb_conn_temp >= HTC_USB_OVERHEAT_POLLING_THRES) ||
+					(usb_conn_batt_delta_temp >= HTC_USB_OVERHEAT_POLLING_CONN_BATT_DELTA_TEMP_THRES)) {
+				BATT_LOG("[USBOH] Trigger quick polling, usb_temp=%d, batt_tmp=%d\n", usb_conn_temp, batt_temp);
 				b_sched_quick_polling = true;
 				wake_lock(&htc_batt_info.check_overheat_lock);
 				g_htc_usb_overheat_check_state = USB_CONN_STAT_POLLING;
@@ -1171,7 +1203,9 @@ static void htc_usb_overheat_routine(void)
 			break;
 
 		case USB_CONN_STAT_POLLING_END_CHK:
-			if (usb_conn_temp >= HTC_USB_OVERHEAT_POLLING_THRES) {
+			// stop polling when temp < 55 degree and delta temp between battery and connector < 10 degree
+			if ((usb_conn_temp >= HTC_USB_OVERHEAT_POLLING_THRES) ||
+					(usb_conn_batt_delta_temp >= HTC_USB_OVERHEAT_POLLING_CONN_BATT_DELTA_TEMP_THRES)) {
 				b_sched_quick_polling = true;
 				g_htc_usb_overheat_check_state = USB_CONN_STAT_POLLING;
 			} else {
@@ -1193,7 +1227,8 @@ static void htc_usb_overheat_routine(void)
 	}
 
 	if ((prev_state != 0) || (g_htc_usb_overheat_check_state != 0))
-		BATT_LOG("[USBOH] Prev state:%d, Curr state:%d, temp=%d\n", prev_state, g_htc_usb_overheat_check_state, usb_conn_temp);
+		BATT_LOG("[USBOH] Prev state:%d, Curr state:%d, usb_temp=%d, batt_temp=%d\n",
+			prev_state, g_htc_usb_overheat_check_state, usb_conn_temp, batt_temp);
 }
 
 static void htc_usb_overheat_worker(struct work_struct *work)
@@ -1202,23 +1237,28 @@ static void htc_usb_overheat_worker(struct work_struct *work)
 	unsigned int prev_state = g_htc_usb_overheat_check_state;
 	bool b_sched_next = false;
 	static int s_polling_cnt = 0;
+	int batt_temp = get_property(htc_batt_info.batt_psy, POWER_SUPPLY_PROP_TEMP);
+	int usb_conn_batt_delta_temp = usb_conn_temp - batt_temp;
 
 	switch (g_htc_usb_overheat_check_state) {
 		case USB_CONN_STAT_POLLING:
 			s_polling_cnt++;
 
-			// trigger usb overheat when temp reach 90 degree
-			if (usb_conn_temp >= HTC_USB_OVERHEAT_TRIGGER_THRES) {
+			// trigger usb overheat when temp reach 68 degree or delta temp between battery and connector reache 15 degree
+			if ((usb_conn_temp >= HTC_USB_OVERHEAT_TRIGGER_THRES) ||
+					(usb_conn_batt_delta_temp >= HTC_USB_OVERHEAT_TRIGGER_BATT_DELTA_TEMP_THRES)){
 				s_polling_cnt = 0;
 				g_htc_usb_overheat = true;
 				gs_update_PSY = true;
-				BATT_LOG("[USBOH] USB OverHeat!!! usb_temp=%d\n", usb_conn_temp);
+				BATT_LOG("[USBOH] USB OverHeat!!! usb_temp=%d, batt_temp=%d\n", usb_conn_temp, batt_temp);
+				htc_typec_enable(false);
 				htc_batt_schedule_batt_info_update();
 				g_htc_usb_overheat_check_state = USB_CONN_STAT_OVERHEAT;
 				b_sched_next = true;
-			} else if (s_polling_cnt > 60) {
-				// check temperature, if still >=75 degree, keep on polling else stop polling
-				if (usb_conn_temp >= HTC_USB_OVERHEAT_POLLING_THRES) {
+			} else if (s_polling_cnt > 12) {
+				// check temperature, if still >= 55 degree and delta temp > 10 degree, keep on polling else stop polling
+				if ((usb_conn_temp >= HTC_USB_OVERHEAT_POLLING_THRES) ||
+						(usb_conn_batt_delta_temp >= HTC_USB_OVERHEAT_POLLING_CONN_BATT_DELTA_TEMP_THRES)) {
 					b_sched_next = true;
 				} else {
 					g_htc_usb_overheat_check_state = USB_CONN_STAT_POLLING_END_CHK;
@@ -1231,11 +1271,14 @@ static void htc_usb_overheat_worker(struct work_struct *work)
 			break;
 
 		case USB_CONN_STAT_OVERHEAT:
-			if (usb_conn_temp < HTC_USB_OVERHEAT_POLLING_THRES) {
+			// stop alarm when temp < 60 degree or delta temp between battery and connector < 10 degree
+			if ((usb_conn_temp < HTC_USB_OVERHEAT_RECOVER_THRES) &&
+					(usb_conn_batt_delta_temp < HTC_USB_OVERHEAT_POLLING_CONN_BATT_DELTA_TEMP_THRES)){
 				g_htc_usb_overheat = false;
 				update_htc_extension_state();
 				BATT_LOG("[USBOH] USB Cool Down!!! usb_temp=%d\n", usb_conn_temp);
 				gs_update_PSY = true;
+				htc_typec_enable(true);
 				htc_batt_schedule_batt_info_update();
 				g_htc_usb_overheat_check_state = USB_CONN_STAT_INIT;
 				wake_unlock(&htc_batt_info.check_overheat_lock);
@@ -1253,7 +1296,8 @@ static void htc_usb_overheat_worker(struct work_struct *work)
 	if (b_sched_next)
 		schedule_delayed_work(&htc_batt_info.htc_usb_overheat_work, msecs_to_jiffies(HTC_USB_OVERHEAT_POLLING_TIME_MS));
 
-	BATT_LOG("[USBOH] Prev state:%d, Curr state:%d, temp=%d\n", prev_state, g_htc_usb_overheat_check_state, usb_conn_temp);
+	BATT_LOG("[USBOH] Prev state:%d, Curr state:%d, conn_temp=%d, batt_temp=%d\n",
+			prev_state, g_htc_usb_overheat_check_state, usb_conn_temp, batt_temp);
 	return;
 }
 
@@ -1510,6 +1554,9 @@ static void htcchg_check_cc_status(void)
         bool is_screen_on;
 	unsigned int entry_cool_temp = 0;
 
+	if(strcmp(htc_get_bootmode(), "") != 0)
+		 return;
+
 	if((is_cool_charger() == false)||(not_entry_again)) return;
 
 	if(htcchg_on){
@@ -1677,12 +1724,12 @@ void htc_5v2a_pre_chk(void)
 	int r1, r2, r3, r4, r_avg;
 
 	if(!g_htc_battery_probe_done) {
-		BATT_ERR("%s, called before driver ready\n", __func__);
+		BATT_LOG("%s, called before driver ready\n", __func__);
 		return;
 	}
 
 	if (htc_batt_info.rep.charging_source != POWER_SUPPLY_TYPE_USB_DCP) {
-		BATT_ERR("%s, Charger tyep not dcp, %s\n", __func__, cg_chr_src[htc_batt_info.rep.charging_source]);
+		BATT_LOG("%s, Charger tyep not dcp, %s\n", __func__, cg_chr_src[htc_batt_info.rep.charging_source]);
 		return;
 	}
 
@@ -1810,9 +1857,11 @@ static void screen_ibat_limit_enable_worker(struct work_struct *work)
 #define VBUS_VALID_THRESHOLD			4250000
 #define THERMAL_BATT_TEMP_UPDATE_TIME_THRES	1800	//MIN 30min
 #define THERMAL_BATT_TEMP_UPDATE_TIME_MAX	3610    //MAX 60min+10s tolarance
-
+#define CC_DET_DEFAULT	1
 #define BI_BATT_CHGE_UPDATE_TIME_THRES		1800	//30mins
 #define BI_BATT_CHGE_CHECK_TIME_THRES		36000	//10HR
+#define WARM_STOP_CHARGING_MV			4250
+#define WARM_RECOVER_CHARGING_MV		4150
 static void batt_worker(struct work_struct *work)
 {
 	static int s_first = 1;
@@ -1829,7 +1878,7 @@ static void batt_worker(struct work_struct *work)
 	unsigned long time_since_last_update_ms;
 	unsigned long cur_jiffies;
 	int cc_type = POWER_SUPPLY_TYPEC_SOURCE_DEFAULT;
-
+	unsigned int aicl = 0;
 
 	static struct timeval s_thermal_batt_update_time = { 0, 0 };
 	struct timeval rtc_now;
@@ -1852,8 +1901,8 @@ static void batt_worker(struct work_struct *work)
 	htc_batt_info.prev.charging_source = htc_batt_info.rep.charging_source;
 	cc_type = get_property(htc_batt_info.usb_psy, POWER_SUPPLY_PROP_TYPEC_MODE);
 	if ((g_latest_chg_src  != POWER_SUPPLY_TYPE_USB_PD) &&
-			(g_latest_chg_src  != POWER_SUPPLY_TYPE_USB_HVDCP) && (g_latest_chg_src  != POWER_SUPPLY_TYPE_USB_HVDCP_3) &&
 			(g_latest_chg_src  != POWER_SUPPLY_TYPE_USB) && (g_latest_chg_src  != POWER_SUPPLY_TYPE_USB_CDP) &&
+			(smblib_typec_first_debounce_result() != CC_DET_DEFAULT) &&
 			((cc_type == POWER_SUPPLY_TYPEC_SOURCE_MEDIUM) || (cc_type == POWER_SUPPLY_TYPEC_SOURCE_HIGH)))
 		htc_batt_info.rep.charging_source = POWER_SUPPLY_TYPE_TYPEC;
 	else
@@ -1992,6 +2041,17 @@ static void batt_worker(struct work_struct *work)
 		}else{
 			g_pwrsrc_dis_reason &= ~HTC_BATT_PWRSRC_DIS_BIT_USB_OVERHEAT;
 			g_chg_dis_reason &= ~HTC_BATT_CHG_DIS_BIT_USB_OVERHEAT;
+		}
+
+		if ((htc_batt_info.rep.health == POWER_SUPPLY_HEALTH_WARM) &&
+				(get_property(htc_batt_info.bms_psy, POWER_SUPPLY_PROP_TEMP) > 450) &&
+				(!g_flag_keep_charge_on)){
+			if (htc_batt_info.rep.batt_vol > WARM_STOP_CHARGING_MV)
+				g_chg_dis_reason |= HTC_BATT_CHG_DIS_BIT_TMP;
+			if (htc_batt_info.rep.batt_vol < WARM_RECOVER_CHARGING_MV)
+				g_chg_dis_reason &= ~HTC_BATT_CHG_DIS_BIT_TMP;
+		} else {
+			g_chg_dis_reason &= ~HTC_BATT_CHG_DIS_BIT_TMP;
 		}
 
 		/* STEP 11.2.1 determin charging_eanbled for charger control */
@@ -2158,6 +2218,7 @@ static void batt_worker(struct work_struct *work)
 		"status=%d,"
 		"chg_limit_reason=%d,"
 		"chg_stop_reason=%d,"
+		"chg_dis_reason=%d,"
 		"consistent=%d,"
 		"flag=0x%08X,"
 		"htc_ext=0x%02X,"
@@ -2188,6 +2249,7 @@ static void batt_worker(struct work_struct *work)
 		htc_batt_info.rep.status,
 		htc_batt_info.current_limit_reason,
 		g_pwrsrc_dis_reason,
+		g_chg_dis_reason,
 		(htc_batt_info.store.consistent_flag ? htc_batt_info.store.batt_stored_soc : (-1)),
 		htc_batt_info.k_debug_flag,
 		htc_batt_info.htc_extension,
@@ -2204,7 +2266,8 @@ static void batt_worker(struct work_struct *work)
 		power_supply_changed(htc_batt_info.batt_psy);
 	}
 
-	htc_usb_overheat_routine();
+	if (!g_flag_keep_charge_on)
+		htc_usb_overheat_routine();
 
 	/* BI Data Thermal Battery Temperaturee */
 	do_gettimeofday(&rtc_now);
@@ -2251,6 +2314,13 @@ static void batt_worker(struct work_struct *work)
 	g_pre_total_level_raw = g_total_level_raw;
 
 	htcchg_check_cc_status();
+
+	aicl = get_property(htc_batt_info.usb_psy, POWER_SUPPLY_PROP_INPUT_CURRENT_SETTLED)/1000;
+	if (aicl == 25 && htc_batt_info.rep.overload == 1) {
+		htc_batt_info.icharger->register_write(USBIN_AICL_OPTIONS_CFG_REG, USBIN_AICL_EN_BIT, 0);
+		msleep(50);
+		htc_batt_info.icharger->register_write(USBIN_AICL_OPTIONS_CFG_REG, USBIN_AICL_EN_BIT, USBIN_AICL_EN_BIT);
+	}
 
 	wake_unlock(&htc_batt_timer.battery_lock);
 
@@ -2591,16 +2661,18 @@ static int htc_batt_charger_control(enum charger_control_flag control)
 		case ENABLE_CHARGER:
 			g_chg_dis_reason &= ~HTC_BATT_CHG_DIS_BIT_USR_TMR;
 			break;
-		case DISABLE_PWRSRC:
 #ifdef CONFIG_FPC_HTC_DISABLE_CHARGING //HTC_BATT_WA_PCN0004
 		case DISABLE_PWRSRC_FINGERPRINT:
+			set_batt_psy_property(POWER_SUPPLY_PROP_INPUT_SUSPEND, true);
 #endif //CONFIG_FPC_HTC_DISABLE_CHARGING
+		case DISABLE_PWRSRC:
 			g_pwrsrc_dis_reason |= HTC_BATT_PWRSRC_DIS_BIT_API;
 			break;
-		case ENABLE_PWRSRC:
 #ifdef CONFIG_FPC_HTC_DISABLE_CHARGING //HTC_BATT_WA_PCN0004
 		case ENABLE_PWRSRC_FINGERPRINT:
+			set_batt_psy_property(POWER_SUPPLY_PROP_INPUT_SUSPEND, false);
 #endif //CONFIG_FPC_HTC_DISABLE_CHARGING
+		case ENABLE_PWRSRC:
 			g_pwrsrc_dis_reason &= ~HTC_BATT_PWRSRC_DIS_BIT_API;
 			break;
 		case ENABLE_LIMIT_CHARGER:
@@ -2654,6 +2726,10 @@ void htc_ftm_disable_charger(bool disable)
 		g_ftm_charger_control_flag = FTM_STOP_CHARGER;
 	else
 		g_ftm_charger_control_flag = FTM_ENABLE_CHARGER;
+}
+
+bool htc_get_htcchg_sts(void) {
+	return htcchg_on;
 }
 
 static ssize_t htc_battery_set_full_level(struct device *dev,
@@ -2948,7 +3024,7 @@ static ssize_t htc_battery_show_batt_attr(struct device *dev,
 		iusb_max = get_property(htc_batt_info.usb_psy, POWER_SUPPLY_PROP_PD_CURRENT_MAX)/1000;
 	else
 		iusb_max = get_property(htc_batt_info.usb_psy, POWER_SUPPLY_PROP_CURRENT_MAX)/1000;
-	cc_uah   = get_property(htc_batt_info.bms_psy, POWER_SUPPLY_PROP_CHARGE_NOW_RAW);
+	cc_uah   = get_property(htc_batt_info.bms_psy, POWER_SUPPLY_PROP_CHARGE_COUNTER);
 	charger_temp = get_property(htc_batt_info.batt_psy, POWER_SUPPLY_PROP_CHARGER_TEMP);
 	charger_temp_max = get_property(htc_batt_info.batt_psy, POWER_SUPPLY_PROP_CHARGER_TEMP_MAX);
 

@@ -31,7 +31,7 @@
 #if 0
 #define WCD_MBHC_THR_HS_MICB_MV  2700
 #else
-#define WCD_MBHC_THR_HS_MICB_MV  2850
+#define WCD_MBHC_THR_HS_MICB_MV  1800
 #endif
 /* HTC_AUD_END */
 

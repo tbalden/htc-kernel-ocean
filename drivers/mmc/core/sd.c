@@ -1113,6 +1113,7 @@ static int mmc_sd_init_card(struct mmc_host *host, u32 ocr,
 	card->clk_scaling_highest = mmc_sd_get_max_clock(card);
 	card->clk_scaling_lowest = host->f_min;
 
+	host->underclocking = 0;
 	return 0;
 
 free_card:
@@ -1257,11 +1258,11 @@ static int _mmc_sd_resume(struct mmc_host *host)
 
 	BUG_ON(!host);
 	BUG_ON(!host->card);
-
-	host->crc_count = 0;
+#if 0
 	/* Recover Host capabilities */
-	host->caps |= host->caps_uhs;
-
+	if (!host->underclocking)
+		host->caps |= host->caps_uhs;
+#endif
 	mmc_claim_host(host);
 
 	if (!mmc_card_suspended(host->card))

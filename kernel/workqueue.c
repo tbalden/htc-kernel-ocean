@@ -5322,7 +5322,6 @@ static void wq_watchdog_timer_fn(unsigned long data)
 			pr_cont_pool_info(pool);
 			pr_cont(" stuck for %us!\n",
 				jiffies_to_msecs(jiffies - pool_ts) / 1000);
-			BUG();
 		}
 	}
 

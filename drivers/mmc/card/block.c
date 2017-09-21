@@ -75,6 +75,7 @@ MODULE_ALIAS("mmc:block");
 #define PACKED_CMD_WR	0x02
 #define PACKED_TRIGGER_MAX_ELEMENTS	5000
 
+#define MMC_ERROR_LIMIT		8
 #define MMC_BLK_MAX_RETRIES 2 /* max # of retries before aborting a command */
 #define MMC_BLK_UPDATE_STOP_REASON(stats, reason)			\
 	do {								\
@@ -1790,18 +1791,39 @@ static int mmc_blk_cmd_recovery(struct mmc_card *card, struct request *req,
 	return ERR_CONTINUE;
 }
 
+static void mmc_blk_remove_card(struct mmc_host *host)
+{
+	if (mmc_card_removed(host->card))
+		return;
+
+	pr_info("%s: %s\n", mmc_hostname(host), __func__);
+
+	if (!host->card || mmc_card_removed(host->card)) {
+		pr_info("%s: card already removed\n", mmc_hostname(host));
+		return;
+	}
+	if (!mmc_card_present(host->card)) {
+		pr_info("%s: card is not present\n", mmc_hostname(host));
+		return;
+	}
+	mmc_card_set_removed(host->card);
+	cancel_delayed_work(&host->detect);
+	mmc_detect_change(host, msecs_to_jiffies(1000));
+}
+
 static int mmc_blk_reset(struct mmc_blk_data *md, struct mmc_host *host,
 			 int type)
 {
 	int err;
 
-	if (md->reset_done & type) {
-		pr_info("%s: %s return %d\n", mmc_hostname(host),
-			__func__, -EEXIST);
-		return -EEXIST;
+	pr_info("%s: %s error_count : %d\n", mmc_hostname(host),
+		__func__, host->error_count);
+	host->error_count++;
+	if (host->error_count > MMC_ERROR_LIMIT) {
+		mmc_blk_remove_card(host);
+		return -ENODEV;
 	}
 
-	md->reset_done |= type;
 	err = mmc_hw_reset(host);
 	if (err && err != -EOPNOTSUPP) {
 		/* We failed to reset so we need to abort the request */
@@ -1828,6 +1850,13 @@ static int mmc_blk_reset(struct mmc_blk_data *md, struct mmc_host *host,
 			return -ENODEV;
 		}
 	}
+
+	if (md->reset_done & type) {
+		md->reset_done &= ~type;
+		return -EEXIST;
+	}
+	md->reset_done |= type;
+
 	if (err)
 		pr_info("%s: %s return %d\n", mmc_hostname(host),
 			__func__, err);
@@ -3085,29 +3114,6 @@ static void mmc_blk_revert_packed_req(struct mmc_queue *mq,
 	mmc_blk_clear_packed(mq_rq);
 }
 
-static void mmc_blk_remove_card(struct mmc_host *host)
-{
-	if (host->card->force_remove)
-		return;
-
-	printk(KERN_INFO "%s: %s\n", mmc_hostname(host), __func__);
-
-	if (!host->card || mmc_card_removed(host->card)) {
-		printk(KERN_INFO "%s: card already removed\n",
-			mmc_hostname(host));
-		return;
-	}
-	if (!mmc_card_present(host->card)) {
-		printk(KERN_INFO "%s: card is not present\n",
-			mmc_hostname(host));
-		return;
-	}
-	host->card->force_remove = 1;
-	cancel_delayed_work(&host->detect);
-	mmc_card_set_removed(host->card);
-	mmc_detect_change(host, msecs_to_jiffies(1000));
-}
-
 static int mmc_blk_cmdq_start_req(struct mmc_host *host,
 				  struct mmc_cmdq_req *cmdq_req)
 {
@@ -3712,7 +3718,6 @@ static int mmc_blk_issue_rw_rq(struct mmc_queue *mq, struct request *rqc)
 #ifdef CONFIG_MMC_SIMULATE_MAX_SPEED
 	unsigned long waitfor = jiffies;
 #endif
-	int reset_count = 0;
 
 	if (!rqc && !mq->mqrq_prev->req)
 		return 0;
@@ -3761,6 +3766,7 @@ static int mmc_blk_issue_rw_rq(struct mmc_queue *mq, struct request *rqc)
 			/*
 			 * A block was successfully transferred.
 			 */
+			card->host->error_count = card->host->error_count >> 1;
 			mmc_blk_reset_success(md, type);
 
 			mmc_blk_simulate_delay(mq, rqc, waitfor);
@@ -3786,39 +3792,49 @@ static int mmc_blk_issue_rw_rq(struct mmc_queue *mq, struct request *rqc)
 				goto cmd_abort;
 			}
 			break;
+		case MMC_BLK_CMD_ERR:
+			ret = mmc_blk_cmd_err(md, card, brq, req, ret);
+			if (mmc_blk_reset(md, card->host, type))
+				goto cmd_abort;
+			if (!ret)
+				goto start_new_req;
+			break;
 		case MMC_BLK_RETRY:
-			pr_info("%s: %s status %d retry %d\n", mmc_hostname(card->host),
-				__func__, status, retry);
 			retune_retry_done = brq->retune_retry_done;
 			if (retry++ < MMC_BLK_MAX_RETRIES)
 				break;
 			/* Fall through */
-		case MMC_BLK_CMD_ERR:
-		case MMC_BLK_ECC_ERR:
 		case MMC_BLK_ABORT:
+			if (!mmc_blk_reset(md, card->host, type) &&
+				(retry++ < (MMC_BLK_MAX_RETRIES + 1)))
+				break;
+			goto cmd_abort;
 		case MMC_BLK_DATA_ERR: {
 			int err;
-			pr_info("%s: error status %d reset_count %d\n",
-				mmc_hostname(card->host), status, reset_count);
-			if (mmc_card_sd(card) && (reset_count > MMC_CARD_RESET_RETRIES)) {
-				mmc_blk_remove_card(card->host);
-			} else {
-				if (status == MMC_BLK_CMD_ERR)
-					ret = mmc_blk_cmd_err(md, card, brq, req, ret);
 
-				err = mmc_blk_reset(md, card->host, 0);
-				if (err && mmc_is_sd_host(card->host)) {
-					pr_err("%s: blk_reset failed : %d, remove sd card\n"
-						, mmc_hostname(card->host), err);
-					mmc_blk_remove_card(card->host);
-					goto cmd_abort;
-				}
-				reset_count++;
-				pr_info("%s: blk_reset result : %d\n",
-					mmc_hostname(card->host), err);
+			err = mmc_blk_reset(md, card->host, type);
+			if (!err)
+				break;
+			goto cmd_abort;
+		}
+		case MMC_BLK_ECC_ERR:
+			if (brq->data.blocks > 1) {
+				/* Redo read one sector at a time */
+				pr_warn("%s: retrying using single block read\n",
+					req->rq_disk->disk_name);
+				disable_multi = 1;
 				break;
 			}
-		}
+			/*
+			 * After an error, we redo I/O one sector at a
+			 * time, so we only reach here after trying to
+			 * read a single sector.
+			 */
+			ret = blk_end_request(req, -EIO,
+						brq->data.blksz);
+			if (!ret)
+				goto start_new_req;
+			break;
 		case MMC_BLK_NOMEDIUM:
 			goto cmd_abort;
 		default:
@@ -3862,6 +3878,7 @@ static int mmc_blk_issue_rw_rq(struct mmc_queue *mq, struct request *rqc)
 					blk_rq_cur_bytes(req));
 	}
 
+ start_new_req:
 	if (rqc) {
 		if (mmc_card_removed(card)) {
 			rqc->cmd_flags |= REQ_QUIET;

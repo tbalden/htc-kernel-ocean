@@ -673,7 +673,16 @@ void del_gendisk_no_sync(struct gendisk *disk, bool flag)
 	disk->flags &= ~GENHD_FL_UP;
 
 	sysfs_remove_link(&disk_to_dev(disk)->kobj, "bdi");
-	blk_unregister_queue(disk);
+	if (disk->queue) {
+		/*
+		 * Unregister bdi before releasing device numbers (as they can
+		 * get reused and we'd get clashes in sysfs).
+		 */
+		bdi_unregister(&disk->queue->backing_dev_info);
+		blk_unregister_queue(disk);
+	} else {
+		WARN_ON(1);
+	}
 	blk_unregister_region(disk_devt(disk), disk->minors);
 
 	part_stat_set_all(&disk->part0, 0);

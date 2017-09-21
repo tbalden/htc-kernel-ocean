@@ -38,6 +38,20 @@ enum android_device_state {
 	USB_CONFIGURED,
 };
 
+#if defined(CONFIG_USB_CONFIGFS_F_MIRRORLINK)
+int mirrorlink_ctrlrequest(struct usb_composite_dev *cdev,
+			const struct usb_ctrlrequest *ctrl);
+int mirrorlink_check_state(void);
+void mirrorlink_reset_state(void);
+#endif
+
+#if defined(CONFIG_USB_CONFIGFS_F_AUTOBOT)
+void htc_mode_enable(int enable);
+int check_htc_mode_status(void);
+int autobot_ctrlrequest(struct usb_composite_dev *cdev,
+			const struct usb_ctrlrequest *ctrl);
+#endif
+
 struct device *create_function_device(char *name)
 {
 	if (android_device && !IS_ERR(android_device))
@@ -47,18 +61,6 @@ struct device *create_function_device(char *name)
 		return ERR_PTR(-EINVAL);
 }
 EXPORT_SYMBOL_GPL(create_function_device);
-#endif
-
-#if defined(CONFIG_USB_CONFIGFS_F_MIRRORLINK)
-int mirrorlink_ctrlrequest(struct usb_composite_dev *cdev,
-				const struct usb_ctrlrequest *ctrl);
-#endif
-
-#if defined(CONFIG_USB_CONFIGFS_F_AUTOBOT)
-void htc_mode_enable(int enable);
-int check_htc_mode_status(void);
-int autobot_ctrlrequest(struct usb_composite_dev *cdev,
-				const struct usb_ctrlrequest *ctrl);
 #endif
 
 int check_user_usb_string(const char *name,
@@ -1557,10 +1559,16 @@ static void android_work(struct work_struct *data)
 		}
 	}
 
-#if 0//defined(CONFIG_USB_CONFIGFS_F_AUTOBOT)
-	if (gi->connected == 0 && check_htc_mode_status() != 0 /*NOT_ON_AUTOBOT*/) {
+#if defined(CONFIG_USB_CONFIGFS_F_AUTOBOT)
+	if (gi->cdev.sw_connect2pc.state == 0 && check_htc_mode_status() != 0 /*NOT_ON_AUTOBOT*/) {
 		htc_mode_enable(0);
 		pr_err("%s : the autobot flag did not reset, set it to 0\n", __func__);
+	}
+#endif
+#if defined(CONFIG_USB_CONFIGFS_F_MIRRORLINK)
+	if (gi->cdev.sw_connect2pc.state == 0 && mirrorlink_check_state() == 1) {
+		mirrorlink_reset_state();
+		pr_err("[MIRROR_LINK] %s : Out of order, ml_switch set 0\n", __func__);
 	}
 #endif
 

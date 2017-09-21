@@ -88,7 +88,7 @@ static int irq_affinity_list_proc_show(struct seq_file *m, void *v)
 	return show_irq_affinity(1, m, v);
 }
 
-#if 1
+#if 0
 // the interrupt(s) numbers to skip...
 // irqbalancer on recent userspace of htc is not ignoring this irq,
 // and misplaces its affinity. We fix it here in kernel.
@@ -102,7 +102,7 @@ static ssize_t write_irq_affinity(int type, struct file *file,
 	cpumask_var_t new_value;
 	int err;
 
-#if 1
+#if 0
 	if (irq == K_IGNORE_1) {
 		printk(KERN_ERR "== ignoring IRQ332 ==\n");
 		return -EIO;

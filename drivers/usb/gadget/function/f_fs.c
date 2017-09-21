@@ -1159,7 +1159,7 @@ static ssize_t ffs_epfile_read_iter(struct kiocb *kiocb, struct iov_iter *to)
 		*to = p->data;
 	}
 
-	//ffs_log("enter");
+	//ffs_log("exit");
 
 	return res;
 }
@@ -3346,6 +3346,8 @@ static int ffs_func_set_alt(struct usb_function *f,
 	if (ffs->func) {
 		ffs_func_eps_disable(ffs->func);
 		ffs->func = NULL;
+		/* matching put to allow LPM on disconnect */
+		usb_gadget_autopm_put_async(ffs->gadget);
 	}
 
 	if (ffs->state == FFS_DEACTIVATED) {
@@ -3359,8 +3361,6 @@ static int ffs_func_set_alt(struct usb_function *f,
 		return -ENODEV;
 
 	if (alt == (unsigned)-1) {
-		/* matching put to allow LPM on disconnect */
-		usb_gadget_autopm_put_async(ffs->gadget);
 		ffs->func = NULL;
 		ffs_event_add(ffs, FUNCTIONFS_DISABLE);
 		return 0;

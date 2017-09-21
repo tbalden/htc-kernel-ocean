@@ -436,9 +436,13 @@ void msm_vfe47_clear_status_reg(struct vfe_device *vfe_dev)
 void msm_vfe47_process_reset_irq(struct vfe_device *vfe_dev,
 	uint32_t irq_status0, uint32_t irq_status1)
 {
+	unsigned long flags;
+
 	if (irq_status0 & (1 << 31)) {
+		spin_lock_irqsave(&vfe_dev->completion_lock, flags);
 		complete(&vfe_dev->reset_complete);
 		vfe_dev->reset_pending = 0;
+		spin_unlock_irqrestore(&vfe_dev->completion_lock, flags);
 	}
 }
 
@@ -688,6 +692,15 @@ void msm_vfe47_process_epoch_irq(struct vfe_device *vfe_dev,
 	}
 }
 
+void msm_isp47_preprocess_camif_irq(struct vfe_device *vfe_dev,
+	uint32_t irq_status0)
+{
+	if (irq_status0 & BIT(1))
+		vfe_dev->axi_data.src_info[VFE_PIX_0].accept_frame = false;
+	if (irq_status0 & BIT(0))
+		vfe_dev->axi_data.src_info[VFE_PIX_0].accept_frame = true;
+}
+
 void msm_vfe47_reg_update(struct vfe_device *vfe_dev,
 	enum msm_vfe_input_src frame_src)
 {
@@ -740,8 +753,11 @@ long msm_vfe47_reset_hardware(struct vfe_device *vfe_dev,
 {
 	long rc = 0;
 	uint32_t reset;
+	unsigned long flags;
 
+	spin_lock_irqsave(&vfe_dev->completion_lock, flags);
 	init_completion(&vfe_dev->reset_complete);
+	spin_unlock_irqrestore(&vfe_dev->completion_lock, flags);
 
 	if (blocking_call)
 		vfe_dev->reset_pending = 1;
@@ -2883,6 +2899,7 @@ struct msm_vfe_hardware_info vfe47_hw_info = {
 			.process_epoch_irq = msm_vfe47_process_epoch_irq,
 			.config_irq = msm_vfe47_config_irq,
 			.read_irq_status = msm_vfe47_read_irq_status,
+			.preprocess_camif_irq = msm_isp47_preprocess_camif_irq,
 		},
 		.axi_ops = {
 			.reload_wm = msm_vfe47_axi_reload_wm,

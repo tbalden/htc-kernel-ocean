@@ -2636,9 +2636,6 @@ static irqreturn_t wcd_mbhc_mech_plug_detect_irq(int irq, void *data)
 
 			insert = !wcd_swch_level_remove(mbhc);
 			if (insert) {
-				/* set switch to accessory mode */
-				set_fsa3030_accessory(mbhc, true);
-
 				gpio_set_value(hs_cfg.switch_gpio[HEADSET_S5], 1);
 				gpio_set_value(hs_cfg.ext_micbias, 1);
 				gpio_set_value(hs_cfg.switch_gpio[HEADSET_S3_0], 0);
@@ -2668,6 +2665,9 @@ static irqreturn_t wcd_mbhc_mech_plug_detect_irq(int irq, void *data)
 					gpio_set_value(hs_cfg.switch_gpio[HEADSET_S5],0);
 				}
 				gpio_set_value(hs_cfg.ext_micbias,0);
+
+				/* set switch to accessory mode */
+				set_fsa3030_accessory(mbhc, true);
 
 				if (ret < 0) {
 					pr_err("AS headset can't be identified during 3 seconds "); // Plug in AS headset when pressing button

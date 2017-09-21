@@ -574,7 +574,6 @@ struct mmc_host {
 	 * actually disabling the clock from it's source.
 	 */
 	bool			card_clock_off;
-	unsigned int            crc_count;
 	unsigned int            removed_cnt;
 
 	struct {
@@ -630,6 +629,8 @@ struct mmc_host {
 	int			latency_hist_enabled;
 	struct io_latency_state io_lat_s;
 #endif
+	unsigned int		underclocking;
+	unsigned int		error_count;
 
 	unsigned long		private[0] ____cacheline_aligned;
 };

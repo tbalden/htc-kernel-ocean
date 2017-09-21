@@ -236,6 +236,7 @@
 	qcom,fg-recharge-soc-thr = <97>;
 	qcom,fg-chg-term-current = <50>;
 	qcom,fg-cutoff-voltage = <3400>;
+	qcom,fg-rsense-sel = <0>;
 };
 
 &i2c_5 {

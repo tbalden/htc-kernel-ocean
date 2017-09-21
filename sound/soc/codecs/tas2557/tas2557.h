@@ -546,6 +546,9 @@ struct tas2557_priv {
 	int mnCurrentReg;
 	struct mutex file_lock;
 #endif
+/* HTC_AUD_START */
+	spinlock_t irq_lock;
+/* HTC_AUD_END */
 
 };
 

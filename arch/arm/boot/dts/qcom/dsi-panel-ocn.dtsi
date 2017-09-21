@@ -144,6 +144,8 @@
 		qcom,mdss-dsi-panel-name = "WQHD JDI S6D1HA2 5.5 command mode panel";
 		qcom,mdss-dsi-panel-type = "dsi_cmd_mode";
 		qcom,mdss-dsi-panel-framerate = <60>;
+		qcom,mdss-dsi-panel-clockrate = <826000000>;
+		qcom,mdss-mdp-transfer-time-us = <13400>;
 		qcom,mdss-dsi-virtual-channel-id = <0>;
 		qcom,mdss-dsi-stream = <0>;
 		qcom,mdss-dsi-panel-width = <720>;
@@ -175,10 +177,10 @@
 		qcom,mdss-dsi-lane-1-state;
 		qcom,mdss-dsi-lane-2-state;
 		qcom,mdss-dsi-lane-3-state;
-		qcom,mdss-dsi-panel-timings = [00 16 05 05 08 0C 06 05 04 03 04 00];
+		qcom,mdss-dsi-panel-timings = [00 1B 05 06 0A 0E 07 06 05 03 04 00];
 		qcom,mdss-dsi-reset-sequence =  <1 20>;
-		qcom,mdss-dsi-t-clk-post = <0x06>;
-		qcom,mdss-dsi-t-clk-pre = <0x22>;
+		qcom,mdss-dsi-t-clk-post = <0x07>;
+		qcom,mdss-dsi-t-clk-pre = <0x28>;
 		qcom,mdss-dsi-bl-pmic-control-type = "bl_ctrl_backlight";
 		htc,mdss-dsi-bl-backlight = <&lm36274_bkl>;
 		htc,brt-bl-table = <30 15>, <142 364>, <255 1365>;

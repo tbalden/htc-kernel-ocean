@@ -25,6 +25,7 @@
 #include <soc/qcom/smem.h>
 #include <soc/qcom/ramdump.h>
 #include <soc/qcom/subsystem_notif.h>
+#include <soc/qcom/subsystem_restart.h>
 #include "sharedmem_qmi.h"
 
 #define CLIENT_ID_PROP "qcom,client-id"
@@ -63,7 +64,14 @@ static int restart_notifier_cb(struct notifier_block *this,
 				unsigned long code,
 				void *data)
 {
+	struct notif_data *notif = data;
+
+#if defined(CONFIG_HTC_FEATURES_SSR)
+	if (code == SUBSYS_RAMDUMP_NOTIFICATION &&
+	    notif->enable_ramdump == ENABLE_RAMDUMP) {
+#else
 	if (code == SUBSYS_RAMDUMP_NOTIFICATION) {
+#endif
 		struct restart_notifier_block *notifier;
 
 		notifier = container_of(this,

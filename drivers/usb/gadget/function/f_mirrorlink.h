@@ -251,6 +251,8 @@ static struct usb_gadget_strings *mirrorlink_strings[] = {
 
 int mirrorlink_ctrlrequest(struct usb_composite_dev *cdev,
 				const struct usb_ctrlrequest *ctrl);
+int mirrorlink_check_state(void);
+void mirrorlink_reset_state(void);
 
 static inline struct f_mirrorlink_opts *ci_to_f_mirrorlink_opts(
 		struct config_item *item)

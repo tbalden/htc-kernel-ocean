@@ -306,7 +306,7 @@ static int dp_aux_read_cmds(struct mdss_dp_drv_pdata *ep,
 	tp->no_send_stop = false;
 	dp_cmd_fifo_tx(ep);
 
-	if (!wait_for_completion_timeout(&ep->aux_comp, HZ/4)) {
+	if (!wait_for_completion_timeout(&ep->aux_comp, HZ/40)) {
 		pr_err("aux read timeout\n");
 		ep->aux_error_num = EDP_AUX_ERR_TOUT;
 		/* Reset the AUX controller state machine */

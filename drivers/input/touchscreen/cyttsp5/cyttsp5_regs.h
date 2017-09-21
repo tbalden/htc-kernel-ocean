@@ -64,6 +64,7 @@
 
 //htc+
 #include <linux/htc_flags.h> //htc_get_bootmode()
+#include <linux/atomic.h>
 //#include <linux/htc_lcm_id.h> //htc_get_lcm_id()
 
 //htc: for incell project, driver will turn off
@@ -247,7 +248,7 @@
 #define HID_LENGTH_AND_REPORT_ID_BYTES	3
 
 /*  Timeout in ms */
-#define CY_REQUEST_EXCLUSIVE_TIMEOUT		8000
+#define CY_REQUEST_EXCLUSIVE_TIMEOUT		2000
 //htc++: add watchdog retry
 #define CY_WATCHDOG_RETRY			3
 //htc--
@@ -1138,6 +1139,7 @@ struct cyttsp5_core_data {
 	struct work_struct work_suspend;
 	struct work_struct work_switchHUB;
 	struct work_struct work_switchCPU;
+	atomic_t FB_finalStatus;
 //htc-
 };
 struct gd_sensor {

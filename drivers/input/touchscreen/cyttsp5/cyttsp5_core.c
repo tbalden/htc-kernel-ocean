@@ -6446,12 +6446,25 @@ retry_set_mode:
 		pr_info("%s: I2C already switch to MCU side\n", __func__);
 #endif
 	cd->fb_state = FB_ON;
+
+	if (atomic_read(&cd->FB_finalStatus) != FB_ON) {
+		dev_info(cd->dev, "%s: RE_POWERDOWN! touch suspend, call suspend work\n", __func__);
+		queue_work(cd->resume_suspend_wq, &cd->work_suspend);
+#ifdef CONFIG_NANOHUB_TP_SWITCH
+		dev_info(cd->dev, "%s: RE_suspend end, call switch to sensor-hub\n", __func__);
+		queue_work(cd->resume_suspend_wq, &cd->work_switchHUB);
+#endif
+	}
 }
 static void cyttsp5_suspend_work_func(struct work_struct *work)
 {
 	htc_cyttsp5_drv_pm_ops(1);
 #ifndef CONFIG_NANOHUB_TP_SWITCH
 	cd->fb_state == FB_OFF;
+	if (atomic_read(&cd->FB_finalStatus) != FB_OFF) {
+		dev_info(cd->dev, "%s: RE_UNBLANK! touch resume, call resume work\n", __func__);
+		queue_work(cd->resume_suspend_wq, &cd->work_resume);
+	}
 #endif
 }
 #ifdef CONFIG_NANOHUB_TP_SWITCH
@@ -6462,6 +6475,12 @@ static void cyttsp5_switchHUB_work_func(struct work_struct *work)
 					work_switchHUB);
 	switch_sensor_hub(cd, eTP_I2C_SEL_SHUB);
 	cd->fb_state = FB_OFF;
+	if (atomic_read(&cd->FB_finalStatus) != FB_OFF) {
+		dev_info(cd->dev, "%s: RE_resume begin, call switch to CPU\n", __func__);
+		queue_work(cd->resume_suspend_wq, &cd->work_switchCPU);
+		dev_info(cd->dev, "%s: RE_UNBLANK! touch resume, call resume work\n", __func__);
+		queue_work(cd->resume_suspend_wq, &cd->work_resume);
+	}
 }
 static void cyttsp5_switchCPU_work_func(struct work_struct *work)
 {
@@ -6486,6 +6505,7 @@ static int fb_notifier_callback(struct notifier_block *self,
 
 	blank = evdata->data;
 	if ((event == FB_EARLY_EVENT_BLANK) && (*blank == FB_BLANK_UNBLANK)) {
+		atomic_set(&cd->FB_finalStatus, FB_ON);
 		if (cd->fb_state == FB_OFF) {
 #ifdef CONFIG_NANOHUB_TP_SWITCH
 			dev_info(cd->dev, "%s: resume begin, call switch to CPU\n", __func__);
@@ -6497,6 +6517,7 @@ static int fb_notifier_callback(struct notifier_block *self,
 			dev_info(cd->dev, "%s: UNBLANK! event %ld\n", __func__, event);
 		}
 	} else if ((event == FB_EARLY_EVENT_BLANK) && (*blank == FB_BLANK_POWERDOWN)) {
+		atomic_set(&cd->FB_finalStatus, FB_OFF);
 		if (cd->fb_state == FB_ON) {
 			dev_info(cd->dev, "%s: POWERDOWN! event %ld touch suspend, call suspend work\n", __func__, event);
 			queue_work(cd->resume_suspend_wq, &cd->work_suspend);
@@ -6624,6 +6645,7 @@ int cyttsp5_probe(const struct cyttsp5_bus_ops *ops, struct device *dev,
 	cd->pdata = pdata;
 	cd->cpdata = pdata->core_pdata;
 	cd->bus_ops = ops;
+	atomic_set(&cd->FB_finalStatus, FB_ON);
 	scnprintf(cd->core_id, 20, "%s%d", CYTTSP5_CORE_NAME, core_number++);
 
 	/* Initialize mutexes and spinlocks */

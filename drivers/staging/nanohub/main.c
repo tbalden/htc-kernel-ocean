@@ -282,11 +282,13 @@ int nanohub_edge_i2c_switch(uint8_t mode) {
 }
 static void nanohub_vbus_wq(struct work_struct *work)
 {
+	int ret = 0;
 	struct nanohub_data *data = s_data;
 	pr_info("nanohub: [EGR] vbus_state = %d, key_state = %d\n", data->edge_cfg.usb_status, data->edge_cfg.key_status);
-	nanohub_comms_write_cfg_data(data, SENS_TYPE_HTC_EDWK,
-		(uint8_t *)&data->edge_cfg, sizeof(struct edge_cfg_data));
-	data->edge_cfg.key_status = 0;
+	ret = nanohub_comms_write_cfg_data(data, SENS_TYPE_HTC_EDWK,
+			(uint8_t *)&data->edge_cfg, sizeof(struct edge_cfg_data));
+	if(!ret)
+		data->edge_cfg.key_status = 0;
 }
 
 int nanohub_vbus_status(uint8_t status)
@@ -2461,6 +2463,9 @@ struct iio_dev *nanohub_probe(struct device *dev, struct iio_dev *iio_dev)
 	INIT_WORK(&data->work_restore, nanohub_restore_wq);
 	INIT_WORK(&data->work_vbus, nanohub_vbus_wq);
 #ifdef CONFIG_NANOHUB_EDGE
+	data->edge_cfg.header = 0x69326340;
+	data->edge_cfg.usb_status = 255;
+	data->edge_cfg.i2c_switch = I2C_TO_ACPU;
 	data->input_handler.event = edge_keyprotect_event;
 	data->input_handler.connect = edge_keyprotect_connect;
 	data->input_handler.disconnect = edge_keyprotect_disconnect;
@@ -2487,10 +2492,6 @@ struct iio_dev *nanohub_probe(struct device *dev, struct iio_dev *iio_dev)
 	data->fb_notifier.notifier_call = fb_notifier_callback;
 	fb_register_client(&data->fb_notifier);
 #endif
-#endif
-#ifdef CONFIG_NANOHUB_EDGE
-	data->edge_cfg.usb_status = 255;
-    data->edge_cfg.i2c_switch = I2C_TO_ACPU;
 #endif
 
 	s_data = data;
@@ -2645,6 +2646,14 @@ int nanohub_resume(struct iio_dev *iio_dev)
 	/*pr_info("nanohub: %s: write SENS_TYPE_HALL\n", __func__);*/
 	nanohub_comms_write_cfg_data(data, SENS_TYPE_HALL,
 		(uint8_t *)&data->hal_cfg, sizeof(struct hal_cfg_data));
+#endif
+
+#ifdef CONFIG_NANOHUB_EDGE
+	if(data->edge_cfg.key_status) {
+		nanohub_comms_write_cfg_data(data, SENS_TYPE_HTC_EDWK,
+			(uint8_t *)&data->edge_cfg, sizeof(struct edge_cfg_data));
+		data->edge_cfg.key_status = 0;
+	}
 #endif
 /* HTC_END */
 

@@ -763,9 +763,13 @@ static int wcd_control_handler(struct device *dev, void *priv_data,
 	case WDSP_EVENT_DLOAD_FAILED:
 	case WDSP_EVENT_POST_SHUTDOWN:
 
+/* HTC_AUD_START */
+#if 0
 		if (event == WDSP_EVENT_POST_DLOAD_CODE)
 			/* Mark DSP online since code download is complete */
 			wcd_cntl_change_online_state(cntl, 1);
+#endif
+/* HTC_AUD_END */
 
 		/* Disable CPAR */
 		wcd_cntl_cpar_ctrl(cntl, false);
@@ -775,6 +779,13 @@ static int wcd_control_handler(struct device *dev, void *priv_data,
 			dev_err(codec->dev,
 				"%s: Failed to disable clocks, err = %d\n",
 				__func__, ret);
+/* HTC_AUD_START - Notify online untill disable clock */
+		if (event == WDSP_EVENT_POST_DLOAD_CODE) {
+			/* Mark DSP online since code download is complete */
+			wcd_cntl_change_online_state(cntl, 1);
+			dev_info(codec->dev, "%s: change WDSP status to online after disable clock\n", __func__);
+		}
+/* HTC_AUD_END */
 		break;
 
 	case WDSP_EVENT_PRE_DLOAD_DATA:

@@ -196,7 +196,6 @@ struct dwc3_msm {
 	u32			bus_perf_client;
 	struct msm_bus_scale_pdata	*bus_scale_table;
 	struct power_supply	*usb_psy;
-	struct power_supply     *batt_psy;
 	struct work_struct	vbus_draw_work;
 	struct work_struct 	disable_work;
 	bool			in_host_mode;
@@ -3367,12 +3366,6 @@ static int dwc3_msm_host_notifier(struct notifier_block *nb,
 			return NOTIFY_DONE;
 	}
 
-	if (!mdwc->batt_psy) {
-		mdwc->batt_psy = power_supply_get_by_name("battery");
-		if (!mdwc->usb_psy)
-			return NOTIFY_DONE;
-	}
-
 	/*
 	 * For direct-attach devices, new udev is direct child of root hub
 	 * i.e. dwc -> xhci -> root_hub -> udev
@@ -3427,9 +3420,6 @@ static int dwc3_msm_host_notifier(struct notifier_block *nb,
 						audioInterface = true;
 				}
 			}
-
-			pval.intval = 0;
-			power_supply_set_property(mdwc->batt_psy, POWER_SUPPLY_PROP_EXT_OTG_CHG_CONTROL, &pval);
 
 			if (audioInterface) {
 				pval.intval = 1;

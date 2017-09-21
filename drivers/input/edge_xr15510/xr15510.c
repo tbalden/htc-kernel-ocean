@@ -1126,7 +1126,7 @@ static int xr15510_hw_reset(void)
 		EDGE_ERR_LOG("%s: gpio_direction_output failed for gpio_reset(%d).\n", __func__, ret);
 		return -EFAULT;
 	}
-	mdelay(150);
+	mdelay(1000);
 
 	EDGE_INFO_LOG("%s--\n", __func__);
 
@@ -1924,7 +1924,7 @@ static int firmware_update(bool force_update)
                     EDGE_ERR_LOG("%s: Firmware upgrade error\n", __func__);
             } else {
                 /* Chip ready time */
-                mdelay(350);
+                mdelay(1000);
                 fw_version = check_fw_version();
 
                 /* Retry scenario #2:

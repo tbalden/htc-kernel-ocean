@@ -173,6 +173,7 @@ MODULE_PARM_DESC(dig_core_collapse_timer, "timer for power gating");
 
 static int anc0_ff_a_gain;
 static int anc1_ff_a_gain;
+#define WCD934X_ANC_STEP_SIZE  1
 
 enum {
 	VI_SENSE_1,
@@ -567,7 +568,6 @@ struct spk_anc_work {
 };
 
 #define WCD934X_HPH_ANC_EN_DELAY_MS 500
-#define WCD934X_ANC_STEP_SIZE 1
 static int hph_anc_en_delay = WCD934X_HPH_ANC_EN_DELAY_MS;
 module_param(hph_anc_en_delay, int, S_IRUGO | S_IWUSR | S_IWGRP);
 MODULE_PARM_DESC(hph_anc_en_delay, "delay to enable anc in headphone path");
@@ -1183,12 +1183,6 @@ static int tavil_codec_enable_anc(struct snd_soc_dapm_widget *w,
 					    WCD934X_CDC_ANC1_FIFO_COMMON_CTL,
 					    0x66, 0x66);
 		}
-		if (!strcmp(w->name, "RX INT1 DAC"))
-			snd_soc_update_bits(codec,
-				WCD934X_CDC_ANC0_CLK_RESET_CTL, 0x38, 0x38);
-		else if (!strcmp(w->name, "RX INT2 DAC"))
-			snd_soc_update_bits(codec,
-				WCD934X_CDC_ANC1_CLK_RESET_CTL, 0x38, 0x38);
 
 		if (snd_soc_read(codec, WCD934X_CDC_ANC0_FF_A_GAIN_CTL)) {
 			anc0_ff_a_gain = snd_soc_read(codec,
@@ -1208,28 +1202,18 @@ static int tavil_codec_enable_anc(struct snd_soc_dapm_widget *w,
 		break;
 
 	case SND_SOC_DAPM_POST_PMU:
-		if (!strcmp(w->name, "ANC HPHL PA") ||
-		    !strcmp(w->name, "ANC HPHR PA")) {
-			/* Remove ANC Rx from reset */
-			snd_soc_update_bits(codec,
-					    WCD934X_CDC_ANC0_CLK_RESET_CTL,
-					    0x28, 0x00);
-			snd_soc_update_bits(codec,
-					    WCD934X_CDC_ANC1_CLK_RESET_CTL,
-					    0x28, 0x00);
-		}
 
 		break;
 
 	case SND_SOC_DAPM_POST_PMD:
 		if (!strcmp(w->name, "ANC HPHL PA"))
 			snd_soc_update_bits(codec,
-					    WCD934X_CDC_ANC0_RC_COMMON_CTL,
-					    0x05, 0x00);
+					WCD934X_CDC_ANC0_RC_COMMON_CTL,
+					0x05, 0x00);
 		if (!strcmp(w->name, "ANC HPHR PA"))
 			snd_soc_update_bits(codec,
-					    WCD934X_CDC_ANC1_RC_COMMON_CTL,
-					    0x05, 0x00);
+					WCD934X_CDC_ANC1_RC_COMMON_CTL,
+					0x05, 0x00);
 		if (!strcmp(w->name, "ANC EAR PA") ||
 		    !strcmp(w->name, "ANC SPK1 PA") ||
 		    !strcmp(w->name, "ANC HPHL PA")) {
@@ -1932,12 +1916,9 @@ static void tavil_hph_anc_update_callback(struct work_struct *work)
 	tavil = hph_anc_dwork->tavil;
 	codec = tavil->codec;
 
-	snd_soc_update_bits(codec, WCD934X_CDC_RX1_RX_PATH_CFG0, 0x10, 0x10);
-	snd_soc_update_bits(codec, WCD934X_CDC_RX2_RX_PATH_CFG0, 0x10, 0x10);
-
-
 	/* Ramp gain from 0 to anc0_ff_a_gain and anc1_ff_a_gain */
 	gain = WCD934X_ANC_STEP_SIZE;
+
 	while ((gain <= anc0_ff_a_gain) || (gain <= anc1_ff_a_gain)) {
 		if (gain >= anc0_ff_a_gain)
 			snd_soc_write(codec, WCD934X_CDC_ANC0_FF_A_GAIN_CTL,
@@ -1956,7 +1937,6 @@ static void tavil_hph_anc_update_callback(struct work_struct *work)
 		usleep_range(5000, 5500);
 		gain += WCD934X_ANC_STEP_SIZE;
 	}
-
 }
 
 static void tavil_spk_anc_update_callback(struct work_struct *work)
@@ -2077,35 +2057,6 @@ static void tavil_codec_clear_anc_tx_hold(struct tavil_priv *tavil)
 		tavil_codec_set_tx_hold(tavil->codec, WCD934X_ANA_AMIC4, false);
 }
 
-static void tavil_anc_ramp_down_anc_gain(struct snd_soc_codec *codec,
-		int gain, int reg)
-{
-
-	int gain1, gain2;
-
-	gain1 = snd_soc_read(codec, WCD934X_CDC_ANC0_FF_A_GAIN_CTL);
-	gain2 = snd_soc_read(codec, WCD934X_CDC_ANC1_FF_A_GAIN_CTL);
-
-	while ((gain1 > 0) || (gain2 > 0)) {
-		gain1 -= WCD934X_ANC_STEP_SIZE;
-		gain2 -= WCD934X_ANC_STEP_SIZE;
-
-		if (gain1 <= 0)
-			snd_soc_write(codec, WCD934X_CDC_ANC0_FF_A_GAIN_CTL, 0);
-		else
-			snd_soc_write(codec, WCD934X_CDC_ANC0_FF_A_GAIN_CTL,
-				gain1);
-
-		if (gain2 <= 0)
-			snd_soc_write(codec, WCD934X_CDC_ANC1_FF_A_GAIN_CTL, 0);
-		else
-			snd_soc_write(codec, WCD934X_CDC_ANC1_FF_A_GAIN_CTL,
-				gain2);
-
-		usleep_range(5000, 5500);
-	}
-}
-
 static int tavil_codec_enable_hphr_pa(struct snd_soc_dapm_widget *w,
 				      struct snd_kcontrol *kcontrol,
 				      int event)
@@ -2173,15 +2124,17 @@ static int tavil_codec_enable_hphr_pa(struct snd_soc_dapm_widget *w,
 		/* Enable GM3 boost */
 		snd_soc_update_bits(codec, WCD934X_HPH_CNP_WG_CTL,
 				    0x80, 0x80);
-		/* Enable AutoChop timer at the end of power up */
-		snd_soc_update_bits(codec, WCD934X_HPH_NEW_INT_HPH_TIMER1,
-				    0x02, 0x02);
 		/* Remove mix path mute if it is enabled */
 		if ((snd_soc_read(codec, WCD934X_CDC_RX2_RX_PATH_MIX_CTL)) &
 				  0x10)
 			snd_soc_update_bits(codec,
 					    WCD934X_CDC_RX2_RX_PATH_MIX_CTL,
 					    0x10, 0x00);
+		/* Enable AutoChop timer at the end of power up */
+		if (!strcmp(w->name, "HPHR PA"))
+			snd_soc_update_bits(codec,
+					WCD934X_HPH_NEW_INT_HPH_TIMER1,
+					0x02, 0x02);
 		if (dsd_conf &&
 		    (snd_soc_read(codec, WCD934X_CDC_DSD1_PATH_CTL) & 0x01))
 			snd_soc_update_bits(codec, WCD934X_CDC_DSD1_CFG2,
@@ -2205,6 +2158,9 @@ static int tavil_codec_enable_hphr_pa(struct snd_soc_dapm_widget *w,
 					WCD934X_CDC_RX1_RX_PATH_MIX_CTL,
 					0x10, 0x00);
 
+			snd_soc_update_bits(codec,
+					WCD934X_HPH_NEW_INT_HPH_TIMER1,
+					0x02, 0x02);
 			if (dsd_conf && (snd_soc_read(codec,
 						WCD934X_CDC_DSD0_PATH_CTL) &
 						0x01))
@@ -2238,8 +2194,6 @@ static int tavil_codec_enable_hphr_pa(struct snd_soc_dapm_widget *w,
 			snd_soc_update_bits(codec,
 					WCD934X_CDC_RX1_RX_PATH_MIX_CTL,
 					0x10, 0x10);
-			tavil_anc_ramp_down_anc_gain(codec, anc1_ff_a_gain,
-					WCD934X_CDC_ANC1_FF_A_GAIN_CTL);
 			snd_soc_update_bits(codec, WCD934X_ANA_HPH, 0x40, 0x00);
 		}
 		break;
@@ -2338,8 +2292,10 @@ static int tavil_codec_enable_hphl_pa(struct snd_soc_dapm_widget *w,
 		snd_soc_update_bits(codec, WCD934X_HPH_CNP_WG_CTL,
 				    0x80, 0x80);
 		/* Enable AutoChop timer at the end of power up */
-		snd_soc_update_bits(codec, WCD934X_HPH_NEW_INT_HPH_TIMER1,
-				    0x02, 0x02);
+		if (!strcmp(w->name, "HPHL PA"))
+			snd_soc_update_bits(codec,
+					WCD934X_HPH_NEW_INT_HPH_TIMER1,
+					0x02, 0x02);
 		/* Remove mix path mute if it is enabled */
 		if ((snd_soc_read(codec, WCD934X_CDC_RX1_RX_PATH_MIX_CTL)) &
 				  0x10)
@@ -2369,6 +2325,9 @@ static int tavil_codec_enable_hphl_pa(struct snd_soc_dapm_widget *w,
 				snd_soc_update_bits(codec,
 						WCD934X_CDC_RX2_RX_PATH_MIX_CTL,
 						0x10, 0x00);
+			snd_soc_update_bits(codec,
+					WCD934X_HPH_NEW_INT_HPH_TIMER1,
+					0x02, 0x02);
 			if (dsd_conf && (snd_soc_read(codec,
 					WCD934X_CDC_DSD1_PATH_CTL) & 0x01))
 				snd_soc_update_bits(codec,
@@ -2402,8 +2361,6 @@ static int tavil_codec_enable_hphl_pa(struct snd_soc_dapm_widget *w,
 			snd_soc_update_bits(codec,
 					WCD934X_CDC_RX2_RX_PATH_MIX_CTL,
 					0x10, 0x10);
-			tavil_anc_ramp_down_anc_gain(codec, anc0_ff_a_gain,
-					WCD934X_CDC_ANC0_FF_A_GAIN_CTL);
 			snd_soc_update_bits(codec, WCD934X_ANA_HPH,
 					    0x80, 0x00);
 		}
@@ -2597,9 +2554,8 @@ static int tavil_codec_hphr_dac_event(struct snd_soc_dapm_widget *w,
 			     hph_mode);
 		if (tavil->anc_func)
 			snd_soc_update_bits(codec,
-					WCD934X_CDC_RX2_RX_PATH_CFG0,
-					0x10, 0x10);
-
+					    WCD934X_CDC_RX2_RX_PATH_CFG0,
+					    0x10, 0x10);
 		break;
 	case SND_SOC_DAPM_POST_PMD:
 		/* 1000us required as per HW requirement */
@@ -2679,6 +2635,11 @@ static int tavil_codec_hphl_dac_event(struct snd_soc_dapm_widget *w,
 			     WCD_CLSH_STATE_HPHL,
 			     hph_mode);
 
+		if (tavil->anc_func)
+			snd_soc_update_bits(codec,
+					    WCD934X_CDC_RX1_RX_PATH_CFG0,
+					    0x10, 0x10);
+
 		ret = tavil_mbhc_get_impedance(tavil->mbhc,
 					       &impedl, &impedr);
 		if (!ret) {
@@ -2689,10 +2650,6 @@ static int tavil_codec_hphl_dac_event(struct snd_soc_dapm_widget *w,
 				__func__, ret);
 			ret = 0;
 		}
-		if (tavil->anc_func)
-			snd_soc_update_bits(codec,
-					WCD934X_CDC_RX1_RX_PATH_CFG0,
-					0x10, 0x10);
 
 		break;
 	case SND_SOC_DAPM_POST_PMD:
