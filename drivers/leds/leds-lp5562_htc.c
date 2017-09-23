@@ -1904,6 +1904,160 @@ extern int get_flash_blink_wait_inc(void);
 extern void set_flash_blink_wait_inc_max(int value);
 extern int get_flash_blink_wait_inc_max(void);
 
+extern void set_flash_haptic_mode(int value);
+extern int get_flash_haptic_mode(void);
+extern void set_flash_dim_mode(int value);
+extern int get_flash_dim_mode(void);
+extern void set_flash_dim_use_period(int value);
+extern int get_flash_dim_use_period(void);
+extern void set_flash_dim_period_hours(int startHour, int endHour);
+extern int get_flash_dim_period_hours(int *startEndHours);
+
+
+static ssize_t flash_dim_period_end_hour_show(struct device *dev,
+            struct device_attribute *attr, char *buf)
+{
+	int r[2];
+	get_flash_dim_period_hours(&r[0]);
+      return snprintf(buf, PAGE_SIZE, "%d\n", r[1]);
+}
+
+static ssize_t flash_dim_period_end_hour_dump(struct device *dev,
+            struct device_attribute *attr, const char *buf, size_t count)
+{
+      int ret;
+      unsigned long input;
+	int r[2];
+	get_flash_dim_period_hours(&r[0]);
+
+      ret = kstrtoul(buf, 0, &input);
+      if (ret < 0)
+            return ret;
+
+      if (input <= 0 || input > 23)
+            input = 6;
+	r[1] = input;
+	set_flash_dim_period_hours(r[0],r[1]);
+
+      return count;
+}
+static DEVICE_ATTR(bln_flash_dim_period_end_hour, (S_IWUSR|S_IRUGO),
+      flash_dim_period_end_hour_show, flash_dim_period_end_hour_dump);
+
+
+
+static ssize_t flash_dim_period_start_hour_show(struct device *dev,
+            struct device_attribute *attr, char *buf)
+{
+	int r[2];
+	get_flash_dim_period_hours(&r[0]);
+      return snprintf(buf, PAGE_SIZE, "%d\n", r[0]);
+}
+
+static ssize_t flash_dim_period_start_hour_dump(struct device *dev,
+            struct device_attribute *attr, const char *buf, size_t count)
+{
+      int ret;
+      unsigned long input;
+	int r[2];
+	get_flash_dim_period_hours(&r[0]);
+
+      ret = kstrtoul(buf, 0, &input);
+      if (ret < 0)
+            return ret;
+
+      if (input <= 0 || input > 23)
+            input = 22;
+	r[0] = input;
+	set_flash_dim_period_hours(r[0],r[1]);
+
+      return count;
+}
+static DEVICE_ATTR(bln_flash_dim_period_start_hour, (S_IWUSR|S_IRUGO),
+      flash_dim_period_start_hour_show, flash_dim_period_start_hour_dump);
+
+
+static ssize_t flash_dim_use_period_show(struct device *dev,
+            struct device_attribute *attr, char *buf)
+{
+      return snprintf(buf, PAGE_SIZE, "%d\n", get_flash_dim_use_period());
+}
+
+static ssize_t flash_dim_use_period_dump(struct device *dev,
+            struct device_attribute *attr, const char *buf, size_t count)
+{
+      int ret;
+      unsigned long input;
+
+      ret = kstrtoul(buf, 0, &input);
+      if (ret < 0)
+            return ret;
+
+      if (input < 0 || input > 1)
+            input = 1; // 0 - use, 1 - not use period
+
+	set_flash_dim_use_period(input);
+
+      return count;
+}
+static DEVICE_ATTR(bln_flash_dim_use_period, (S_IWUSR|S_IRUGO),
+      flash_dim_use_period_show, flash_dim_use_period_dump);
+
+
+static ssize_t flash_dim_mode_show(struct device *dev,
+            struct device_attribute *attr, char *buf)
+{
+      return snprintf(buf, PAGE_SIZE, "%d\n", get_flash_dim_mode());
+}
+
+static ssize_t flash_dim_mode_dump(struct device *dev,
+            struct device_attribute *attr, const char *buf, size_t count)
+{
+      int ret;
+      unsigned long input;
+
+      ret = kstrtoul(buf, 0, &input);
+      if (ret < 0)
+            return ret;
+
+      if (input < 0 || input > 2)
+            input = 1; // 0 no dim mode, 1 half the brightness, 2 fully blanked dim
+
+	set_flash_dim_mode(input);
+
+      return count;
+}
+static DEVICE_ATTR(bln_flash_dim_mode, (S_IWUSR|S_IRUGO),
+      flash_dim_mode_show, flash_dim_mode_dump);
+
+
+static ssize_t flash_haptic_mode_show(struct device *dev,
+            struct device_attribute *attr, char *buf)
+{
+      return snprintf(buf, PAGE_SIZE, "%d\n", get_flash_haptic_mode());
+}
+
+static ssize_t flash_haptic_mode_dump(struct device *dev,
+            struct device_attribute *attr, const char *buf, size_t count)
+{
+      int ret;
+      unsigned long input;
+
+      ret = kstrtoul(buf, 0, &input);
+      if (ret < 0)
+            return ret;
+
+      if (input < 0 || input > 1)
+            input = 1;
+
+	set_flash_haptic_mode(input);
+
+      return count;
+}
+static DEVICE_ATTR(bln_flash_haptic_mode, (S_IWUSR|S_IRUGO),
+      flash_haptic_mode_show, flash_haptic_mode_dump);
+
+
 static ssize_t flash_blink_show(struct device *dev,
             struct device_attribute *attr, char *buf)
 {
@@ -3229,6 +3383,11 @@ static int lp5562_led_probe(struct i2c_client *client
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_flash_blink_wait_sec);
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_flash_blink_wait_inc);
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_flash_blink_wait_inc_max);
+			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_flash_haptic_mode);
+			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_flash_dim_mode);
+			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_flash_dim_use_period);
+			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_flash_dim_period_start_hour);
+			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_flash_dim_period_end_hour);
 			g_led_led_data_bln = &cdata->leds[i];
 			alarm_init(&blinkstopfunc_rtc, ALARM_REALTIME,
 				blinkstop_rtc_callback);
