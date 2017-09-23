@@ -46,6 +46,8 @@ static struct work_struct flash_blink_work;
 static struct work_struct flash_start_blink_work;
 static struct work_struct flash_stop_blink_work;
 static struct workqueue_struct *flash_blink_workqueue;
+static struct workqueue_struct *flash_start_blink_workqueue;
+static struct workqueue_struct *flash_stop_blink_workqueue;
 #endif
 
 static struct v4l2_file_operations msm_flash_v4l2_subdev_fops;
@@ -117,11 +119,20 @@ static int currently_blinking = 0;
 #define DEFAULT_WAIT_INC 1
 #define DEFAULT_WAIT_INC_MAX 4
 
+// default switches
 static int flash_blink_on  = 1;
 static int flash_blink_number = DEFAULT_BLINK_NUMBER;
 static int flash_blink_wait_sec = DEFAULT_BLINK_WAIT_SEC;
 static int flash_blink_wait_inc = DEFAULT_WAIT_INC;
 static int flash_blink_wait_inc_max = DEFAULT_WAIT_INC_MAX;
+static int haptic_mode = 1; // 0 - always blink, 1 - only blink with haptic vibration notifications
+
+// dim mode switches
+static int dim_mode = 1; // 0 - no , 1 - darker dim flash, 2 - fully off dim
+static int dim_use_period = 1; // 0 - don't use dimming period hours, 1 - use hours, dim only between them
+static int dim_start_hour = 22; // start hour
+static int dim_end_hour = 6; // end hour
+
 
 void set_flash_blink_on(int value) {
 	flash_blink_on = !!value;
@@ -169,56 +180,134 @@ int get_flash_blink_wait_inc_max(void) {
 EXPORT_SYMBOL(get_flash_blink_wait_inc_max);
 
 
+void set_flash_haptic_mode(int value) {
+	haptic_mode = !!value;
+}
+EXPORT_SYMBOL(set_flash_haptic_mode);
+int get_flash_haptic_mode(void) {
+	return haptic_mode;
+}
+EXPORT_SYMBOL(get_flash_haptic_mode);
+
+void set_flash_dim_mode(int value) {
+	dim_mode = value%3; // 0/1/2
+}
+EXPORT_SYMBOL(set_flash_dim_mode);
+int get_flash_dim_mode(void) {
+	return dim_mode;
+}
+EXPORT_SYMBOL(get_flash_dim_mode);
+
+void set_flash_dim_use_period(int value) {
+	dim_use_period = !!value;
+}
+EXPORT_SYMBOL(set_flash_dim_use_period);
+int get_flash_dim_use_period(void) {
+	return dim_use_period;
+}
+EXPORT_SYMBOL(get_flash_dim_use_period);
+
+void set_flash_dim_period_hours(int startValue, int endValue) {
+	dim_start_hour = startValue;
+	dim_end_hour = endValue;
+}
+EXPORT_SYMBOL(set_flash_dim_period_hours);
+void get_flash_dim_period_hours(int *r) {
+//	int r[2] = {dim_start_hour, dim_end_hour};
+	r[0] = dim_start_hour;
+	r[1] = dim_end_hour;
+}
+EXPORT_SYMBOL(get_flash_dim_period_hours);
+
+
+
 
 static int current_blink_num = 0;
 static int interrupt_retime = 0;
 static DEFINE_MUTEX(flash_blink_lock);
+
+
+int get_hour_of_day(void) {
+	struct timespec ts;
+	unsigned long local_time;
+	getnstimeofday(&ts);
+	local_time = (u32)(ts.tv_sec - (sys_tz.tz_minuteswest * 60));
+	return (local_time / 3600) % (24);
+}
+
+int is_dim_blink_needed(void)
+{
+	int hour = get_hour_of_day();
+	int in_dim_period = 0;
+
+	if (!dim_mode) return 0;
+
+	pr_info("%s hour %d\n",__func__,hour);
+	in_dim_period = (dim_use_period && ( (dim_start_hour>dim_end_hour && ( (hour<24 && hour>=dim_start_hour) || (hour>=0 && hour<dim_end_hour) )) || (dim_start_hour<dim_end_hour && hour>=dim_start_hour && hour<dim_end_hour)));
+
+	if (dim_mode && (!dim_use_period || (dim_use_period && in_dim_period))) return dim_mode;
+	return 0;
+}
+
+#define DIM_USEC 10
 
 void do_flash_blink(void) {
 	ktime_t wakeup_time;
 	ktime_t curr_time = { .tv64 = 0 };
 	int count = 0;
 	int limit = 3;
+	int dim = 0;
 
 	pr_info("%s flash_blink\n",__func__);
 	if (currently_torch_mode || interrupt_retime) return;
 
+	dim = is_dim_blink_needed();
+	pr_info("%s dim %d\n",__func__,dim);
+
+	if (dim==2) {
+		currently_blinking = 0;
+		goto exit;
+	}
 
 	htc_flash_main(0,0);
 
-	if (flash_blink_wait_inc) {
+	if (flash_blink_wait_inc && !dim) {
 		// while in the first fast paced periodicity, don't do that much of flashing in one blink...
 		if (current_blink_num < 16) limit = 2;
 		if (current_blink_num > 30) limit = 4;
 		if (current_blink_num > 40) limit = 5;
 	}
 
+	limit -= dim * 2;
+
 	while (count++<limit) {
 	htc_torch_main(150,0);  // [o] [ ]
-	udelay(129);
+	udelay(129 - dim * DIM_USEC);
 	htc_torch_main(0,0);	// [ ] [ ]
 	udelay(15000);
 
 	htc_torch_main(0,150);  // [ ] [o]
-	udelay(129);
+	udelay(129 - dim * DIM_USEC);
 	htc_torch_main(0,0);	// [ ] [ ]
 	udelay(15000);
 
-	htc_torch_main(150,0);  // [o] [ ]
-	udelay(129);
-	htc_torch_main(0,0);	// [ ] [ ]
-	udelay(15000);
-
-	htc_torch_main(0,150);  // [ ] [o]
-	udelay(129);
-	htc_torch_main(0,0);	// [ ] [ ]
-	udelay(15000);
-
-	htc_torch_main(150,0);  // [o] [ ]
-	udelay(129);
-	htc_torch_main(0,0);	// [ ] [ ]
-	if (count==1) {
+	if (!dim) {
+		htc_torch_main(150,0);  // [o] [ ]
+		udelay(129 - dim * DIM_USEC);
+		htc_torch_main(0,0);	// [ ] [ ]
 		udelay(15000);
+
+		htc_torch_main(0,150);  // [ ] [o]
+		udelay(129 - dim * DIM_USEC);
+		htc_torch_main(0,0);	// [ ] [ ]
+		udelay(15000);
+
+		htc_torch_main(150,0);  // [o] [ ]
+		udelay(129 - dim * DIM_USEC);
+		htc_torch_main(0,0);	// [ ] [ ]
+		if (count==1) {
+			udelay(15000);
+		}
 	}
 	}
 
@@ -271,6 +360,7 @@ static void flash_start_blink_work_func(struct work_struct *work)
 		current_blink_num = 0;
 		mutex_unlock(&flash_blink_lock);
 		queue_work(flash_blink_workqueue, &flash_blink_work);
+//		do_flash_blink();
 		pr_info("%s flash_blink unlock\n",__func__);
 	}
 }
@@ -292,11 +382,16 @@ exit:
 	pr_info("%s flash_blink unlock\n",__func__);
 }
 
-void flash_blink(void) {
+void flash_blink(bool haptic) {
 	pr_info("%s flash_blink\n",__func__);
+	// is flash blink on?
 	if (!flash_blink_on) return;
+	// if not a haptic notificcation and haptic blink mode on, do not do blinking...
+	if (!haptic && haptic_mode) return;
+	// if torch i on, don't blink
 	if (currently_torch_mode) return;
-	queue_work(flash_blink_workqueue, &flash_start_blink_work);
+
+	queue_work(flash_start_blink_workqueue, &flash_start_blink_work);
 }
 EXPORT_SYMBOL(flash_blink);
 
@@ -311,6 +406,7 @@ static enum alarmtimer_restart flash_blink_rtc_callback(struct alarm *al, ktime_
 	pr_info("%s flash_blink\n",__func__);
 	if (!interrupt_retime) {
 		queue_work(flash_blink_workqueue, &flash_blink_work);
+//		do_flash_blink();
 	}
 	return ALARMTIMER_NORESTART;
 }
@@ -318,7 +414,7 @@ static enum alarmtimer_restart flash_blink_rtc_callback(struct alarm *al, ktime_
 
 void flash_stop_blink(void) {
 	pr_info("%s flash_blink\n",__func__);
-	queue_work(flash_blink_workqueue, &flash_stop_blink_work);
+	queue_work(flash_stop_blink_workqueue, &flash_stop_blink_work);
 }
 EXPORT_SYMBOL(flash_stop_blink);
 
@@ -1893,6 +1989,8 @@ static int __init msm_flash_init_module(void)
 	alarm_init(&flash_blink_rtc, ALARM_REALTIME,
 		flash_blink_rtc_callback);
 	flash_blink_workqueue = alloc_workqueue("flash_blink", WQ_HIGHPRI, 1);
+	flash_start_blink_workqueue = alloc_workqueue("flash_start_blink", WQ_HIGHPRI, 1);
+	flash_stop_blink_workqueue = alloc_workqueue("flash_stop_blink", WQ_HIGHPRI, 1);
 	INIT_WORK(&flash_blink_work, flash_blink_work_func);
 	INIT_WORK(&flash_start_blink_work, flash_start_blink_work_func);
 	INIT_WORK(&flash_stop_blink_work, flash_stop_blink_work_func);

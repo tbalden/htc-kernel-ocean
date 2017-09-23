@@ -865,7 +865,7 @@ static void virtual_key_led_blink(int onoff, int dim)
 	}
 }
 
-extern void flash_blink(void);
+extern void flash_blink(bool haptic);
 extern void flash_stop_blink(void);
 
 static int blink_running = 0;
@@ -1188,7 +1188,7 @@ int register_haptic(int value)
 				queue_work(g_led_work_queue, &vk_blink_work);
 			}
 			// call flash blink for flashlight notif
-			flash_blink();
+			flash_blink(true);
 		}
 	}
 	last_value = value;
@@ -1287,7 +1287,7 @@ static void lp5562_color_blink(struct i2c_client *client, uint8_t red, uint8_t g
 			queue_work(g_led_work_queue, &vk_blink_work);
 		}
 		if (vk_screen_is_off()) {
-			flash_blink();
+			flash_blink(false);
 		}
 		if (!pulse_rgb_blink) {
 		green = green / rgb_coeff_divider;
