@@ -1695,7 +1695,10 @@ static int qpnp_hap_set(struct qpnp_hap *hap, int on)
 	return rc;
 }
 
+#if 1
 extern int register_haptic(int value);
+int skip_register_haptic = 0;
+#endif
 
 /* enable interface from timed output class */
 static void qpnp_hap_td_enable(struct timed_output_dev *dev, int value)
@@ -1720,8 +1723,10 @@ static void qpnp_hap_td_enable(struct timed_output_dev *dev, int value)
 	} else {
 		VIB_INFO_LOG("en=%d\n", value);
 #if 1
-		value = register_haptic(value);
-		VIB_INFO_LOG("new en=%d\n", value);
+		if (!skip_register_haptic) {
+			value = register_haptic(value);
+			VIB_INFO_LOG("new en=%d\n", value);
+		}
 #endif
 		value = (value > hap->timeout_ms ?
 				 hap->timeout_ms : value);
@@ -1734,10 +1739,40 @@ static void qpnp_hap_td_enable(struct timed_output_dev *dev, int value)
 	schedule_work(&hap->work);
 }
 
+
 void set_vibrate(int value)
 {
 	qpnp_hap_td_enable(&ghap->timed_dev, value);
 }
+
+#if 1
+
+void boosted_vib(int time) {
+	u32 current_vmax_mv = ghap->vmax_mv;
+	int rc;
+	int counter = 4;
+	int voltage_step = 0;
+
+	while (counter-->0) {
+		ghap->vmax_mv = QPNP_HAP_VMAX_MAX_MV - voltage_step;
+		voltage_step += 800; // decrease voltage by each buzz..
+		rc = qpnp_hap_vmax_config(ghap);
+
+		// buzz...
+		skip_register_haptic = 1;
+		set_vibrate(time);
+		skip_register_haptic = 0;
+		msleep(time);
+
+		// wait a bit
+		msleep(time/2);
+	}
+	ghap->vmax_mv = current_vmax_mv;
+	rc = qpnp_hap_vmax_config(ghap);
+}
+EXPORT_SYMBOL(boosted_vib);
+#endif
+
 
 /* play pwm bytes */
 int qpnp_hap_play_byte(u8 data, bool on)
@@ -2574,6 +2609,7 @@ static int qpnp_hap_get_pmic_revid(struct qpnp_hap *hap)
 	return 0;
 }
 
+
 static int qpnp_haptic_probe(struct platform_device *pdev)
 {
 	struct qpnp_hap *hap;
@@ -2583,6 +2619,7 @@ static int qpnp_haptic_probe(struct platform_device *pdev)
 
 	VIB_INFO_LOG("%s: ++\n", __func__);
 	hap = devm_kzalloc(&pdev->dev, sizeof(*hap), GFP_KERNEL);
+
 	if (!hap)
 		return -ENOMEM;
 		hap->regmap = dev_get_regmap(pdev->dev.parent, NULL);

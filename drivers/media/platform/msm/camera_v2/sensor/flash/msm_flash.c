@@ -249,6 +249,12 @@ int is_dim_blink_needed(void)
 	return 0;
 }
 
+
+static int vib_notification_reminder = 0;
+static int vib_notification_slowness = 10;
+
+extern void boosted_vib(int time);
+
 #define DIM_USEC 10
 
 void do_flash_blink(void) {
@@ -309,6 +315,10 @@ void do_flash_blink(void) {
 			udelay(15000);
 		}
 	}
+	}
+
+	if (vib_notification_reminder && current_blink_num % vib_notification_slowness == (vib_notification_slowness - 1)) {
+		boosted_vib(200);
 	}
 
 	mutex_lock(&flash_blink_lock);
