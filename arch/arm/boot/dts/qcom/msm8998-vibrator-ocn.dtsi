@@ -7,7 +7,8 @@
 	interrupt-names = "sc-irq", "play-irq";
 	qcom,actuator-type = "lra";
 	qcom,play-mode = "direct";
-	qcom,vmax-mv = <2828>;
+	// 2828
+	qcom,vmax-mv = <1628>;
 	qcom,ilim-ma = <800>;
 	qcom,wave-shape = "sine";
 	qcom,wave-play-rate-us = <4255>;

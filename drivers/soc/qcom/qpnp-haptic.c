@@ -792,6 +792,10 @@ static int qpnp_hap_play_mode_config(struct qpnp_hap *hap)
 	return 0;
 }
 
+#if 1
+static u64 stored_vmax_mv = 0;
+#endif
+
 /* configuration api for max volatge */
 static int qpnp_hap_vmax_config(struct qpnp_hap *hap)
 {
@@ -813,7 +817,6 @@ static int qpnp_hap_vmax_config(struct qpnp_hap *hap)
 	if (rc)
 		return rc;
 	VIB_INFO_LOG("Set Vmax=%d, reg=0x%x", hap->vmax_mv, reg);
-
 	return 0;
 }
 
@@ -1324,6 +1327,9 @@ static ssize_t qpnp_hap_voltage_level_store(struct device *dev,
 	input = simple_strtoul(buf, NULL, 10);
 	hap->vmax_mv = input;
 
+#if 1
+	stored_vmax_mv = hap->vmax_mv;
+#endif
 	rc = qpnp_hap_vmax_config(hap);
 	if (rc < 0)
 		VIB_ERR_LOG("qpnp_hap_vmax_config set failed(%d)", rc);
@@ -1696,7 +1702,23 @@ static int qpnp_hap_set(struct qpnp_hap *hap, int on)
 }
 
 #if 1
+
+#define VMAX_MV_NOTIFICATION QPNP_HAP_VMAX_MAX_MV
+#define MIN_TD_VALUE_NOTIFICATION 100
+static int notification_booster = 2;
+static int vmax_needs_reset = 0;
+
+void set_notification_booster(int value) {
+	notification_booster = value;
+}
+EXPORT_SYMBOL(set_notification_booster);
+int get_notification_booster(void) {
+	return notification_booster;
+}
+EXPORT_SYMBOL(get_notification_booster);
+
 extern int register_haptic(int value);
+extern int input_is_screen_on(void);
 int skip_register_haptic = 0;
 #endif
 
@@ -1727,6 +1749,25 @@ static void qpnp_hap_td_enable(struct timed_output_dev *dev, int value)
 			value = register_haptic(value);
 			VIB_INFO_LOG("new en=%d\n", value);
 		}
+
+		if (notification_booster && !input_is_screen_on()) {
+			if (value>=MIN_TD_VALUE_NOTIFICATION) {
+				if (!vmax_needs_reset) {
+					u32 new_val = stored_vmax_mv * (notification_booster+1);
+					if (new_val > VMAX_MV_NOTIFICATION) new_val = VMAX_MV_NOTIFICATION;
+					hap->vmax_mv = new_val;
+					qpnp_hap_vmax_config(hap);
+					vmax_needs_reset = 1;
+				}
+				goto skip_reset; // this time skip reset part!
+			}
+		}
+		if (vmax_needs_reset) {
+			hap->vmax_mv = stored_vmax_mv;
+			qpnp_hap_vmax_config(hap);
+			vmax_needs_reset = 0;
+		}
+skip_reset:
 #endif
 		value = (value > hap->timeout_ms ?
 				 hap->timeout_ms : value);
@@ -2051,6 +2092,9 @@ static int qpnp_hap_config(struct qpnp_hap *hap)
 	if (rc)
 		return rc;
 
+#if 1
+	stored_vmax_mv = hap->vmax_mv;
+#endif
 	/* Configure the VMAX register */
 	rc = qpnp_hap_vmax_config(hap);
 	if (rc)
