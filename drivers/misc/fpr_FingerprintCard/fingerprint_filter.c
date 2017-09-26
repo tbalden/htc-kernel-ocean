@@ -57,6 +57,15 @@ static int squeeze_peek_wait = 0;
 	// full screen on flag
 	static int screen_on_full = 1;
 	struct notifier_block *fb_notifier;
+
+int input_is_screen_on(void) {
+	return screen_on;
+}
+EXPORT_SYMBOL(input_is_screen_on);
+
+extern void set_notification_booster(int value);
+extern int get_notification_booster(void);
+
 #endif
 
 // value used to signal that HOME button release event should be synced as well in home button func work if it was not interrupted.
@@ -495,7 +504,7 @@ static void ts_scroll_emulate(int down, int full) {
 	// if last scroll close enough, double round of swipe, if it's intended to be a full swipe...
 	if (last_scroll_time_diff <= SWIPE_ACCELERATED_TIME_LIMIT && !swipe_longcount_finished && full) {
 		pr_info("%s ts_input ###### double speed swipe ####### diff %u swipe longcount finished %d\n",__func__, last_scroll_time_diff, swipe_longcount_finished);
-		rounds = 2;
+//		rounds = 2;
 		double_swipe = 1;
 	}
 
@@ -520,14 +529,14 @@ static void ts_scroll_emulate(int down, int full) {
 	}
 	while (--rounds>=0) {
 		y_diff = down?300:0;
-		y_delta = down?-2:2;
-		y_steps = full>0?400:(full==0?70:60);
+		y_delta = down?-3:3;
+		y_steps = full>0?70:(full==0?50:50);
 		pr_info("%s ts_input ######### squeeze emulation started ######### rounds %d \n",__func__, rounds);
 
 		// speedy swipe for doubled rounds...
 		if (double_swipe) {
-			y_delta *= 2; // bigger delta for speed
-			y_steps /= 3; // fewer steps, to not run out of screen
+			y_delta = down?-5:5; // bigger delta for speed
+			y_steps = 160; // fewer steps, to not run out of screen
 			swipe_step_wait_time_mul = 300 - ( (( (SWIPE_ACCELERATED_TIME_LIMIT/JIFFY_MUL) - (last_scroll_time_diff/JIFFY_MUL))*2)/1 ); // 300 - 0
 			if (swipe_step_wait_time_mul > 85) last_swipe_very_quick = 0;
 			if (!last_swipe_very_quick && swipe_step_wait_time_mul < 85) last_swipe_very_quick = 1;
@@ -539,9 +548,13 @@ static void ts_scroll_emulate(int down, int full) {
 
 		} else {
 			if (full>0) {
-				swipe_step_wait_time_mul = 100;
+				swipe_step_wait_time_mul = 110;
 			} else {
-				swipe_step_wait_time_mul = 150;
+				if (full==0) {
+					swipe_step_wait_time_mul = 170;
+				} else {
+					swipe_step_wait_time_mul = 250;
+				}
 			}
 		}
 
@@ -573,7 +586,7 @@ static void ts_scroll_emulate(int down, int full) {
 		pr_info("%s ts_input ######### squeeze emulation ended #########\n",__func__);
 	}
 	if (pseudo_rnd>4) pseudo_rnd = 0;
-	msleep(1);
+	msleep(100);
 	mutex_unlock(&squeeze_swipe_lock);
 	pr_info("%s ts_input ######### squeeze unlock #########\n",__func__);
 }
@@ -1006,15 +1019,20 @@ static bool ts_input_filter(struct input_handle *handle,
 					// X direction TODO
 				} else {
 					// Y direction
-					if (last_y>c_y) { // swiping up
-						if (squeeze_swipe_dir == 0) {
-							last_scroll_emulate_timestamp = 0; // direction change, make the first scroll slow by putting this timestamp 0
-							squeeze_swipe_dir = 1; // SCROLL DOWN
-						}
-					} else if (last_y < c_y) { // swiping down
-						if (squeeze_swipe_dir == 1) {
-							last_scroll_emulate_timestamp = 0; // direction change, make the first scroll slow by putting this timestamp 0
-							squeeze_swipe_dir = 0; // SCROLL UP
+					if (c_x<110 || c_x>1300) {//too much on the edge, accidental touchscreen... 
+					} else {
+						if (last_y>c_y) { // swiping up
+							if (squeeze_swipe_dir == 0) {
+								last_scroll_emulate_timestamp = 0; // direction change, make the first scroll slow by putting this timestamp 0
+								squeeze_swipe_dir = 1; // SCROLL DOWN
+								pr_info("%s ts_input filtering TURNING DIRECTION ON INPUT FILTER c_x %d c_y %d \n",__func__,c_x,c_y);
+							}
+						} else if (last_y < c_y) { // swiping down
+							if (squeeze_swipe_dir == 1) {
+								last_scroll_emulate_timestamp = 0; // direction change, make the first scroll slow by putting this timestamp 0
+								squeeze_swipe_dir = 0; // SCROLL UP
+								pr_info("%s ts_input filtering TURNING DIRECTION ON INPUT FILTER c_x %d c_y %d \n",__func__,c_x,c_y);
+							}
 						}
 					}
 				}
@@ -1205,6 +1223,7 @@ static ssize_t vib_strength_dump(struct device *dev,
 static DEVICE_ATTR(vib_strength, (S_IWUSR|S_IRUGO),
 	vib_strength_show, vib_strength_dump);
 
+// ------------------- squeeze
 static ssize_t squeeze_sleep_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
@@ -1360,10 +1379,10 @@ static ssize_t squeeze_swipe_dump(struct device *dev,
 		return ret;
 
 	if (input < 0 || input > 1)
-		input = 0;				
+		input = 0;
 
-	squeeze_swipe = input;			
-	
+	squeeze_swipe = input;
+
 	return count;
 }
 
@@ -1387,16 +1406,44 @@ static ssize_t squeeze_swipe_vibration_dump(struct device *dev,
 		return ret;
 
 	if (input < 0 || input > 1)
-		input = 0;				
+		input = 0;
 
-	squeeze_swipe_vibration = input;			
-	
+	squeeze_swipe_vibration = input;
+
 	return count;
 }
 
 static DEVICE_ATTR(squeeze_swipe_vibration, (S_IWUSR|S_IRUGO),
 	squeeze_swipe_vibration_show, squeeze_swipe_vibration_dump);
 
+// -------------------- notification booster
+static ssize_t notification_booster_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", get_notification_booster());
+}
+
+static ssize_t notification_booster_dump(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int ret;
+	unsigned long input;
+
+	ret = kstrtoul(buf, 0, &input);
+	if (ret < 0)
+		return ret;
+
+	if (input < 0 || input > 100)
+		input = 0;
+
+	set_notification_booster(input);
+
+	return count;
+}
+
+static DEVICE_ATTR(notification_booster, (S_IWUSR|S_IRUGO),
+	notification_booster_show, notification_booster_dump);
+// --------------------------------------------------
 
 static struct kobject *fpf_kobj;
 
@@ -1545,6 +1592,10 @@ static int __init fpf_init(void)
 	rc = sysfs_create_file(fpf_kobj, &dev_attr_squeeze_swipe_vibration.attr);
 	if (rc)
 		pr_err("%s: sysfs_create_file failed for sswipevibr\n", __func__);
+
+	rc = sysfs_create_file(fpf_kobj, &dev_attr_notification_booster.attr);
+	if (rc)
+		pr_err("%s: sysfs_create_file failed for notif booster\n", __func__);
 
 	rc = sysfs_create_file(fpf_kobj, &dev_attr_squeeze_max_power_level.attr);
 	if (rc)
