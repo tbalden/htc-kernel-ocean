@@ -988,6 +988,11 @@ static int last_x = 0, last_y = 0;
 static int c_x = 0, c_y = 0;
 static unsigned long last_ts_timestamp = 0;
 
+static unsigned long last_vol_key_1_timestamp = 0;
+static unsigned long last_vol_key_2_timestamp = 0;
+
+extern void register_double_volume_key_press(void);
+
 static bool ts_input_filter(struct input_handle *handle,
                                     unsigned int type, unsigned int code,
                                     int value)
@@ -996,6 +1001,25 @@ static bool ts_input_filter(struct input_handle *handle,
 	//pr_info("%s ts input filter called t %d c %d v %d\n",__func__, type,code,value);
 	if (type == EV_ABS && code == ABS_MT_TRACKING_ID && value!=-1) {
 		last_mt_slot = value;
+	}
+
+	if (type == EV_KEY) {
+		pr_info("%s ts_input key %d %d %d\n",__func__,type,code,value);
+	}
+
+	if (type == EV_KEY && code == KEY_VOLUMEUP && value == 0) {
+		last_vol_key_1_timestamp = jiffies;
+		if (last_vol_key_1_timestamp - last_vol_key_2_timestamp < 4) {
+			register_double_volume_key_press();
+		}
+		goto skip_ts;
+	}
+	if (type == EV_KEY && code == KEY_VOLUMEDOWN && value == 0) {
+		last_vol_key_2_timestamp = jiffies;
+		if (last_vol_key_2_timestamp - last_vol_key_1_timestamp < 4) {
+			register_double_volume_key_press();
+		}
+		goto skip_ts;
 	}
 
 	if (mutex_is_locked(&squeeze_swipe_lock)) {
@@ -1044,6 +1068,7 @@ static bool ts_input_filter(struct input_handle *handle,
 	}
 
 #endif
+skip_ts:
 	if (screen_on_full) {
 		squeeze_peek_wait = 0; // interrupt peek wait, touchscreen was interacted, don't turn screen off after peek time over...
 	}
@@ -1061,7 +1086,8 @@ static void ts_input_event(struct input_handle *handle, unsigned int type,
 static int ts_input_dev_filter(struct input_dev *dev) {
 	if (
 		strstr(dev->name, "himax-touchscreen") ||
-		strstr(dev->name, "cyttsp")
+		strstr(dev->name, "cyttsp") ||
+		strstr(dev->name, "gpio")
 	    ) {
 		// storing static ts_device for using outside this handle context as well
 		if (strstr(dev->name, "cyttsp")) ts_device = dev;

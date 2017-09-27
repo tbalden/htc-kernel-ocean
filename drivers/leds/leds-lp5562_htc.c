@@ -92,6 +92,7 @@ static int bln_dim_blink = 0; // continue quarter strength blinking after bln_nu
 static int bln_dim_number = 0;//BUTTON_BLINK_NUMBER_DEFAULT * 2; // infinite = 0 - number of max dim button blinks when not on charger
 static int full_or_dim = 1;
 
+static int lights_down_divider = 1;
 static int rgb_coeff_divider = 1; // value between 1 - 20
 static int bln_coeff_divider = 6; // value between 1 - 20
 
@@ -667,7 +668,7 @@ static int vk_led_step(uint8_t command_data[], int reg_index, uint8_t brightness
 	if (set_brightness) {
 		/*=== Set PWM to brightness ===*/
 		command_data[reg_index++] = 0x40;
-		command_data[reg_index++]  = brightness / bln_coeff_divider;
+		command_data[reg_index++]  = brightness / (bln_coeff_divider * lights_down_divider);
 	}
 
 	/*=== wait for time ===*/
@@ -734,7 +735,7 @@ static void virtual_key_led_blink(int onoff, int dim)
 	struct i2c_client *client = private_lp5562_client;
 	int ret = 0, reg_index = 0;
 	int dim_division = (onoff?0:dim)?8:1;
-	int dimming = (dim_division * bln_coeff_divider);
+	int dimming = (dim_division * bln_coeff_divider * lights_down_divider);
 	int step_time = pulse_rgb_pattern == RGB_PATTERN_ONEPLUS5 ? 7:3;
 	uint8_t data;
 	uint8_t ramp_data[2] = {0x00,0x00};
@@ -980,8 +981,8 @@ static void led_set_multicolor(int onoff, int red, int green){
 	I(" %s , set display_flag = %d red %d green %d \n" , __func__, onoff, red, green);
 	if(onoff){
 		g_led_led_data_bln->Mode = 1;
-		g_led_led_data_bln->Red = red / rgb_coeff_divider;
-		g_led_led_data_bln->Green = green / rgb_coeff_divider;
+		g_led_led_data_bln->Red = red / (rgb_coeff_divider*lights_down_divider);
+		g_led_led_data_bln->Green = green / (rgb_coeff_divider*lights_down_divider);
 		g_led_led_data_bln->Blue = 0;
 		queue_work(g_led_work_queue, &g_led_led_data_bln->led_work_multicolor);
 	}else {
@@ -1001,7 +1002,7 @@ static int color_blink_step_by_color(struct i2c_client *client, uint8_t brightne
 	/* # === set pwm brightness === */
 	data = 0x40;
 	ret = i2c_write_block(client, (red?CMD_ENG_1_BASE:CMD_ENG_2_BASE) + reg_index++, &data, 1);
-	data = brightness / rgb_coeff_divider;
+	data = brightness / (rgb_coeff_divider*lights_down_divider);
 	ret = i2c_write_block(client, (red?CMD_ENG_1_BASE:CMD_ENG_2_BASE) + reg_index++, &data, 1);
 	/* === wait time === */
 	data = time;
@@ -1184,11 +1185,13 @@ int register_haptic(int value)
 			} else {
 				short_vib_notif = 0;
 			}
-			if (!vk_led_blink && bln_switch) { // removing "&& charging" so if only haptic signals notification and not the system it still sets it on
+			if (!vk_led_blink && bln_switch && ((!charging && lights_down_divider==1) || charging) ) { // do not trigger blink if not on charger and lights down mode
 				queue_work(g_led_work_queue, &vk_blink_work);
 			}
-			// call flash blink for flashlight notif
-			flash_blink(true);
+			// call flash blink for flashlight notif if lights_down mode (>1) is not active...
+			if (lights_down_divider==1) {
+				flash_blink(true);
+			}
 		}
 	}
 	last_value = value;
@@ -1196,6 +1199,14 @@ int register_haptic(int value)
 }
 
 EXPORT_SYMBOL(register_haptic);
+
+extern void set_vibrate(int value);
+
+void register_double_volume_key_press(void) {
+	pr_info("%s gpio -> lights down divider - %d\n",__func__,lights_down_divider);
+	if (lights_down_divider==1) {lights_down_divider = 16; set_vibrate(401);} else lights_down_divider = 1;
+}
+EXPORT_SYMBOL(register_double_volume_key_press);
 
 /* BLN - color blink codes */
 static int color_blink_step(struct i2c_client *client, uint8_t brightness, uint8_t time, int reg_index)
@@ -1205,7 +1216,7 @@ static int color_blink_step(struct i2c_client *client, uint8_t brightness, uint8
 	/* # === set pwm brightness === */
 	data = 0x40;
 	ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
-	data = brightness / rgb_coeff_divider;
+	data = brightness / (rgb_coeff_divider*lights_down_divider);
 	ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
 	/* === wait time === */
 	data = time;
@@ -1221,7 +1232,7 @@ static void lp5562_color_blink(struct i2c_client *client, uint8_t red, uint8_t g
 {
 	uint8_t data = 0x00;
 	uint8_t ramp_data[2] = {0x00,0x00};
-	int dimming = rgb_coeff_divider;
+	int dimming = (rgb_coeff_divider*lights_down_divider);
 
 	int ret, reg_index = 0;
 	uint8_t mode = 0x00;
@@ -1283,14 +1294,14 @@ static void lp5562_color_blink(struct i2c_client *client, uint8_t red, uint8_t g
 #ifdef CONFIG_LEDS_QPNP_BUTTON_BLINK
 		// BLN
 		// sysfs configuation bln_no_charger_switch == 1 -> always blink even if not on charger
-		if (bln_switch && bln_no_charger_switch && vk_screen_is_off()) {
+		if (bln_switch && bln_no_charger_switch && (lights_down_divider==1) && vk_screen_is_off()) {
 			queue_work(g_led_work_queue, &vk_blink_work);
 		}
-		if (vk_screen_is_off()) {
+		if (vk_screen_is_off() && (lights_down_divider==1)) { // only flash if lights_down mode is not active...
 			flash_blink(false);
 		}
 		if (!pulse_rgb_blink) {
-		green = green / rgb_coeff_divider;
+		green = green / (rgb_coeff_divider*lights_down_divider);
 #endif
 		/* === set green pwm === */
 		data = 0x40;
@@ -2743,8 +2754,8 @@ static ssize_t lp5562_led_multi_color_store(struct device *dev,
 		return count;
 	}
 	if (supposedly_charging) {
-		ldata->Red = ((val/rgb_coeff_divider) & Red_Mask) >> 16;
-		ldata->Green = ((val/rgb_coeff_divider) & Green_Mask) >> 8;
+		ldata->Red = ((val/(rgb_coeff_divider*lights_down_divider)) & Red_Mask) >> 16;
+		ldata->Green = ((val/(rgb_coeff_divider*lights_down_divider)) & Green_Mask) >> 8;
 	}
 #endif
 	queue_work(g_led_work_queue, &ldata->led_work_multicolor);
@@ -2775,7 +2786,7 @@ static void lp5562_vk_led_set_brightness(struct led_classdev *led_cdev,
 {
 	struct lp5562_led *ldata;
 #ifdef CONFIG_LEDS_QPNP_BUTTON_BLINK
-	int divider = bln_coeff_divider>8?4:(bln_coeff_divider<3?1:(bln_coeff_divider/2));
+	int divider = bln_coeff_divider*lights_down_divider>8?4:(bln_coeff_divider<3?1:(bln_coeff_divider/2));
 #endif
 	ldata = container_of(led_cdev, struct lp5562_led, cdev);
 	ldata->VK_brightness = brightness == LED_FULL? 256 : brightness;
