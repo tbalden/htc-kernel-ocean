@@ -1703,10 +1703,17 @@ static int qpnp_hap_set(struct qpnp_hap *hap, int on)
 
 #if 1
 
-#define VMAX_MV_NOTIFICATION QPNP_HAP_VMAX_MAX_MV
+#define VMAX_MV_NOTIFICATION QPNP_HAP_VMAX_MAX_MV-200
 #define MIN_TD_VALUE_NOTIFICATION 100
+// sense framework based values, 1000 for call, 500 for alarm
+#define MIN_TD_VALUE_NOTIFICATION_CALL 1000
+#define MIN_TD_VALUE_NOTIFICATION_ALARM 500
+
 static int notification_booster = 2;
 static int vmax_needs_reset = 0;
+static int alarm_value_counter = 0;
+static int last_value = 0;
+static unsigned long last_alarm_value_jiffies = 0;
 
 void set_notification_booster(int value) {
 	notification_booster = value;
@@ -1750,11 +1757,46 @@ static void qpnp_hap_td_enable(struct timed_output_dev *dev, int value)
 			VIB_INFO_LOG("new en=%d\n", value);
 		}
 
-		if (notification_booster && !input_is_screen_on()) {
+		// if booster, and screen is off, or call or alarm value for timed device, then we may need a boosting...
+		if (notification_booster && (!input_is_screen_on() || value == MIN_TD_VALUE_NOTIFICATION_CALL || value == MIN_TD_VALUE_NOTIFICATION_ALARM) ) {
 			if (value>=MIN_TD_VALUE_NOTIFICATION) {
+				// detect repeating alarm... if it's not repeating frequently, then it can be some other apps vibration with its length value
+				if (input_is_screen_on() && value == MIN_TD_VALUE_NOTIFICATION_ALARM) {
+					VIB_INFO_LOG("alarm counting #1\n");
+					// if last vibration was not the same length, no repetition, reset counter and goto reset voltage...
+					if (last_value != value) {
+						VIB_INFO_LOG("alarm counting #2\n");
+						alarm_value_counter = 0;
+						goto reset;
+					} else {
+						if (value == MIN_TD_VALUE_NOTIFICATION_ALARM) {
+							unsigned int diff_jiffies = jiffies - last_alarm_value_jiffies;
+							last_alarm_value_jiffies = jiffies;
+							// if time difference is short enough...
+							VIB_INFO_LOG("alarm counting #3 diff jiffies %u\n",diff_jiffies);
+							if (diff_jiffies < 107 && diff_jiffies > 97) { // exact time matching to be precise...
+								//... raise counter
+								alarm_value_counter++;
+								// if not reaching yet enough repetition goto reset yet...
+								VIB_INFO_LOG("alarm counting #4 counter %d\n",alarm_value_counter);
+								if (alarm_value_counter <= 1) goto reset;
+								// otherwise will go into boosting...
+							} else {
+								// too much apart in time...not repetition, reset counter and go to reset voltage...
+								VIB_INFO_LOG("alarm counting #5\n");
+								alarm_value_counter = 0;
+								goto reset;
+							}
+						}
+					}
+				} else {
+					// not screen on, or not alarm, reset alarm repetition counter...
+					alarm_value_counter = 0;
+				}
 				if (!vmax_needs_reset) {
 					u32 new_val = stored_vmax_mv * (notification_booster+1);
 					if (new_val > VMAX_MV_NOTIFICATION) new_val = VMAX_MV_NOTIFICATION;
+					if (stored_vmax_mv > new_val) { goto skip_reset; } // stored value is higher than boosted notif MV then use stored in the end...
 					hap->vmax_mv = new_val;
 					qpnp_hap_vmax_config(hap);
 					vmax_needs_reset = 1;
@@ -1762,12 +1804,14 @@ static void qpnp_hap_td_enable(struct timed_output_dev *dev, int value)
 				goto skip_reset; // this time skip reset part!
 			}
 		}
+reset:
 		if (vmax_needs_reset) {
 			hap->vmax_mv = stored_vmax_mv;
 			qpnp_hap_vmax_config(hap);
 			vmax_needs_reset = 0;
 		}
 skip_reset:
+		last_value = value;
 #endif
 		value = (value > hap->timeout_ms ?
 				 hap->timeout_ms : value);
