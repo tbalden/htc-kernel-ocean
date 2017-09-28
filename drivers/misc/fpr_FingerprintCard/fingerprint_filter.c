@@ -990,8 +990,9 @@ static unsigned long last_ts_timestamp = 0;
 
 static unsigned long last_vol_key_1_timestamp = 0;
 static unsigned long last_vol_key_2_timestamp = 0;
+static unsigned long last_vol_keys_start = 0;
 
-extern void register_double_volume_key_press(void);
+extern void register_double_volume_key_press(int long_press);
 
 static bool ts_input_filter(struct input_handle *handle,
                                     unsigned int type, unsigned int code,
@@ -1007,17 +1008,29 @@ static bool ts_input_filter(struct input_handle *handle,
 		pr_info("%s ts_input key %d %d %d\n",__func__,type,code,value);
 	}
 
+	if (type == EV_KEY && code == KEY_VOLUMEUP && value == 1) {
+		last_vol_keys_start = jiffies;
+		goto skip_ts;
+	}
+	if (type == EV_KEY && code == KEY_VOLUMEDOWN && value == 1) {
+		last_vol_keys_start = jiffies;
+		goto skip_ts;
+	}
+
+
 	if (type == EV_KEY && code == KEY_VOLUMEUP && value == 0) {
 		last_vol_key_1_timestamp = jiffies;
 		if (last_vol_key_1_timestamp - last_vol_key_2_timestamp < 4) {
-			register_double_volume_key_press();
+			unsigned int start_diff = jiffies - last_vol_keys_start;
+			register_double_volume_key_press(start_diff > 50);
 		}
 		goto skip_ts;
 	}
 	if (type == EV_KEY && code == KEY_VOLUMEDOWN && value == 0) {
 		last_vol_key_2_timestamp = jiffies;
 		if (last_vol_key_2_timestamp - last_vol_key_1_timestamp < 4) {
-			register_double_volume_key_press();
+			unsigned int start_diff = jiffies - last_vol_keys_start;
+			register_double_volume_key_press(start_diff > 50);
 		}
 		goto skip_ts;
 	}

@@ -123,6 +123,7 @@ static int pattern_time_button[5][6] = {
 static int charging = 0;
 static struct work_struct vk_blink_work;
 static struct work_struct vk_unblink_work;
+static struct work_struct double_vibrate_work;
 
 static int charge_level = 0; // information from HTC battery driver
 static int supposedly_charging = 0; // information from led call (multicolor work)
@@ -144,6 +145,8 @@ static struct i2c_client *private_lp5562_client = NULL;
 static struct mutex	led_mutex;
 static struct mutex	vk_led_mutex;
 static struct workqueue_struct *g_led_work_queue;
+static struct workqueue_struct *g_vk_work_queue;
+static struct workqueue_struct *g_vib_work_queue;
 static uint32_t ModeRGB;
 static int VK_brightness;
 static int last_pwm;
@@ -916,7 +919,7 @@ static enum alarmtimer_restart blinkstop_rtc_callback(struct alarm *al, ktime_t 
 	I("%s step unblink? .... blinking %d && !screen_on  %d \n",__func__, vk_led_blink, !screen_on);
 	if (vk_led_blink && !screen_on) {
 		I("%s step unblink! 0\n",__func__);
-		queue_work(g_led_work_queue, &vk_unblink_work);
+		queue_work(g_vk_work_queue, &vk_unblink_work);
 	}
 	mutex_unlock(&blinkstopworklock);
 
@@ -1186,7 +1189,7 @@ int register_haptic(int value)
 				short_vib_notif = 0;
 			}
 			if (!vk_led_blink && bln_switch && ((!charging && lights_down_divider==1) || charging) ) { // do not trigger blink if not on charger and lights down mode
-				queue_work(g_led_work_queue, &vk_blink_work);
+				queue_work(g_vk_work_queue, &vk_blink_work);
 			}
 			// call flash blink for flashlight notif if lights_down mode (>1) is not active...
 			if (lights_down_divider==1) {
@@ -1201,10 +1204,28 @@ int register_haptic(int value)
 EXPORT_SYMBOL(register_haptic);
 
 extern void set_vibrate(int value);
+extern void set_suspend_booster(int value);
 
-void register_double_volume_key_press(void) {
+static void double_vibrate_work_func(struct work_struct *work)
+{
+	set_vibrate(231);
+	msleep(431);
+	set_vibrate(234);
+	msleep(241);
+}
+
+void register_double_volume_key_press(int long_press) {
+	if (screen_on) return;
 	pr_info("%s gpio -> lights down divider - %d\n",__func__,lights_down_divider);
-	if (lights_down_divider==1) {lights_down_divider = 16; set_vibrate(401);} else lights_down_divider = 1;
+	if (long_press) {
+		// always switch on low light mode, very long vibration signal
+		set_suspend_booster(1); // suspend vibration boosting
+		lights_down_divider = 16; 
+		queue_work(g_vib_work_queue, &double_vibrate_work);
+	} else {
+		set_suspend_booster(0);
+		if (lights_down_divider==1) {lights_down_divider = 16; set_vibrate(451);} else {lights_down_divider = 1;set_vibrate(101);}
+	}
 }
 EXPORT_SYMBOL(register_double_volume_key_press);
 
@@ -1295,7 +1316,7 @@ static void lp5562_color_blink(struct i2c_client *client, uint8_t red, uint8_t g
 		// BLN
 		// sysfs configuation bln_no_charger_switch == 1 -> always blink even if not on charger
 		if (bln_switch && bln_no_charger_switch && (lights_down_divider==1) && vk_screen_is_off()) {
-			queue_work(g_led_work_queue, &vk_blink_work);
+			queue_work(g_vk_work_queue, &vk_blink_work);
 		}
 		if (vk_screen_is_off() && (lights_down_divider==1)) { // only flash if lights_down mode is not active...
 			flash_blink(false);
@@ -3312,6 +3333,8 @@ static int lp5562_led_probe(struct i2c_client *client
 	}
 
 	g_led_work_queue = create_singlethread_workqueue("led");
+	g_vk_work_queue = g_led_work_queue; // this didn't work out at all: create_singlethread_workqueue("vk_wq"); they collide in i2c write/read!
+	g_vib_work_queue = create_singlethread_workqueue("vib_wq");
 	if (!g_led_work_queue) {
 		ret = -10;
 		pr_err("[LED] %s: create workqueue fail %d\n", __func__, ret);
@@ -3337,6 +3360,7 @@ static int lp5562_led_probe(struct i2c_client *client
 #ifdef CONFIG_LEDS_QPNP_BUTTON_BLINK
 			INIT_WORK(&vk_blink_work, vk_blink_work_func);
 			INIT_WORK(&vk_unblink_work, vk_unblink_work_func);
+			INIT_WORK(&double_vibrate_work, double_vibrate_work_func);
 #endif 
 			//INIT_WORK(&cdata->leds[i].led_work_multicolor, virtual_key_led_blink_work_func);
 			INIT_DELAYED_WORK(&cdata->leds[i].blink_delayed_work, led_fade_do_work);
@@ -3513,6 +3537,8 @@ static int lp5562_led_remove(struct i2c_client *client)
 		led_classdev_unregister(&cdata->leds[i].cdev);
 	}
 	destroy_workqueue(g_led_work_queue);
+	destroy_workqueue(g_vk_work_queue);
+	destroy_workqueue(g_vib_work_queue);
 	kfree(cdata);
 
 	return 0;

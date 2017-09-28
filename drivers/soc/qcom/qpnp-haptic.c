@@ -1710,10 +1710,16 @@ static int qpnp_hap_set(struct qpnp_hap *hap, int on)
 #define MIN_TD_VALUE_NOTIFICATION_ALARM 500
 
 static int notification_booster = 2;
+static int suspend_booster = 0;
 static int vmax_needs_reset = 0;
 static int alarm_value_counter = 0;
 static int last_value = 0;
 static unsigned long last_alarm_value_jiffies = 0;
+
+void set_suspend_booster(int value) {
+	suspend_booster = !!value;
+}
+EXPORT_SYMBOL(set_suspend_booster);
 
 void set_notification_booster(int value) {
 	notification_booster = value;
@@ -1758,7 +1764,7 @@ static void qpnp_hap_td_enable(struct timed_output_dev *dev, int value)
 		}
 
 		// if booster, and screen is off, or call or alarm value for timed device, then we may need a boosting...
-		if (notification_booster && (!input_is_screen_on() || value == MIN_TD_VALUE_NOTIFICATION_CALL || value == MIN_TD_VALUE_NOTIFICATION_ALARM) ) {
+		if (!suspend_booster && notification_booster && (!input_is_screen_on() || value == MIN_TD_VALUE_NOTIFICATION_CALL || value == MIN_TD_VALUE_NOTIFICATION_ALARM) ) {
 			if (value>=MIN_TD_VALUE_NOTIFICATION) {
 				// detect repeating alarm... if it's not repeating frequently, then it can be some other apps vibration with its length value
 				if (input_is_screen_on() && value == MIN_TD_VALUE_NOTIFICATION_ALARM) {
