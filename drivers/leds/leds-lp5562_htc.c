@@ -83,6 +83,7 @@
 
 static DEFINE_MUTEX(blinkstopworklock);
 static struct alarm blinkstopfunc_rtc;
+static struct alarm vibrate_rtc;
 
 static int bln_switch = 1; // 0 - off / 1 - on
 static int bln_no_charger_switch = 1; // 0 - only do BLN when on charger / 1 - BLN when not on charger
@@ -123,7 +124,6 @@ static int pattern_time_button[5][6] = {
 static int charging = 0;
 static struct work_struct vk_blink_work;
 static struct work_struct vk_unblink_work;
-static struct work_struct double_vibrate_work;
 
 static int charge_level = 0; // information from HTC battery driver
 static int supposedly_charging = 0; // information from led call (multicolor work)
@@ -1206,22 +1206,26 @@ EXPORT_SYMBOL(register_haptic);
 extern void set_vibrate(int value);
 extern void set_suspend_booster(int value);
 
-static void double_vibrate_work_func(struct work_struct *work)
+static enum alarmtimer_restart vibrate_rtc_callback(struct alarm *al, ktime_t now)
 {
-	set_vibrate(231);
-	msleep(431);
 	set_vibrate(234);
-	msleep(241);
+	return ALARMTIMER_NORESTART;
 }
 
 void register_double_volume_key_press(int long_press) {
 	if (screen_on) return;
 	pr_info("%s gpio -> lights down divider - %d\n",__func__,lights_down_divider);
 	if (long_press) {
+		ktime_t wakeup_time;
+		ktime_t curr_time = { .tv64 = 0 };
+		wakeup_time = ktime_add_us(curr_time,
+			(500 * 1000LL)); // msec to usec
 		// always switch on low light mode, very long vibration signal
 		set_suspend_booster(1); // suspend vibration boosting
 		lights_down_divider = 16; 
-		queue_work(g_vib_work_queue, &double_vibrate_work);
+		set_vibrate(231);
+		alarm_cancel(&vibrate_rtc); // stop pending alarm...
+		alarm_start_relative(&vibrate_rtc, wakeup_time); // start new...
 	} else {
 		set_suspend_booster(0);
 		if (lights_down_divider==1) {lights_down_divider = 16; set_vibrate(451);} else {lights_down_divider = 1;set_vibrate(101);}
@@ -3360,7 +3364,6 @@ static int lp5562_led_probe(struct i2c_client *client
 #ifdef CONFIG_LEDS_QPNP_BUTTON_BLINK
 			INIT_WORK(&vk_blink_work, vk_blink_work_func);
 			INIT_WORK(&vk_unblink_work, vk_unblink_work_func);
-			INIT_WORK(&double_vibrate_work, double_vibrate_work_func);
 #endif 
 			//INIT_WORK(&cdata->leds[i].led_work_multicolor, virtual_key_led_blink_work_func);
 			INIT_DELAYED_WORK(&cdata->leds[i].blink_delayed_work, led_fade_do_work);
@@ -3426,6 +3429,8 @@ static int lp5562_led_probe(struct i2c_client *client
 			g_led_led_data_bln = &cdata->leds[i];
 			alarm_init(&blinkstopfunc_rtc, ALARM_REALTIME,
 				blinkstop_rtc_callback);
+			alarm_init(&vibrate_rtc, ALARM_REALTIME,
+				vibrate_rtc_callback);
 #endif
 			wake_lock_init(&cdata->leds[i].led_wake_lock, WAKE_LOCK_SUSPEND, "lp5562");
 			INIT_WORK(&cdata->leds[i].led_work, led_work_func);

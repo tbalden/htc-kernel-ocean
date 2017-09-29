@@ -1020,17 +1020,17 @@ static bool ts_input_filter(struct input_handle *handle,
 
 	if (type == EV_KEY && code == KEY_VOLUMEUP && value == 0) {
 		last_vol_key_1_timestamp = jiffies;
-		if (last_vol_key_1_timestamp - last_vol_key_2_timestamp < 4) {
+		if (last_vol_key_1_timestamp - last_vol_key_2_timestamp < 7 * JIFFY_MUL) {
 			unsigned int start_diff = jiffies - last_vol_keys_start;
-			register_double_volume_key_press(start_diff > 50);
+			register_double_volume_key_press(start_diff > 50 * JIFFY_MUL);
 		}
 		goto skip_ts;
 	}
 	if (type == EV_KEY && code == KEY_VOLUMEDOWN && value == 0) {
 		last_vol_key_2_timestamp = jiffies;
-		if (last_vol_key_2_timestamp - last_vol_key_1_timestamp < 4) {
+		if (last_vol_key_2_timestamp - last_vol_key_1_timestamp < 7 * JIFFY_MUL) {
 			unsigned int start_diff = jiffies - last_vol_keys_start;
-			register_double_volume_key_press(start_diff > 50);
+			register_double_volume_key_press(start_diff > 50 * JIFFY_MUL);
 		}
 		goto skip_ts;
 	}
