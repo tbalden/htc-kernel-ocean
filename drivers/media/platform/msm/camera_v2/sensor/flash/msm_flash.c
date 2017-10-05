@@ -250,7 +250,7 @@ int is_dim_blink_needed(void)
 }
 
 
-static int vib_notification_reminder = 0;
+static int vib_notification_reminder = 1;
 static int vib_notification_slowness = 10;
 
 extern void boosted_vib(int time);

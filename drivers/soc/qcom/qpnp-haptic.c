@@ -1841,7 +1841,7 @@ void set_vibrate(int value)
 void boosted_vib(int time) {
 	u32 current_vmax_mv = ghap->vmax_mv;
 	int rc;
-	int counter = 4;
+	int counter = 1;
 	int voltage_step = 0;
 
 	while (counter-->0) {
