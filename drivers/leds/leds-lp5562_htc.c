@@ -1926,6 +1926,14 @@ static void led_fade_do_work(struct work_struct *work)
 
 
 #ifdef CONFIG_LEDS_QPNP_BUTTON_BLINK
+// vib notification reminder
+extern void set_vib_notification_reminder(int value);
+extern int get_vib_notification_reminder(void);
+extern void set_vib_notification_slowness(int value);
+extern int get_vib_notification_slowness(void);
+extern void set_vib_notification_length(int value);
+extern int get_vib_notification_length(void);
+
 // flash blink settings
 extern void set_flash_blink_on(int value);
 extern int get_flash_blink_on(void);
@@ -2638,6 +2646,91 @@ static ssize_t bln_pulse_rgb_pattern_max_dump(struct device *dev,
 
 static DEVICE_ATTR(bln_pulse_rgb_pattern_max, (S_IWUSR|S_IRUGO),
       bln_pulse_rgb_pattern_max_show, bln_pulse_rgb_pattern_max_dump);
+
+// --- vib notification reminder
+static ssize_t vib_notification_show(struct device *dev,
+            struct device_attribute *attr, char *buf)
+{
+      return snprintf(buf, PAGE_SIZE, "%d\n", get_vib_notification_reminder());
+}
+
+static ssize_t vib_notification_dump(struct device *dev,
+            struct device_attribute *attr, const char *buf, size_t count)
+{
+      int ret;
+      unsigned long input;
+
+      ret = kstrtoul(buf, 0, &input);
+      if (ret < 0)
+            return ret;
+
+      if (input < 0 || input > 1)
+            input = 1;
+
+	set_vib_notification_reminder(input);
+
+      return count;
+}
+
+static DEVICE_ATTR(bln_vib_notification, (S_IWUSR|S_IRUGO),
+      vib_notification_show, vib_notification_dump);
+
+
+static ssize_t vib_notification_slowness_show(struct device *dev,
+            struct device_attribute *attr, char *buf)
+{
+      return snprintf(buf, PAGE_SIZE, "%d\n", get_vib_notification_slowness());
+}
+
+static ssize_t vib_notification_slowness_dump(struct device *dev,
+            struct device_attribute *attr, const char *buf, size_t count)
+{
+      int ret;
+      unsigned long input;
+
+      ret = kstrtoul(buf, 0, &input);
+      if (ret < 0)
+            return ret;
+
+      if (input < 5 || input > 30)
+            input = 15;
+
+      set_vib_notification_slowness(input);
+
+      return count;
+}
+
+static DEVICE_ATTR(bln_vib_notification_slowness, (S_IWUSR|S_IRUGO),
+      vib_notification_slowness_show, vib_notification_slowness_dump);
+
+
+static ssize_t vib_notification_length_show(struct device *dev,
+            struct device_attribute *attr, char *buf)
+{
+      return snprintf(buf, PAGE_SIZE, "%d\n", get_vib_notification_length());
+}
+
+static ssize_t vib_notification_length_dump(struct device *dev,
+            struct device_attribute *attr, const char *buf, size_t count)
+{
+      int ret;
+      unsigned long input;
+
+      ret = kstrtoul(buf, 0, &input);
+      if (ret < 0)
+            return ret;
+
+      if (input < 1 || input > 500)
+            input = 300;
+
+	set_vib_notification_length(input);
+
+      return count;
+}
+
+static DEVICE_ATTR(bln_vib_notification_length, (S_IWUSR|S_IRUGO),
+      vib_notification_length_show, vib_notification_length_dump);
+
 
 #endif
 
@@ -3416,6 +3509,9 @@ static int lp5562_led_probe(struct i2c_client *client
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_dim_number_max);
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_pulse_rgb_pattern);
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_pulse_rgb_pattern_max);
+			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_vib_notification);
+			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_vib_notification_slowness);
+			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_vib_notification_length);
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_flash_blink);
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_flash_blink_number);
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_flash_blink_wait_sec);

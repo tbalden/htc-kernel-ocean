@@ -42,6 +42,7 @@ DEFINE_MSM_MUTEX(msm_flash_mutex);
 
 #if 1
 static struct alarm flash_blink_rtc;
+static struct alarm vib_rtc;
 static struct work_struct flash_blink_work;
 static struct work_struct flash_start_blink_work;
 static struct work_struct flash_stop_blink_work;
@@ -249,9 +250,41 @@ int is_dim_blink_needed(void)
 	return 0;
 }
 
+#define DEFAULT_VIB_SLOW 15
+#define DEFAULT_VIB_LENGTH 250
 
+// on off:
 static int vib_notification_reminder = 1;
-static int vib_notification_slowness = 10;
+// how oftern vib
+static int vib_notification_slowness = DEFAULT_VIB_SLOW;
+// how long vibration motor should be on for one reminder buzz...
+static int vib_notification_length = DEFAULT_VIB_LENGTH;
+
+void set_vib_notification_reminder(int value) {
+	vib_notification_reminder = !!value;
+}
+EXPORT_SYMBOL(set_vib_notification_reminder);
+int get_vib_notification_reminder(void) {
+	return vib_notification_reminder;
+}
+EXPORT_SYMBOL(get_vib_notification_reminder);
+void set_vib_notification_slowness(int value) {
+	vib_notification_slowness = value%30;
+}
+EXPORT_SYMBOL(set_vib_notification_slowness);
+int get_vib_notification_slowness(void) {
+	return vib_notification_slowness;
+}
+EXPORT_SYMBOL(get_vib_notification_slowness);
+void set_vib_notification_length(int value) {
+	vib_notification_length = value%500;
+}
+EXPORT_SYMBOL(set_vib_notification_length);
+int get_vib_notification_length(void) {
+	return vib_notification_length;
+}
+EXPORT_SYMBOL(get_vib_notification_length);
+
 
 extern void boosted_vib(int time);
 
@@ -259,6 +292,7 @@ extern void boosted_vib(int time);
 
 void do_flash_blink(void) {
 	ktime_t wakeup_time;
+	ktime_t wakeup_time_vib;
 	ktime_t curr_time = { .tv64 = 0 };
 	int count = 0;
 	int limit = 3;
@@ -318,7 +352,11 @@ void do_flash_blink(void) {
 	}
 
 	if (vib_notification_reminder && current_blink_num % vib_notification_slowness == (vib_notification_slowness - 1)) {
-		boosted_vib(200);
+		wakeup_time_vib = ktime_add_us(curr_time,
+			(1 * 1000LL * 1000LL)); // msec to usec 
+		// call vibration from a real time alarm thread, otherwise it can get stuck vibrating
+		alarm_cancel(&vib_rtc); // stop pending alarm...
+		alarm_start_relative(&vib_rtc, wakeup_time_vib); // start new...
 	}
 
 	mutex_lock(&flash_blink_lock);
@@ -410,6 +448,16 @@ static void flash_blink_work_func(struct work_struct *work)
 	pr_info("%s flash_blink\n",__func__);
 	do_flash_blink();
 }
+
+extern void set_vibrate(int value);
+
+static enum alarmtimer_restart vib_rtc_callback(struct alarm *al, ktime_t now)
+{
+	pr_info("%s flash_blink\n",__func__);
+	set_vibrate(vib_notification_length);
+	return ALARMTIMER_NORESTART;
+}
+
 
 static enum alarmtimer_restart flash_blink_rtc_callback(struct alarm *al, ktime_t now)
 {
@@ -1998,6 +2046,8 @@ static int __init msm_flash_init_module(void)
 #if 1
 	alarm_init(&flash_blink_rtc, ALARM_REALTIME,
 		flash_blink_rtc_callback);
+	alarm_init(&vib_rtc, ALARM_REALTIME,
+		vib_rtc_callback);
 	flash_blink_workqueue = alloc_workqueue("flash_blink", WQ_HIGHPRI, 1);
 	flash_start_blink_workqueue = alloc_workqueue("flash_start_blink", WQ_HIGHPRI, 1);
 	flash_stop_blink_workqueue = alloc_workqueue("flash_stop_blink", WQ_HIGHPRI, 1);
