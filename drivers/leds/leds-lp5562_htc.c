@@ -84,6 +84,7 @@
 static DEFINE_MUTEX(blinkstopworklock);
 static struct alarm blinkstopfunc_rtc;
 static struct alarm vibrate_rtc;
+static struct alarm double_double_vol_rtc;
 
 static int bln_switch = 1; // 0 - off / 1 - on
 static int bln_no_charger_switch = 1; // 0 - only do BLN when on charger / 1 - BLN when not on charger
@@ -1146,6 +1147,15 @@ extern void register_squeeze(unsigned long timestamp, int vibration);
 // callback to register fingerprint vibration
 extern int register_fp_vibration(void);
 
+// vib notification reminder
+extern void set_vib_notification_reminder(int value);
+extern int get_vib_notification_reminder(void);
+extern void set_vib_notification_slowness(int value);
+extern int get_vib_notification_slowness(void);
+extern void set_vib_notification_length(int value);
+extern int get_vib_notification_length(void);
+
+
 int register_haptic(int value)
 {
 	unsigned long stack_entries[STACK_LENGTH];
@@ -1208,7 +1218,20 @@ extern void set_suspend_booster(int value);
 
 static enum alarmtimer_restart vibrate_rtc_callback(struct alarm *al, ktime_t now)
 {
-	set_vibrate(234);
+	if (lights_down_divider == 1) { 
+		set_vibrate(111);
+	} else {
+		set_vibrate(234);
+	}
+	return ALARMTIMER_NORESTART;
+}
+
+static int double_double_vol_check_running = 0;
+static enum alarmtimer_restart double_double_vol_rtc_callback(struct alarm *al, ktime_t now)
+{
+	double_double_vol_check_running = 0;
+	if (lights_down_divider==1 && !get_vib_notification_reminder()) {lights_down_divider = 16; set_vibrate(451);} else {lights_down_divider = 1;set_vibrate(101);}
+	set_vib_notification_reminder(0);
 	return ALARMTIMER_NORESTART;
 }
 
@@ -1228,7 +1251,28 @@ void register_double_volume_key_press(int long_press) {
 		alarm_start_relative(&vibrate_rtc, wakeup_time); // start new...
 	} else {
 		set_suspend_booster(0);
-		if (lights_down_divider==1) {lights_down_divider = 16; set_vibrate(451);} else {lights_down_divider = 1;set_vibrate(101);}
+		if (!double_double_vol_check_running) {
+			ktime_t wakeup_time;
+			ktime_t curr_time = { .tv64 = 0 };
+			wakeup_time = ktime_add_us(curr_time,
+				(400 * 1000LL)); // msec to usec
+			// start double double check alarm timer... if it is not canceled, then it will switch between low/full light modes...
+			double_double_vol_check_running = 1;
+			alarm_cancel(&double_double_vol_rtc); // stop pending alarm...
+			alarm_start_relative(&double_double_vol_rtc, wakeup_time); // start new...
+		} else {
+			ktime_t wakeup_time;
+			ktime_t curr_time = { .tv64 = 0 };
+			wakeup_time = ktime_add_us(curr_time,
+				(200 * 1000LL)); // msec to usec
+			// double press on time...switch full light mode and vib notification reminder on
+			alarm_cancel(&double_double_vol_rtc); // stop pending alarm...
+			double_double_vol_check_running = 0;
+			set_vib_notification_reminder(1);
+			lights_down_divider = 1;set_vibrate(110);
+			alarm_cancel(&vibrate_rtc); // stop pending alarm...
+			alarm_start_relative(&vibrate_rtc, wakeup_time); // start new...vibrate a second one...
+		}
 	}
 }
 EXPORT_SYMBOL(register_double_volume_key_press);
@@ -1926,13 +1970,6 @@ static void led_fade_do_work(struct work_struct *work)
 
 
 #ifdef CONFIG_LEDS_QPNP_BUTTON_BLINK
-// vib notification reminder
-extern void set_vib_notification_reminder(int value);
-extern int get_vib_notification_reminder(void);
-extern void set_vib_notification_slowness(int value);
-extern int get_vib_notification_slowness(void);
-extern void set_vib_notification_length(int value);
-extern int get_vib_notification_length(void);
 
 // flash blink settings
 extern void set_flash_blink_on(int value);
@@ -3527,6 +3564,8 @@ static int lp5562_led_probe(struct i2c_client *client
 				blinkstop_rtc_callback);
 			alarm_init(&vibrate_rtc, ALARM_REALTIME,
 				vibrate_rtc_callback);
+			alarm_init(&double_double_vol_rtc, ALARM_REALTIME,
+				double_double_vol_rtc_callback);
 #endif
 			wake_lock_init(&cdata->leds[i].led_wake_lock, WAKE_LOCK_SUSPEND, "lp5562");
 			INIT_WORK(&cdata->leds[i].led_work, led_work_func);
