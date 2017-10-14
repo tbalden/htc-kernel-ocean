@@ -289,7 +289,7 @@ EXPORT_SYMBOL(get_vib_notification_length);
 
 extern void boosted_vib(int time);
 
-#define DIM_USEC 10
+#define DIM_USEC 3
 
 void precise_delay(int usec) {
 	ktime_t start, end;
@@ -341,7 +341,8 @@ void do_flash_blink(void) {
 	htc_torch_main(0,0);	// [ ] [ ]
 	udelay(15000);
 
-	if (!dim) {
+	//if (!dim) 
+	{
 		htc_torch_main(0,150);  // [ ] [o]
 		precise_delay(135 -dim * DIM_USEC);
 		htc_torch_main(0,0);	// [ ] [ ]
