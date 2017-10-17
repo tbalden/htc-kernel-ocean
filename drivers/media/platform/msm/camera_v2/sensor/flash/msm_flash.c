@@ -123,6 +123,8 @@ static int currently_blinking = 0;
 
 // default switches
 static int flash_blink_on  = 1;
+static int flash_blink_bright  = 1; // apply bright flash on each X number
+static int flash_blink_bright_number  = 5; // X number when bright flash should be done
 static int flash_blink_number = DEFAULT_BLINK_NUMBER;
 static int flash_blink_wait_sec = DEFAULT_BLINK_WAIT_SEC;
 static int flash_blink_wait_inc = DEFAULT_WAIT_INC;
@@ -153,6 +155,25 @@ int get_flash_blink_number(void) {
 	return flash_blink_number;
 }
 EXPORT_SYMBOL(get_flash_blink_number);
+
+void set_flash_blink_bright(int value) {
+	flash_blink_bright = !!value;
+}
+EXPORT_SYMBOL(set_flash_blink_bright);
+int get_flash_blink_bright(void) {
+	return flash_blink_bright;
+}
+EXPORT_SYMBOL(get_flash_blink_bright);
+
+void set_flash_blink_bright_number(int value) {
+	flash_blink_bright_number = max(1,value%11); // min 1, max 10
+}
+EXPORT_SYMBOL(set_flash_blink_bright_number);
+int get_flash_blink_bright_number(void) {
+	return flash_blink_bright_number;
+}
+EXPORT_SYMBOL(get_flash_blink_bright_number);
+
 
 void set_flash_blink_wait_sec(int value) {
 	flash_blink_wait_sec = max(1,value%11); // min 1/max 10
@@ -289,7 +310,8 @@ EXPORT_SYMBOL(get_vib_notification_length);
 
 extern void boosted_vib(int time);
 
-#define DIM_USEC 3
+#define DIM_USEC 2
+#define BRIGHT_USEC 1250
 
 void precise_delay(int usec) {
 	ktime_t start, end;
@@ -304,12 +326,14 @@ void precise_delay(int usec) {
 
 extern void set_vibrate(int value);
 
+
 void do_flash_blink(void) {
 	ktime_t wakeup_time;
 	ktime_t wakeup_time_vib;
 	int count = 0;
 	int limit = 3;
 	int dim = 0;
+	int bright = 0;
 
 	pr_info("%s flash_blink\n",__func__);
 	alarm_cancel(&flash_blink_do_blink_rtc); // stop pending alarm... no need to unidle cpu in that alarm...
@@ -323,8 +347,14 @@ void do_flash_blink(void) {
 		currently_blinking = 0;
 		goto exit;
 	}
+	if (dim == 0 && flash_blink_bright && current_blink_num % flash_blink_bright_number == 0) {
+		bright = 1;
+	}
 
 	htc_flash_main(0,0);
+
+// test...
+//	set_vibrate(5);
 
 	if (flash_blink_wait_inc && !dim) {
 		// while in the first fast paced periodicity, don't do that much of flashing in one blink...
@@ -336,15 +366,15 @@ void do_flash_blink(void) {
 	limit -= dim * 2;
 
 	while (count++<limit) {
-	htc_torch_main(150,0);  // [o] [ ]
-	precise_delay(135 -dim * DIM_USEC);
+	htc_torch_main(150*(bright+1),0);  // [o] [ ]
+	precise_delay(135 -(dim * DIM_USEC) +(bright * BRIGHT_USEC));
 	htc_torch_main(0,0);	// [ ] [ ]
 	udelay(15000);
 
 	//if (!dim) 
 	{
-		htc_torch_main(0,150);  // [ ] [o]
-		precise_delay(135 -dim * DIM_USEC);
+		htc_torch_main(0,150*(bright+1));  // [ ] [o]
+		precise_delay(135 -(dim * DIM_USEC) +(bright * BRIGHT_USEC));
 		htc_torch_main(0,0);	// [ ] [ ]
 		udelay(15000);
 	}
