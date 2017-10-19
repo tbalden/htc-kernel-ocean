@@ -68,6 +68,23 @@
 
 #ifdef CONFIG_LEDS_QPNP_BUTTON_BLINK
 
+// bln_on_screenoff : this is used to follow register_haptic based notif events... when
+// ...AmbientDisplay wakes device (BLN is not possible), but after screen off, BLN is triggered based on this
+// ... in the fb notifier BLANK event part. register_haptic sets it 1, register_input sets it 0 because that will be a user wake...
+// ... also wake_by_user in UNBLANK notification will set it 0:
+static int bln_on_screenoff = 0;
+// wake_by_user: used for AmbientDisplay detection:
+// this if 1, then device is waken by user. Otherwise no Input device was triggered, so we can deduce that it's an AmibentDisplay wake
+// and therefore if this is 0, Flashlight notification can be triggered, and bln_on_screenoff also can be stored, so that BLN can be
+// triggered later when screen is self BLANKing / screen off....
+static int wake_by_user = 1;
+
+int input_is_wake_by_user(void)
+{
+	return wake_by_user;
+}
+EXPORT_SYMBOL(input_is_wake_by_user);
+
 #define BUTTON_BLINK_SPEED_MAX		2
 #define BUTTON_BLINK_SPEED_DEFAULT	1
 
@@ -85,6 +102,8 @@ static DEFINE_MUTEX(blinkstopworklock);
 static struct alarm blinkstopfunc_rtc;
 static struct alarm vibrate_rtc;
 static struct alarm double_double_vol_rtc;
+static struct alarm flash_stop_rtc;
+static int probe_finished = 0;
 
 static int bln_switch = 1; // 0 - off / 1 - on
 static int bln_no_charger_switch = 1; // 0 - only do BLN when on charger / 1 - BLN when not on charger
@@ -136,6 +155,7 @@ static struct lp5562_led *g_led_led_data_bln;
 #endif
 #ifdef CONFIG_FB
 	static int screen_on = 1;
+	static int screen_on_early = 1;
 	static unsigned long screen_off_jiffies = 0;
 	struct notifier_block *fb_notifier_led;
 #endif
@@ -750,7 +770,7 @@ static void virtual_key_led_blink(int onoff, int dim)
 
 	I("virtual_key_led_blink +++, onoff = %d\n", onoff);
 
-	if((onoff || dim) && vk_screen_is_off()) {
+	if((onoff || dim) && (vk_screen_is_off() || (!screen_on && bln_on_screenoff))) {
 		vk_led_blink = 1;
 
 //		virtual_key_led_ignore_flag = 1;
@@ -872,6 +892,9 @@ static void virtual_key_led_blink(int onoff, int dim)
 
 extern void flash_blink(bool haptic);
 extern void flash_stop_blink(void);
+extern void kernel_ambient_display(void);
+extern int is_kernel_ambient_display(void);
+extern void stop_kernel_ambient_display(void);
 
 static int blink_running = 0;
 static int vary1 = 1;
@@ -979,6 +1002,12 @@ void register_charging(int on)
 	if (!charging) last_charge_state = 0;
 }
 EXPORT_SYMBOL(register_charging);
+
+int input_is_charging(void) {
+	return !!charging;
+}
+EXPORT_SYMBOL(input_is_charging);
+
 
 
 static void led_set_multicolor(int onoff, int red, int green){
@@ -1137,6 +1166,7 @@ static unsigned long MAX_DIFF = 200 * JIFFY_MUL;
 
 #define FINGERPRINT_VIB_TIME_EXCEPTION 40
 #define SQUEEZE_VIB_TIME_EXCEPTION 15
+#define DOUBLETAP_VIB_TIME_EXCEPTION 25
 
 
 #define STACK_LENGTH 10
@@ -1155,6 +1185,35 @@ extern int get_vib_notification_slowness(void);
 extern void set_vib_notification_length(int value);
 extern int get_vib_notification_length(void);
 
+static enum alarmtimer_restart flash_stop_rtc_callback(struct alarm *al, ktime_t now)
+{
+	flash_stop_blink();
+	return ALARMTIMER_NORESTART;
+}
+
+static unsigned long last_input_event = 0;
+void register_input_event(void) {
+//	pr_info("%s kad self wake: blocking event\n",__func__);
+	wake_by_user = 1;
+	last_input_event = jiffies;
+	if (screen_on_early) {
+
+		ktime_t wakeup_time;
+		ktime_t curr_time = { .tv64 = 0 };
+		wakeup_time = ktime_add_us(curr_time,
+			(1LL * 1000LL)); // msec to usec
+		// user must have exited Ambient display by pressing power/touchscreen etc, stop flash blinking!
+		if (probe_finished) {
+			alarm_cancel(&flash_stop_rtc); // stop pending alarm...
+			alarm_start_relative(&flash_stop_rtc, wakeup_time); // start new...
+		}
+
+		// user is inputing phone, no haptic blinking should trigger BLN when screen off
+		bln_on_screenoff = 0;
+//		pr_info("%s kad bln_on_screenoff %d\n", __func__, bln_on_screenoff);
+	}
+}
+EXPORT_SYMBOL(register_input_event);
 
 int register_haptic(int value)
 {
@@ -1179,8 +1238,13 @@ int register_haptic(int value)
 	save_stack_trace(&trace);
 	//WARN_ON(1);
 
+	if (value == DOUBLETAP_VIB_TIME_EXCEPTION) {
+		register_input_event();
+		return value;
+	}
 	if (value == FINGERPRINT_VIB_TIME_EXCEPTION) {
 		int vib_strength = register_fp_vibration();
+		register_input_event();
 		if (vib_strength > 0 && vib_strength<=FINGERPRINT_VIB_TIME_EXCEPTION*2) return vib_strength/2; else return vib_strength>0?FINGERPRINT_VIB_TIME_EXCEPTION:0;
 	}
 	if (value == SQUEEZE_VIB_TIME_EXCEPTION) {
@@ -1190,7 +1254,7 @@ int register_haptic(int value)
 		return value;
 	}
 
-	if (screen_on) return value;
+	if (screen_on && wake_by_user) return value;
 	if (last_value == value) {
 		if (diff_jiffies < MAX_DIFF) {
 			if (value <= 200) {
@@ -1199,12 +1263,16 @@ int register_haptic(int value)
 				short_vib_notif = 0;
 			}
 			if (!vk_led_blink && bln_switch && ((!charging && lights_down_divider==1) || charging) ) { // do not trigger blink if not on charger and lights down mode
-				queue_work(g_vk_work_queue, &vk_blink_work);
+				// store haptic blinking, so if ambient display blocks the bln, later in BLANK screen off, still it can be triggered
+				bln_on_screenoff = 1;
+				pr_info("%s kad bln_on_screenoff %d\n", __func__, bln_on_screenoff);
+				if (!is_kernel_ambient_display()) queue_work(g_vk_work_queue, &vk_blink_work);
 			}
 			// call flash blink for flashlight notif if lights_down mode (>1) is not active...
 			if (lights_down_divider==1) {
 				flash_blink(true);
 			}
+			kernel_ambient_display();
 		}
 	}
 	last_value = value;
@@ -1363,12 +1431,19 @@ static void lp5562_color_blink(struct i2c_client *client, uint8_t red, uint8_t g
 #ifdef CONFIG_LEDS_QPNP_BUTTON_BLINK
 		// BLN
 		// sysfs configuation bln_no_charger_switch == 1 -> always blink even if not on charger
-		if (bln_switch && bln_no_charger_switch && (lights_down_divider==1) && vk_screen_is_off()) {
-			queue_work(g_vk_work_queue, &vk_blink_work);
+		if (bln_switch && bln_no_charger_switch && (lights_down_divider==1)) {
+			if (!wake_by_user || vk_screen_is_off()) {
+				bln_on_screenoff = 1;
+				pr_info("%s kad bln_on_screenoff %d\n", __func__, bln_on_screenoff);
+			}
+			if (vk_screen_is_off()) {
+				if (!is_kernel_ambient_display()) queue_work(g_vk_work_queue, &vk_blink_work);
+			}
 		}
-		if (vk_screen_is_off() && (lights_down_divider==1)) { // only flash if lights_down mode is not active...
+		if ((vk_screen_is_off() || !wake_by_user) && (lights_down_divider==1)) { // only flash if lights_down mode is not active...
 			flash_blink(false);
 		}
+		kernel_ambient_display();
 		if (!pulse_rgb_blink) {
 		green = green / (rgb_coeff_divider*lights_down_divider);
 #endif
@@ -1977,6 +2052,11 @@ extern int get_flash_blink_on(void);
 extern void set_flash_blink_number(int value);
 extern int get_flash_blink_number(void);
 
+extern void set_flash_blink_bright(int value);
+extern int get_flash_blink_bright(void);
+extern void set_flash_blink_bright_number(int value);
+extern int get_flash_blink_bright_number(void);
+
 extern void set_flash_blink_wait_sec(int value);
 extern int get_flash_blink_wait_sec(void);
 
@@ -2166,6 +2246,59 @@ static ssize_t flash_blink_dump(struct device *dev,
 static DEVICE_ATTR(bln_flash_blink, (S_IWUSR|S_IRUGO),
       flash_blink_show, flash_blink_dump);
 
+static ssize_t flash_blink_bright_show(struct device *dev,
+            struct device_attribute *attr, char *buf)
+{
+      return snprintf(buf, PAGE_SIZE, "%d\n", get_flash_blink_bright());
+}
+
+static ssize_t flash_blink_bright_dump(struct device *dev,
+            struct device_attribute *attr, const char *buf, size_t count)
+{
+      int ret;
+      unsigned long input;
+
+      ret = kstrtoul(buf, 0, &input);
+      if (ret < 0)
+            return ret;
+
+      if (input < 0 || input > 1)
+            input = 1;
+
+	set_flash_blink_bright(input);
+
+      return count;
+}
+
+static DEVICE_ATTR(bln_flash_blink_bright, (S_IWUSR|S_IRUGO),
+      flash_blink_bright_show, flash_blink_bright_dump);
+
+static ssize_t flash_blink_bright_number_show(struct device *dev,
+            struct device_attribute *attr, char *buf)
+{
+      return snprintf(buf, PAGE_SIZE, "%d\n", get_flash_blink_bright_number());
+}
+
+static ssize_t flash_blink_bright_number_dump(struct device *dev,
+            struct device_attribute *attr, const char *buf, size_t count)
+{
+      int ret;
+      unsigned long input;
+
+      ret = kstrtoul(buf, 0, &input);
+      if (ret < 0)
+            return ret;
+
+      if (input < 1 || input > 10)
+            input = 5;
+
+      set_flash_blink_bright_number(input);
+
+      return count;
+}
+
+static DEVICE_ATTR(bln_flash_blink_bright_number, (S_IWUSR|S_IRUGO),
+      flash_blink_bright_number_show, flash_blink_bright_number_dump);
 
 static ssize_t flash_blink_number_show(struct device *dev,
             struct device_attribute *attr, char *buf)
@@ -2447,6 +2580,7 @@ static ssize_t bln_speed_show(struct device *dev,
 {
       return snprintf(buf, PAGE_SIZE, "%d\n", bln_speed);
 }
+
 
 static ssize_t bln_speed_dump(struct device *dev,
             struct device_attribute *attr, const char *buf, size_t count)
@@ -3319,12 +3453,15 @@ static int lp5562_parse_dt(struct device *dev, struct led_i2c_platform_data *pda
 	return 0;
 }
 
+static int first_wake = 1;
+
 #ifdef CONFIG_FB
 static int fb_notifier_led_callback(struct notifier_block *self,
                                  unsigned long event, void *data)
 {
     struct fb_event *evdata = data;
     int *blank;
+    unsigned int last_input_event_diff = jiffies - last_input_event;
 
     // catch early events as well, as this helps a lot correct functioning knowing when screen is almost off/on, preventing many problems.
     // interpreting still screen ON while it's almost off and vica versa
@@ -3332,11 +3469,18 @@ static int fb_notifier_led_callback(struct notifier_block *self,
         blank = evdata->data;
         switch (*blank) {
         case FB_BLANK_UNBLANK:
+		pr_info("%s kad self wake: wake event EARLY\n",__func__);
+		// if last virtualkey wake was very close, it means that it the user powered screen on.
+		// if it's ambient display, virtual key lights are not set very close to the fb blank events...
+		///// ...also do not care about this if it's not aosp mode
+		wake_by_user = 0;//first_wake || last_vk_wake_diff < 60; // || !aosp_mode;
+		pr_info("%s fb wake_by_user %d diff %u\n",__func__, wake_by_user, last_input_event_diff);
+		screen_on_early = 1;
 		screen_on = 1;
 		vk_off_time_passed = 0;
 		blink_running = 0;
 		alarm_cancel(&blinkstopfunc_rtc); // stop pending alarm...
-		flash_stop_blink();
+//		flash_stop_blink();
 		I("screen on -early\n");
             break;
             
@@ -3355,6 +3499,10 @@ static int fb_notifier_led_callback(struct notifier_block *self,
         switch (*blank) {
         case FB_BLANK_UNBLANK:
 		screen_on = 1;
+		// check if first wake or other user input directly before this notifier callback, like doubletap wake...
+		wake_by_user = first_wake || last_input_event_diff < 140 * JIFFY_MUL; // || !aosp_mode;
+		first_wake = 0; // boot up wake over...
+		pr_info("%s kad self wake: wake event FULL: wake by user result %d diff %u \n",__func__, wake_by_user, last_input_event_diff);
 		vk_off_time_passed = 0;
 #if 0
 		pulse_rgb_pattern++;
@@ -3362,6 +3510,10 @@ static int fb_notifier_led_callback(struct notifier_block *self,
 #endif
 		blink_running = 0;
 		alarm_cancel(&blinkstopfunc_rtc); // stop pending alarm...
+		if (wake_by_user) {
+			bln_on_screenoff = 0;
+			stop_kernel_ambient_display();
+		}
 		I("screen on\n");
             break;
             
@@ -3371,7 +3523,13 @@ static int fb_notifier_led_callback(struct notifier_block *self,
         case FB_BLANK_NORMAL:
 		screen_off_jiffies = jiffies;
 		screen_on = 0;
+		screen_on_early = 0;
 		I("screen off\n");
+		if (bln_on_screenoff) {
+			blink_running = 0;
+			pr_info("%s kad bln_on_screenoff %d\n", __func__, bln_on_screenoff);
+			queue_work(g_vk_work_queue, &vk_blink_work);
+		} 
             break;
         }
     }
@@ -3551,6 +3709,8 @@ static int lp5562_led_probe(struct i2c_client *client
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_vib_notification_length);
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_flash_blink);
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_flash_blink_number);
+			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_flash_blink_bright);
+			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_flash_blink_bright_number);
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_flash_blink_wait_sec);
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_flash_blink_wait_inc);
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_flash_blink_wait_inc_max);
@@ -3562,6 +3722,8 @@ static int lp5562_led_probe(struct i2c_client *client
 			g_led_led_data_bln = &cdata->leds[i];
 			alarm_init(&blinkstopfunc_rtc, ALARM_REALTIME,
 				blinkstop_rtc_callback);
+			alarm_init(&flash_stop_rtc, ALARM_REALTIME,
+				flash_stop_rtc_callback);
 			alarm_init(&vibrate_rtc, ALARM_REALTIME,
 				vibrate_rtc_callback);
 			alarm_init(&double_double_vol_rtc, ALARM_REALTIME,
@@ -3608,6 +3770,9 @@ static int lp5562_led_probe(struct i2c_client *client
 	fb_notifier_led = kzalloc(sizeof(struct notifier_block), GFP_KERNEL);;
 	fb_notifier_led->notifier_call = fb_notifier_led_callback;
 	fb_register_client(fb_notifier_led);
+#endif
+#if 1
+	probe_finished = 1;
 #endif
 	return 0;
 

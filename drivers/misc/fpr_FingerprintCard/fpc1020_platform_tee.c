@@ -457,18 +457,33 @@ static const struct attribute_group attribute_group = {
 	.attrs = attributes,
 };
 
+#if 1
+extern void register_fp_wake(void);
+extern void register_fp_irq(void);
+#endif
 static irqreturn_t fpc1020_irq_handler(int irq, void *handle)
 {
 	struct fpc1020_data *fpc1020 = handle;
-
+#if 1
+	int wake_enabled = 0;
+#endif
 	dev_dbg(fpc1020->dev, "%s\n", __func__);
-
 	if (atomic_read(&fpc1020->wakeup_enabled)) {
 		wake_lock_timeout(&fpc1020->ttw_wl,
 					msecs_to_jiffies(FPC_TTW_HOLD_TIME));
-	}
+#if 1
+		wake_enabled = 1;
+#endif
+	} 
 
 	sysfs_notify(&fpc1020->dev->kobj, NULL, dev_attr_irq.attr.name);
+#if 1
+	if (wake_enabled)
+		register_fp_wake();
+	else {
+		register_fp_irq();
+	}
+#endif
 
 	return IRQ_HANDLED;
 }
