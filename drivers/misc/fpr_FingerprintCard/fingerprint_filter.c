@@ -62,7 +62,7 @@ EXPORT_SYMBOL(input_is_screen_on);
 
 // kad
 // -- KAD (Kernel Ambient Display --
-static int kad_on = 1; // is kad enabled?
+static int kad_on = 0; // is kad enabled?
 static int kad_only_on_charger = 0; // do KAD only on charger?
 static int kad_disable_touch_input = 1; // disable touch input while KAD?
 static int kad_kcal = 1; // do kcal coloring/grayscale?
@@ -70,7 +70,21 @@ static int kad_halfseconds = 10; // how long KAD should display
 static int kad_repeat_times = 4; // how many times... 
 static int kad_repeat_multiply_period = 1; // make periods between each longer?
 static int kad_repeat_period_sec = 8; // period between each repeat
-static int squeeze_peek_kcal = 1;
+static int squeeze_peek_kcal = 0;
+
+static int kad_on_override = 0;
+void override_kad_on(int override) {
+	kad_on_override = !!override;
+}
+EXPORT_SYMBOL(override_kad_on);
+
+int is_kad_on(void) {
+	return kad_on || kad_on_override;
+}
+
+int is_squeeze_peek_kcal(void) {
+	return squeeze_peek_kcal || (kad_on_override&&kad_kcal);
+}
 
 // variables...
 static int kad_running = 0; // state, if KAD is initiated and ongoing screen on...
@@ -102,19 +116,20 @@ static int kad_kcal_backed_up = 0;
 static void kcal_restore_backup(struct work_struct * kcal_restore_backup_work) 
 {
 	pr_info("%s kad ## restore_backup   screen %d kad %d overlay_on %d backed_up %d need_restore %d\n",__func__, screen_on, kad_running, kad_kcal_overlay_on, kad_kcal_backed_up, needs_kcal_restore_on_screen_on);
-	if (!kad_running && !needs_kcal_restore_on_screen_on && !kad_kcal_overlay_on && !kad_kcal_backed_up) {
+	// removing this code for now, seems better to only store backup right before switching in kcal_set work instead. This one messes up the contrast/brightness
+	/*	if (!kad_kcal_overlay_on && !kad_kcal_backed_up) {
 		msleep(600);
-		if ((kad_kcal || squeeze_peek_kcal) && screen_on && !kad_kcal_overlay_on) { 
+		if (screen_on && !kad_kcal_overlay_on) { 
 			pr_info("%s kad backup... screen %d kad %d overlay_on %d backed_up %d need_restore %d\n",__func__, screen_on, kad_running, kad_kcal_overlay_on, kad_kcal_backed_up, needs_kcal_restore_on_screen_on);
 			kcal_internal_backup(); 
 			kad_kcal_backed_up = 1; 
 		}
-	}
+	}*/
 	if (!kad_running && needs_kcal_restore_on_screen_on && kad_kcal_backed_up && kad_kcal_overlay_on) {
 		msleep(300);
 		needs_kcal_restore_on_screen_on = 0;
 		pr_info("%s kad\n",__func__);
-		if ((kad_kcal || squeeze_peek_kcal) && screen_on) { 
+		if (((is_kad_on() && kad_kcal) || is_squeeze_peek_kcal()) && screen_on) { 
 			pr_info("%s kad restore... screen %d kad %d overlay_on %d backed_up %d need_restore %d\n",__func__, screen_on, kad_running, kad_kcal_overlay_on, kad_kcal_backed_up, needs_kcal_restore_on_screen_on);
 			kcal_internal_restore();
 			kad_kcal_overlay_on = 0;
@@ -130,16 +145,16 @@ static void kcal_set(struct work_struct * kcal_set_work)
 
 	if (kad_running) {
 		pr_info("%s kad\n",__func__);
-		if ((kad_kcal || squeeze_peek_kcal) && !needs_kcal_restore_on_screen_on && !kad_kcal_overlay_on) // && !kad_kcal_backed_up ) 
+		if (((is_kad_on() && kad_kcal) || is_squeeze_peek_kcal()) && !kad_kcal_overlay_on) // && !kad_kcal_backed_up ) 
 		{
 			msleep(230);
-			if ((kad_kcal || squeeze_peek_kcal) && screen_on && !kad_kcal_overlay_on) {
+			if ((kad_kcal || is_squeeze_peek_kcal()) && screen_on && !kad_kcal_overlay_on) {
 				pr_info("%s kad backup... screen %d kad %d overlay_on %d backed_up %d need_restore %d\n",__func__, screen_on, kad_running, kad_kcal_overlay_on, kad_kcal_backed_up, needs_kcal_restore_on_screen_on);
 				kcal_internal_backup();
 				kad_kcal_backed_up = 1;
 			}
 		}
-		if ((kad_kcal || squeeze_peek_kcal) && kad_kcal_backed_up && !kad_kcal_overlay_on) {
+		if (((is_kad_on() && kad_kcal) || is_squeeze_peek_kcal()) && kad_kcal_backed_up && !kad_kcal_overlay_on) {
 			pr_info("%s kad override... screen %d kad %d overlay_on %d backed_up %d need_restore %d\n",__func__, screen_on, kad_running, kad_kcal_overlay_on, kad_kcal_backed_up, needs_kcal_restore_on_screen_on);
 			kcal_internal_override(128,180,200);
 			kad_kcal_overlay_on = 1; 
@@ -511,7 +526,7 @@ static void start_kad_running(int for_squeeze) {
 	kad_running = 1;
 	kad_running_for_kcal_only = for_squeeze;
 	pr_info("%s kad\n",__func__);
-	if (kad_kcal||squeeze_peek_kcal) schedule_work(&kcal_set_work);//kcal_internal_override_sat(128);
+	if ((is_kad_on()&&kad_kcal)||is_squeeze_peek_kcal()) schedule_work(&kcal_set_work);//kcal_internal_override_sat(128);
 }
 
 
@@ -1096,7 +1111,7 @@ static enum alarmtimer_restart kad_repeat_rtc_callback(struct alarm *al, ktime_t
 // this method is to initialize peek screen on aka "in-kernel AmbientDisplay" feature
 void kernel_ambient_display(void) {
 
-	if (!kad_on) return;
+	if (!is_kad_on()) return;
 	kad_repeat_counter = 0;
 	do_kernel_ambient_display();
 }
@@ -1106,7 +1121,7 @@ void stop_kernel_ambient_display(void) {
 }
 EXPORT_SYMBOL(stop_kernel_ambient_display);
 int is_kernel_ambient_display(void) {
-	return kad_on;
+	return is_kad_on();
 }
 EXPORT_SYMBOL(is_kernel_ambient_display);
 

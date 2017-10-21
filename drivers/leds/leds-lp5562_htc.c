@@ -1283,6 +1283,7 @@ EXPORT_SYMBOL(register_haptic);
 
 extern void set_vibrate(int value);
 extern void set_suspend_booster(int value);
+extern void override_kad_on(int on);
 
 static enum alarmtimer_restart vibrate_rtc_callback(struct alarm *al, ktime_t now)
 {
@@ -1294,21 +1295,42 @@ static enum alarmtimer_restart vibrate_rtc_callback(struct alarm *al, ktime_t no
 	return ALARMTIMER_NORESTART;
 }
 
+#define VIB_LIGHT_MODE_HIGH_LIGHT_VIB_REMINDER 3
+#define VIB_LIGHT_MODE_HIGH_LIGHT_VIB 2
+#define VIB_LIGHT_MODE_LOW_LIGHT 1
+#define VIB_LIGHT_MODE_LOW_LIGHT_VIB 0
+static int vib_light_mode = VIB_LIGHT_MODE_HIGH_LIGHT_VIB;
+
 static int double_double_vol_check_running = 0;
 static enum alarmtimer_restart double_double_vol_rtc_callback(struct alarm *al, ktime_t now)
 {
 	double_double_vol_check_running = 0;
-	if (lights_down_divider==1 && !get_vib_notification_reminder()) {lights_down_divider = 16; set_vibrate(451);} else {lights_down_divider = 1;set_vibrate(101);}
+	// single press happened...
+	if (lights_down_divider==1 && !get_vib_notification_reminder()) {
+		vib_light_mode = VIB_LIGHT_MODE_LOW_LIGHT;
+		lights_down_divider = 16; set_vibrate(451);
+	} else {
+		vib_light_mode = VIB_LIGHT_MODE_HIGH_LIGHT_VIB;
+		lights_down_divider = 1;
+		set_vibrate(101);
+	}
+	pr_info("%s override kad on 1",__func__);
+	override_kad_on(0);
 	set_vib_notification_reminder(0);
 	return ALARMTIMER_NORESTART;
 }
+
+
 
 void register_double_volume_key_press(int long_press) {
 	if (screen_on) return;
 	pr_info("%s gpio -> lights down divider - %d\n",__func__,lights_down_divider);
 	if (long_press) {
+		// long press
 		ktime_t wakeup_time;
 		ktime_t curr_time = { .tv64 = 0 };
+		vib_light_mode = VIB_LIGHT_MODE_LOW_LIGHT_VIB;
+		override_kad_on(0);
 		wakeup_time = ktime_add_us(curr_time,
 			(500 * 1000LL)); // msec to usec
 		// always switch on low light mode, very long vibration signal
@@ -1318,8 +1340,9 @@ void register_double_volume_key_press(int long_press) {
 		alarm_cancel(&vibrate_rtc); // stop pending alarm...
 		alarm_start_relative(&vibrate_rtc, wakeup_time); // start new...
 	} else {
-		set_suspend_booster(0);
+		set_suspend_booster(0); // single or double short press means enable boosting again...
 		if (!double_double_vol_check_running) {
+			// start checking for double press..
 			ktime_t wakeup_time;
 			ktime_t curr_time = { .tv64 = 0 };
 			wakeup_time = ktime_add_us(curr_time,
@@ -1329,6 +1352,7 @@ void register_double_volume_key_press(int long_press) {
 			alarm_cancel(&double_double_vol_rtc); // stop pending alarm...
 			alarm_start_relative(&double_double_vol_rtc, wakeup_time); // start new...
 		} else {
+			// double press happened...
 			ktime_t wakeup_time;
 			ktime_t curr_time = { .tv64 = 0 };
 			wakeup_time = ktime_add_us(curr_time,
@@ -1336,8 +1360,14 @@ void register_double_volume_key_press(int long_press) {
 			// double press on time...switch full light mode and vib notification reminder on
 			alarm_cancel(&double_double_vol_rtc); // stop pending alarm...
 			double_double_vol_check_running = 0;
-			set_vib_notification_reminder(1);
-			lights_down_divider = 1;set_vibrate(110);
+			if (vib_light_mode != VIB_LIGHT_MODE_HIGH_LIGHT_VIB_REMINDER) {
+				set_vib_notification_reminder(1);
+				lights_down_divider = 1;
+				pr_info("%s override kad on 1",__func__);
+				override_kad_on(1);
+			}
+			vib_light_mode = VIB_LIGHT_MODE_HIGH_LIGHT_VIB_REMINDER;
+			set_vibrate(110);
 			alarm_cancel(&vibrate_rtc); // stop pending alarm...
 			alarm_start_relative(&vibrate_rtc, wakeup_time); // start new...vibrate a second one...
 		}
