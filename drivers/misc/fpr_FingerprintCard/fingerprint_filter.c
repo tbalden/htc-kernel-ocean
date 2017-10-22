@@ -393,6 +393,9 @@ void register_fp_wake(void) {
 	pr_info("%s kad fpf fp wake registered\n",__func__);
 	if (screen_on_full) {
 		squeeze_peek_wait = 0; // interrupt peek wait, touchscreen was interacted, don't turn screen off after peek time over...
+		if (init_done) {
+			alarm_cancel(&kad_repeat_rtc);
+		}
 		stop_kad_running(true);
 	}
 	if (init_done) {
@@ -409,9 +412,13 @@ void register_fp_irq(void) {
 	pr_info("%s kad fpf fp tap irq registered\n",__func__);
 	if (screen_on_full) {
 		squeeze_peek_wait = 0; // interrupt peek wait, touchscreen was interacted, don't turn screen off after peek time over...
+		if (init_done) {
+			alarm_cancel(&kad_repeat_rtc);
+		}
 		stop_kad_running(true);
 	}
-	if (init_done) {
+	if (init_done && screen_on_full) { 
+	// only register user input when screen is on, cause FP Wake is not enabled for FP, meaning it shouldn't count as a user input while screen is still off
 		ktime_t wakeup_time;
 		ktime_t curr_time = { .tv64 = 0 };
 		wakeup_time = ktime_add_us(curr_time,
@@ -869,6 +876,9 @@ static void squeeze_peekmode_trigger(void) {
 int register_fp_vibration(void) {
 	// fp scanner pressed, cancel peek timeout
 	squeeze_peek_wait = 0;
+	if (init_done) {
+		alarm_cancel(&kad_repeat_rtc);
+	}
 	stop_kad_running(true);
 	return vib_strength;
 }
@@ -1117,7 +1127,9 @@ void kernel_ambient_display(void) {
 }
 EXPORT_SYMBOL(kernel_ambient_display);
 void stop_kernel_ambient_display(void) {
-	alarm_cancel(&kad_repeat_rtc);
+	if (init_done) {
+		alarm_cancel(&kad_repeat_rtc);
+	}
 }
 EXPORT_SYMBOL(stop_kernel_ambient_display);
 int is_kernel_ambient_display(void) {
