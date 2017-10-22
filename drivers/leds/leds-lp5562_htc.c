@@ -165,6 +165,8 @@ static int current_time;
 static struct i2c_client *private_lp5562_client = NULL;
 static struct mutex	led_mutex;
 static struct mutex	vk_led_mutex;
+static struct mutex	operation_mutex;
+static struct mutex	enable_mutex;
 static struct workqueue_struct *g_led_work_queue;
 static struct workqueue_struct *g_vk_work_queue;
 static struct workqueue_struct *g_vib_work_queue;
@@ -368,34 +370,95 @@ static int i2c_read_block(struct i2c_client *client,
 	return ret;
 }
 
+static uint8_t latest_set_enable_register = 0;
+
 static int write_enable_register(struct i2c_client *client, uint8_t data, uint8_t vk_led)
 {
 	int ret = 0;
 	uint8_t temp = 0, current_data = 0;
+#if 1
+	int locked = 0;
+	int read_retry = 0;
+	if (mutex_trylock(&enable_mutex)) {
+		locked = 1;
+	} else {
+		pr_info("%s ALARM, CONCURRENT ENABLE \n",__func__);
+	}
+#endif
 
 	if(!rgb_enable && !vk_enable && data == 0) {
 		I("write_enable_register disable\n");
 		ret = i2c_write_block(client, ENABLE_REGISTER, &data, 1);
+		latest_set_enable_register = data;
+#if 1
+		if (locked) mutex_unlock(&enable_mutex);
+#endif
 		return ret;
 	}
 	else
 		temp = 0x40;
-
+#if 1
+	ret = 1;
+	while (ret!=0) {
+#endif
 	ret = i2c_read_block(client, ENABLE_REGISTER, &current_data, 1);
+#if 1
+		if (ret) {
+			I(" ### write_enable_register read error\n");
+			read_retry++;
+			if (read_retry>2) {
+				current_data = latest_set_enable_register;
+				break;
+			}
+			msleep(5);
+		}
+	}
+#endif
 	if(vk_led)
 		temp |= (current_data & RG_Mask) | (data & VK_Mask);
 	else
 		temp |= (data & RG_Mask) | (current_data & VK_Mask);
 
 	ret = i2c_write_block(client, ENABLE_REGISTER, &temp, 1);
+	latest_set_enable_register = temp;
+#if 1
+	if (locked) mutex_unlock(&enable_mutex);
+#endif
 	return ret;
 }
+
+static uint8_t latest_set_operation_register = 0;
+
 static int write_operation_register(struct i2c_client *client, uint8_t data, uint8_t vk_led)
 {
 	int ret = 0;
 	uint8_t temp = 0, current_data = 0;
-
+#if 1
+	int locked = 0;
+	int read_retry = 0;
+	if (mutex_trylock(&operation_mutex)) {
+		locked = 1;
+	} else {
+		pr_info("%s ALARM, CONCURRENT OPERATION \n",__func__);
+	}
+#endif
+#if 1
+	ret = 1;
+	while (ret!=0) {
+#endif
 	ret = i2c_read_block(client, OPRATION_REGISTER, &current_data, 1);
+#if 1
+		if (ret) {
+			I(" ### write_opearation_register read error\n");
+			read_retry++;
+			if (read_retry>2) {
+				current_data = latest_set_operation_register;
+				break;
+			}
+			msleep(5);
+		}
+	}
+#endif
 
 	if(vk_led)
 		temp |= (current_data & RG_Mask) | (data & VK_Mask);
@@ -403,6 +466,10 @@ static int write_operation_register(struct i2c_client *client, uint8_t data, uin
 		temp |= (data & RG_Mask) | (current_data & VK_Mask);
 
 	ret = i2c_write_block(client, OPRATION_REGISTER, &temp, 1);
+	latest_set_operation_register = temp;
+#if 1
+	if (locked) mutex_unlock(&operation_mutex);
+#endif
 	return ret;
 }
 
@@ -594,6 +661,7 @@ static void lp5562_led_disable(struct i2c_client *client)
 
 	data = 0x00;
 	ret = i2c_write_block(client, ENABLE_REGISTER, &data, 1);
+	latest_set_enable_register = data;
 #if 0 // LED enable pin keep high to avoid SRAM abnormal
 	if (plat_data->ena_gpio) {
 		ret = gpio_direction_output(plat_data->ena_gpio, 0);
@@ -773,7 +841,6 @@ static void virtual_key_led_blink(int onoff, int dim)
 	if((onoff || dim) && (vk_screen_is_off() || (!screen_on && bln_on_screenoff))) {
 		vk_led_blink = 1;
 
-//		virtual_key_led_ignore_flag = 1;
 		lp5562_led_enable(client, 1);
 
 		data = 0;
@@ -864,11 +931,10 @@ static void virtual_key_led_blink(int onoff, int dim)
 		data = 0x42;
 		ret = write_enable_register(client, data, 1);
 	} else if (vk_led_blink && vk_screen_is_off()) {
-		vk_led_blink = 0;
-
-//		virtual_key_led_ignore_flag = 1;
+#if 1
 		lp5562_led_enable(client, 1);
 
+		// start empty program to set to brightness 0
 		data = 0;
 		ret = i2c_write_block(client, ENG_3_PC_CONTROL, &data, 1);
 
@@ -887,6 +953,24 @@ static void virtual_key_led_blink(int onoff, int dim)
 		ret = write_operation_register(client, data, 1);
 		data = 0x42;
 		ret = write_enable_register(client, data, 1);
+
+		msleep(5);
+
+		// .. and finally disable the vk led...
+		data = 0x00; // off
+		ret += write_enable_register(client,data,1); // vk off...
+		if (ret) {
+			I("failed to disable vk led 1\n");
+		}
+		msleep(5);
+		data = 0x00; // off
+		ret += write_enable_register(client,data,1); // vk off...
+		if (ret) {
+			I("failed to disable vk led 2\n");
+		}
+		vk_led_blink = 0;
+
+#endif
 	}
 }
 
@@ -1266,7 +1350,7 @@ int register_haptic(int value)
 				// store haptic blinking, so if ambient display blocks the bln, later in BLANK screen off, still it can be triggered
 				bln_on_screenoff = 1;
 				pr_info("%s kad bln_on_screenoff %d\n", __func__, bln_on_screenoff);
-				if (!is_kernel_ambient_display()) queue_work(g_vk_work_queue, &vk_blink_work);
+				if (!is_kernel_ambient_display() && !screen_on) queue_work(g_vk_work_queue, &vk_blink_work);
 			}
 			// call flash blink for flashlight notif if lights_down mode (>1) is not active...
 			if (lights_down_divider==1) {
@@ -1465,7 +1549,7 @@ static void lp5562_color_blink(struct i2c_client *client, uint8_t red, uint8_t g
 			if (!wake_by_user || vk_screen_is_off()) {
 				bln_on_screenoff = 1;
 				pr_info("%s kad bln_on_screenoff %d\n", __func__, bln_on_screenoff);
-			}
+		}
 			if (vk_screen_is_off()) {
 				if (!is_kernel_ambient_display()) queue_work(g_vk_work_queue, &vk_blink_work);
 			}
@@ -1733,12 +1817,6 @@ static void lp5562_led_off(struct i2c_client *client)
 	/* === reset red green blue === */
 	data = 0x00;
 	ret = i2c_write_block(client, R_PWM_CONTROL, &data, 1);
-#ifdef CONFIG_LEDS_QPNP_BUTTON_BLINK
-	// BLN
-	blink_running = 0;
-	virtual_key_led_blink(0,0);
-	flash_stop_blink();
-#endif
 	ret = i2c_write_block(client, G_PWM_CONTROL, &data, 1);
 #ifdef LP5562_BLUE_LED
 	ret = i2c_write_block(client, B_PWM_CONTROL, &data, 1);
@@ -1746,6 +1824,13 @@ static void lp5562_led_off(struct i2c_client *client)
 	ret = write_operation_register(client, data, 0);
 	ret = write_enable_register(client, data, 0);
 	mutex_unlock(&led_mutex);
+
+#ifdef CONFIG_LEDS_QPNP_BUTTON_BLINK
+	// BLN
+	blink_running = 0;
+	virtual_key_led_blink(0,0);
+	flash_stop_blink();
+#endif
 
 	if(!rgb_enable && !vk_enable)
 		lp5562_led_disable(client);
@@ -1889,6 +1974,8 @@ static int virtual_key_led_change_pwm(struct i2c_client *client, int pwm_diff)
 	int target_pwm_diff, ret = 0;
 	uint8_t pc_addr1, pc_addr2, pwm_level, data;
 
+	I("%s: pwm change. pwm diff %d \n", __func__, pwm_diff);
+
 	if(pwm_diff > 0){
 		target_pwm_diff = pwm_diff;
 		pc_addr1 = 0;
@@ -2007,6 +2094,7 @@ static void virtual_key_led_work_func(struct work_struct *work)
 		return;
 
 	ldata = container_of(work, struct lp5562_led, led_work);
+	I("%s: led work func. vk brightness: %d \n", __func__, ldata->VK_brightness);
 
 	if(ldata->VK_brightness) {
 		if(use_color_table && ldata->VK_brightness < table_level_num){
@@ -2033,8 +2121,7 @@ static void virtual_key_led_work_func(struct work_struct *work)
 		mutex_unlock(&vk_led_mutex);
 		return;
 		}
-
-		lp5562_led_enable(client, 0);
+		lp5562_led_enable(client, 1);
 		data = (u8)gVK_Current_param;
 		ret = i2c_write_block(client, B_CURRENT_CONTROL, &data, 1);
 		ret = i2c_write_block(client, W_CURRENT_CONTROL, &data, 1);
@@ -2052,6 +2139,7 @@ static void virtual_key_led_work_func(struct work_struct *work)
 			return;
 		}
 		mutex_lock(&vk_led_mutex);
+		I("%s: led work func pwm diff %d \n", __func__, -last_pwm);
 		ret = virtual_key_led_change_pwm(client, -last_pwm);
 		last_pwm = 0;
 		mutex_unlock(&vk_led_mutex);
@@ -3653,6 +3741,8 @@ static int lp5562_led_probe(struct i2c_client *client
 		I("Not use LP5562 LED.\n");
 		goto err_check_chip_not_used;
 	}
+	mutex_init(&operation_mutex);
+	mutex_init(&enable_mutex);
 
 	g_led_work_queue = create_singlethread_workqueue("led");
 	g_vk_work_queue = g_led_work_queue; // this didn't work out at all: create_singlethread_workqueue("vk_wq"); they collide in i2c write/read!
