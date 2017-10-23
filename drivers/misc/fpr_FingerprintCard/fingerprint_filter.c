@@ -65,6 +65,7 @@ EXPORT_SYMBOL(input_is_screen_on);
 static int kad_on = 0; // is kad enabled?
 static int kad_only_on_charger = 0; // do KAD only on charger?
 static int kad_disable_touch_input = 1; // disable touch input while KAD?
+static int kad_disable_fp_input = 1; // disable fingerprint input while KAD?
 static int kad_kcal = 1; // do kcal coloring/grayscale?
 static int kad_halfseconds = 10; // how long KAD should display
 static int kad_repeat_times = 4; // how many times... 
@@ -113,6 +114,7 @@ extern void kcal_internal_backup(void);
 static int kad_kcal_overlay_on = 0;
 static int kad_kcal_backed_up = 0;
 
+static bool kcal_sleep_before_restore = false;
 static void kcal_restore_backup(struct work_struct * kcal_restore_backup_work) 
 {
 	pr_info("%s kad ## restore_backup   screen %d kad %d overlay_on %d backed_up %d need_restore %d\n",__func__, screen_on, kad_running, kad_kcal_overlay_on, kad_kcal_backed_up, needs_kcal_restore_on_screen_on);
@@ -126,7 +128,7 @@ static void kcal_restore_backup(struct work_struct * kcal_restore_backup_work)
 		}
 	}*/
 	if (!kad_running && needs_kcal_restore_on_screen_on && kad_kcal_backed_up && kad_kcal_overlay_on) {
-		msleep(300);
+		if (kcal_sleep_before_restore) { msleep(300); } // squeeze peek timed out, wait a bit till screen faded enough... otherwise instant restore
 		needs_kcal_restore_on_screen_on = 0;
 		pr_info("%s kad\n",__func__);
 		if (((is_kad_on() && kad_kcal) || is_squeeze_peek_kcal()) && screen_on) { 
@@ -381,9 +383,14 @@ static void stop_kad_running(bool instant_sat_restore)
 		kad_running = 0;
 		if (instant_sat_restore) {
 			needs_kcal_restore_on_screen_on = 1;
-			schedule_work(&kcal_restore_backup_work);
+			kcal_sleep_before_restore = false;
+			queue_work_on(smp_processor_id(), fpf_input_wq, &kcal_restore_backup_work);
+//			schedule_work(&kcal_restore_backup_work);
 		} else {
 			needs_kcal_restore_on_screen_on = 1;
+			kcal_sleep_before_restore = true;
+			queue_work_on(smp_processor_id(), fpf_input_wq, &kcal_restore_backup_work);
+//			needs_kcal_restore_on_screen_on = 1;
 		}
 	}
 }
@@ -391,7 +398,7 @@ static void stop_kad_running(bool instant_sat_restore)
 extern void register_input_event(void);
 void register_fp_wake(void) {
 	pr_info("%s kad fpf fp wake registered\n",__func__);
-	if (screen_on_full) {
+	if (screen_on_full && (!kad_disable_fp_input || !kad_running || kad_running_for_kcal_only)) {
 		squeeze_peek_wait = 0; // interrupt peek wait, touchscreen was interacted, don't turn screen off after peek time over...
 		if (init_done) {
 			alarm_cancel(&kad_repeat_rtc);
@@ -410,7 +417,7 @@ void register_fp_wake(void) {
 EXPORT_SYMBOL(register_fp_wake);
 void register_fp_irq(void) {
 	pr_info("%s kad fpf fp tap irq registered\n",__func__);
-	if (screen_on_full) {
+	if (screen_on_full && (!kad_disable_fp_input || !kad_running || kad_running_for_kcal_only)) {
 		squeeze_peek_wait = 0; // interrupt peek wait, touchscreen was interacted, don't turn screen off after peek time over...
 		if (init_done) {
 			alarm_cancel(&kad_repeat_rtc);
@@ -864,22 +871,49 @@ static void squeeze_peekmode(struct work_struct * squeeze_peekmode_work) {
 		// cancel alarm timer!
 		kad_repeat_counter = 0;
 	}
+	stop_kad_running(!squeeze_peek_wait); // based on interruption, immediate kcal restore (and no screen off happening), or for screen off : sleep a bit and then do it..
 	squeeze_peek_wait = 0;
-	stop_kad_running(!squeeze_peek_wait); // based on interruption, immediate kcal restore (and no screen off happening), or screen off and then 
 }
 static DECLARE_WORK(squeeze_peekmode_work, squeeze_peekmode);
 static void squeeze_peekmode_trigger(void) {
 	schedule_work(&squeeze_peekmode_work);
 }
 
-// this callback allows registration of FP vibration, in which case peek timeout auto screen off should be canceled...
-int register_fp_vibration(void) {
-	// fp scanner pressed, cancel peek timeout
+static struct alarm check_single_fp_vib_rtc;
+int check_single_fp_running = 0;
+static enum alarmtimer_restart check_single_fp_vib_rtc_callback(struct alarm *al, ktime_t now)
+{
+	pr_info("%s kad double fp vibration detection: single vib detected Stop KAD!\n",__func__);
 	squeeze_peek_wait = 0;
+	stop_kad_running(true);
 	if (init_done) {
 		alarm_cancel(&kad_repeat_rtc);
 	}
-	stop_kad_running(true);
+	check_single_fp_running = 0;
+	return ALARMTIMER_NORESTART;
+}
+
+// this callback allows registration of FP vibration, in which case peek timeout auto screen off should be canceled...
+int register_fp_vibration(void) {
+	// fp scanner pressed, cancel peek timeout, but only do that automatically if not in kad mode (otherwise a double fp vibration check is due)
+	if (!kad_running || kad_running_for_kcal_only) {
+		squeeze_peek_wait = 0;
+		stop_kad_running(true);
+	} else {
+		if (check_single_fp_running) {
+			pr_info("%s kad double fp vibration detected, should not stop KAD!\n",__func__);
+			alarm_cancel(&check_single_fp_vib_rtc);
+			check_single_fp_running = 0;
+		} else {
+			ktime_t wakeup_time;
+			ktime_t curr_time = { .tv64 = 0 };
+			pr_info("%s kad double fp vibration detection start!\n",__func__);
+			check_single_fp_running = 1;
+			wakeup_time = ktime_add_us(curr_time,
+				(160LL * 1000LL)); // msec to usec
+			alarm_start_relative(&check_single_fp_vib_rtc, wakeup_time);
+		}
+	}
 	return vib_strength;
 }
 EXPORT_SYMBOL(register_fp_vibration);
@@ -1252,11 +1286,18 @@ static unsigned long last_vol_keys_start = 0;
 
 extern void register_double_volume_key_press(int long_press);
 
+static bool filtered_ts_event = false;
+static unsigned long filtering_ts_event_last_event = 0;
+
+static int kad_three_finger_gesture = 1;
+static int finger_counter = 0;
+
 static bool ts_input_filter(struct input_handle *handle,
                                     unsigned int type, unsigned int code,
                                     int value)
 {
 #if 1
+	bool filter_event = false;
 	if (kad_running && !kad_running_for_kcal_only && kad_disable_touch_input && (type!=EV_KEY || code == 158 || code == 580)) {
 		// do nothing, don't stop stuff in led driver like flashlight etc...
 	} else {
@@ -1286,7 +1327,7 @@ static bool ts_input_filter(struct input_handle *handle,
 		last_vol_key_1_timestamp = jiffies;
 		if (last_vol_key_1_timestamp - last_vol_key_2_timestamp < 7 * JIFFY_MUL) {
 			unsigned int start_diff = jiffies - last_vol_keys_start;
-			register_double_volume_key_press(start_diff > 50 * JIFFY_MUL);
+			register_double_volume_key_press( (start_diff > 50 * JIFFY_MUL) ? ((start_diff > 100 * JIFFY_MUL)?2:1):0 );
 		}
 		goto skip_ts;
 	}
@@ -1294,7 +1335,7 @@ static bool ts_input_filter(struct input_handle *handle,
 		last_vol_key_2_timestamp = jiffies;
 		if (last_vol_key_2_timestamp - last_vol_key_1_timestamp < 7 * JIFFY_MUL) {
 			unsigned int start_diff = jiffies - last_vol_keys_start;
-			register_double_volume_key_press(start_diff > 50 * JIFFY_MUL);
+			register_double_volume_key_press(start_diff > 50 * JIFFY_MUL ? ((start_diff > 100 * JIFFY_MUL)?2:1):0 );
 		}
 		goto skip_ts;
 	}
@@ -1354,9 +1395,40 @@ skip_ts:
 			}
 		} else if (kad_running && !kad_running_for_kcal_only && kad_disable_touch_input && (type!=EV_KEY || code == 158 || code == 580)) {
 			// if kad running and filtering on... filter it...
-			return true;
+
+			if (code != 158 && code !=580) { // non virtual key, but real panel event:
+				filtering_ts_event_last_event = jiffies;
+				filtered_ts_event = true;
+				filter_event = true;
+			}
+
+			if (code == 57 && value>0) {
+				finger_counter++;
+			}
+			if (code == 57 && value<0) {
+				finger_counter--;
+			}
+
+			if (kad_three_finger_gesture && finger_counter==3) {
+				squeeze_peek_wait = 0; // interrupt peek wait, touchscreen was interacted, don't turn screen off after peek time over...
+				if (kad_running) { 
+					stop_kad_running(true);
+				}
+			}
+
 		}
 	}
+	if (!filter_event && type!=EV_KEY && finger_counter > 0) {
+		// prevent touch events until user lifts all fingers that touched screen while filtering...
+		if (code == 57 && value>0) { // touch, still count more...
+			finger_counter++;
+		}
+		if (code == 57 && value<0) { // detouch
+			finger_counter--;
+		}
+		if (finger_counter>0) filter_event = true;
+	}
+	if (filter_event) return true;
 	return false;
 }
 
@@ -1819,6 +1891,34 @@ static ssize_t kad_on_dump(struct device *dev,
 static DEVICE_ATTR(kad_on, (S_IWUSR|S_IRUGO),
 	kad_on_show, kad_on_dump);
 
+
+static ssize_t kad_three_finger_gesture_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", kad_three_finger_gesture);
+}
+
+static ssize_t kad_three_finger_gesture_dump(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int ret;
+	unsigned long input;
+
+	ret = kstrtoul(buf, 0, &input);
+	if (ret < 0)
+		return ret;
+
+	if (input < 0 || input > 1)
+		input = 0;
+
+	kad_three_finger_gesture = input;
+
+	return count;
+}
+
+static DEVICE_ATTR(kad_three_finger_gesture, (S_IWUSR|S_IRUGO),
+	kad_three_finger_gesture_show, kad_three_finger_gesture_dump);
+
 static ssize_t kad_repeat_period_sec_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
@@ -2011,6 +2111,33 @@ static ssize_t kad_disable_touch_input_dump(struct device *dev,
 static DEVICE_ATTR(kad_disable_touch_input, (S_IWUSR|S_IRUGO),
 	kad_disable_touch_input_show, kad_disable_touch_input_dump);
 
+static ssize_t kad_disable_fp_input_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", kad_disable_fp_input);
+}
+
+static ssize_t kad_disable_fp_input_dump(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int ret;
+	unsigned long input;
+
+	ret = kstrtoul(buf, 0, &input);
+	if (ret < 0)
+		return ret;
+
+	if (input < 0 || input > 1)
+		input = 0;
+
+	kad_disable_fp_input = input;
+
+	return count;
+}
+
+static DEVICE_ATTR(kad_disable_fp_input, (S_IWUSR|S_IRUGO),
+	kad_disable_fp_input_show, kad_disable_fp_input_dump);
+
 
 
 static struct kobject *fpf_kobj;
@@ -2102,7 +2229,8 @@ static int __init fpf_init(void)
 	}
 
 	// fpf handler
-	fpf_input_wq = create_workqueue("fpf_iwq");
+//	fpf_input_wq = create_workqueue("fpf_iwq")
+	fpf_input_wq = alloc_workqueue("fpf_iwq", WQ_HIGHPRI, 1);;
 	if (!fpf_input_wq) {
 		pr_err("%s: Failed to create workqueue\n", __func__);
 		return -EFAULT;
@@ -2173,6 +2301,10 @@ static int __init fpf_init(void)
 	if (rc)
 		pr_err("%s: sysfs_create_file failed for kad_on\n", __func__);
 
+	rc = sysfs_create_file(fpf_kobj, &dev_attr_kad_three_finger_gesture.attr);
+	if (rc)
+		pr_err("%s: sysfs_create_file failed for kad_three_finger_gesture\n", __func__);
+
 	rc = sysfs_create_file(fpf_kobj, &dev_attr_kad_repeat_period_sec.attr);
 	if (rc)
 		pr_err("%s: sysfs_create_file failed for kad_repeat_period_sec\n", __func__);
@@ -2201,6 +2333,10 @@ static int __init fpf_init(void)
 	if (rc)
 		pr_err("%s: sysfs_create_file failed for kad_disable_touch_input\n", __func__);
 
+	rc = sysfs_create_file(fpf_kobj, &dev_attr_kad_disable_fp_input.attr);
+	if (rc)
+		pr_err("%s: sysfs_create_file failed for kad_disable_fp_input\n", __func__);
+
 	rc = sysfs_create_file(fpf_kobj, &dev_attr_notification_booster.attr);
 	if (rc)
 		pr_err("%s: sysfs_create_file failed for notif booster\n", __func__);
@@ -2225,6 +2361,8 @@ static int __init fpf_init(void)
 		register_input_rtc_callback);
 	alarm_init(&kad_repeat_rtc, ALARM_REALTIME,
 		kad_repeat_rtc_callback);
+	alarm_init(&check_single_fp_vib_rtc, ALARM_REALTIME,
+		check_single_fp_vib_rtc_callback);
 	init_done = 1;
 err_input_dev:
 	input_free_device(fpf_pwrdev);

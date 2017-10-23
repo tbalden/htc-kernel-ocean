@@ -1383,6 +1383,7 @@ static enum alarmtimer_restart vibrate_rtc_callback(struct alarm *al, ktime_t no
 #define VIB_LIGHT_MODE_HIGH_LIGHT_VIB 2
 #define VIB_LIGHT_MODE_LOW_LIGHT 1
 #define VIB_LIGHT_MODE_LOW_LIGHT_VIB 0
+#define VIB_LIGHT_MODE_LOW_LIGHT_VIB_KAD -1
 static int vib_light_mode = VIB_LIGHT_MODE_HIGH_LIGHT_VIB;
 
 static int double_double_vol_check_running = 0;
@@ -1413,14 +1414,20 @@ void register_double_volume_key_press(int long_press) {
 		// long press
 		ktime_t wakeup_time;
 		ktime_t curr_time = { .tv64 = 0 };
-		vib_light_mode = VIB_LIGHT_MODE_LOW_LIGHT_VIB;
-		override_kad_on(0);
+		if (long_press == 2) {
+			vib_light_mode = VIB_LIGHT_MODE_LOW_LIGHT_VIB_KAD;
+			override_kad_on(1);
+			set_vibrate(431);
+		} else {
+			vib_light_mode = VIB_LIGHT_MODE_LOW_LIGHT_VIB;
+			override_kad_on(0);
+			set_vibrate(231);
+		}
 		wakeup_time = ktime_add_us(curr_time,
 			(500 * 1000LL)); // msec to usec
 		// always switch on low light mode, very long vibration signal
 		set_suspend_booster(1); // suspend vibration boosting
-		lights_down_divider = 16; 
-		set_vibrate(231);
+		lights_down_divider = 16;
 		alarm_cancel(&vibrate_rtc); // stop pending alarm...
 		alarm_start_relative(&vibrate_rtc, wakeup_time); // start new...
 	} else {
