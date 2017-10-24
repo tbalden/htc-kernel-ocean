@@ -978,7 +978,7 @@ extern void flash_blink(bool haptic);
 extern void flash_stop_blink(void);
 extern void kernel_ambient_display(void);
 extern int is_kernel_ambient_display(void);
-extern void stop_kernel_ambient_display(void);
+extern void stop_kernel_ambient_display(bool interrupt_ongoing);
 
 static int blink_running = 0;
 static int vary1 = 1;
@@ -1249,6 +1249,7 @@ static int last_value = 0;
 static unsigned long MAX_DIFF = 200 * JIFFY_MUL;
 
 #define FINGERPRINT_VIB_TIME_EXCEPTION 40
+#define CALL_VIB_TIME_EXCEPTION 1000
 #define SQUEEZE_VIB_TIME_EXCEPTION 15
 #define DOUBLETAP_VIB_TIME_EXCEPTION 25
 
@@ -1324,6 +1325,11 @@ int register_haptic(int value)
 
 	if (value == DOUBLETAP_VIB_TIME_EXCEPTION) {
 		register_input_event();
+		return value;
+	}
+	if (value == CALL_VIB_TIME_EXCEPTION) {
+		register_input_event();
+		stop_kernel_ambient_display(true);
 		return value;
 	}
 	if (value == FINGERPRINT_VIB_TIME_EXCEPTION) {
@@ -3637,7 +3643,7 @@ static int fb_notifier_led_callback(struct notifier_block *self,
 		alarm_cancel(&blinkstopfunc_rtc); // stop pending alarm...
 		if (wake_by_user) {
 			bln_on_screenoff = 0;
-			stop_kernel_ambient_display();
+			stop_kernel_ambient_display(false);
 		}
 		I("screen on\n");
             break;
