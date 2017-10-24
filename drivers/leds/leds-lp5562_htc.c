@@ -1414,6 +1414,8 @@ void register_double_volume_key_press(int long_press) {
 		// long press
 		ktime_t wakeup_time;
 		ktime_t curr_time = { .tv64 = 0 };
+		// always switch on low light mode, very long vibration signal
+		set_suspend_booster(1); // suspend vibration boosting
 		if (long_press == 2) {
 			vib_light_mode = VIB_LIGHT_MODE_LOW_LIGHT_VIB_KAD;
 			override_kad_on(1);
@@ -1425,8 +1427,6 @@ void register_double_volume_key_press(int long_press) {
 		}
 		wakeup_time = ktime_add_us(curr_time,
 			(500 * 1000LL)); // msec to usec
-		// always switch on low light mode, very long vibration signal
-		set_suspend_booster(1); // suspend vibration boosting
 		lights_down_divider = 16;
 		alarm_cancel(&vibrate_rtc); // stop pending alarm...
 		alarm_start_relative(&vibrate_rtc, wakeup_time); // start new...
