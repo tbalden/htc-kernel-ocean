@@ -980,6 +980,8 @@ extern void kernel_ambient_display(void);
 extern int is_kernel_ambient_display(void);
 extern void stop_kernel_ambient_display(bool interrupt_ongoing);
 
+void register_input_event(void);
+
 static int blink_running = 0;
 static int vary1 = 1;
 static void vk_unblink_work_func(struct work_struct *work)
@@ -1084,6 +1086,8 @@ void register_charging(int on)
 	// if going into no-charge mode, overwrite last charge state, 
 	// ...so next time charging starts multicolored led will be set one time
 	if (!charging) last_charge_state = 0;
+	register_input_event();
+	stop_kernel_ambient_display(true);
 }
 EXPORT_SYMBOL(register_charging);
 

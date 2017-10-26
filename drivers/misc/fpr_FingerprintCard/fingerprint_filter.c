@@ -69,10 +69,10 @@ static int kad_only_on_charger = 0; // do KAD only on charger?
 static int kad_disable_touch_input = 1; // disable touch input while KAD?
 static int kad_disable_fp_input = 1; // disable fingerprint input while KAD?
 static int kad_kcal = 1; // do kcal coloring/grayscale?
-static int kad_halfseconds = 10; // how long KAD should display
+static int kad_halfseconds = 11; // how long KAD should display
 static int kad_repeat_times = 4; // how many times... 
 static int kad_repeat_multiply_period = 1; // make periods between each longer?
-static int kad_repeat_period_sec = 8; // period between each repeat
+static int kad_repeat_period_sec = 12; // period between each repeat
 static int squeeze_peek_kcal = 0;
 
 static int kad_on_override = 0;
@@ -120,9 +120,9 @@ static bool kcal_sleep_before_restore = false;
 
 static void kcal_restore_backup_sync(void) {
 	if (!kad_running && needs_kcal_restore_on_screen_on && kad_kcal_backed_up && kad_kcal_overlay_on) {
-		needs_kcal_restore_on_screen_on = 0;
 		pr_info("%s kad\n",__func__);
 		if (((is_kad_on() && kad_kcal) || is_squeeze_peek_kcal()) && screen_on) { 
+			needs_kcal_restore_on_screen_on = 0;
 			pr_info("%s kad RRRRRRRRRRRR restore... screen %d kad %d overlay_on %d backed_up %d need_restore %d\n",__func__, screen_on, kad_running, kad_kcal_overlay_on, kad_kcal_backed_up, needs_kcal_restore_on_screen_on);
 			kcal_internal_restore();
 			kad_kcal_overlay_on = 0;
@@ -149,6 +149,7 @@ static void kcal_listener(struct work_struct * kcal_listener_work)
 			pr_info("%s kad !! kcal listener restore  screen %d kad %d overlay_on %d backed_up %d need_restore %d\n",__func__, screen_on, kad_running, kad_kcal_overlay_on, kad_kcal_backed_up, needs_kcal_restore_on_screen_on);
 			kcal_push_restore = 0;
 			kcal_push_break = 0;
+			if (kcal_sleep_before_restore) { msleep(230); } // 230 is ok, before a screen off happens fully...
 			kcal_restore_backup_sync();
 			break;
 		}
@@ -411,13 +412,13 @@ static void stop_kad_running(bool instant_sat_restore)
 	if (kad_running) {
 		kad_running = 0;
 		if (instant_sat_restore) {
+			kcal_sleep_before_restore = false;
 			needs_kcal_restore_on_screen_on = 1;
 			kcal_push_restore = 1;
 		} else {
-			kcal_push_break = 1;
+			kcal_sleep_before_restore = true; // wait a bit as screen will turn off...so it's not visible when saturation back
 			needs_kcal_restore_on_screen_on = 1;
-			kcal_sleep_before_restore = true;
-			queue_work_on(smp_processor_id(), fpf_input_wq, &kcal_restore_backup_work);
+			kcal_push_restore = 1;
 		}
 	}
 	mutex_unlock(&stop_kad_mutex);
@@ -2364,6 +2365,7 @@ static int fb_notifier_callback(struct notifier_block *self,
 		screen_on_full = 1;
 		last_screen_event_timestamp = jiffies;
 		pr_info("%s kad screen on\n",__func__);
+		kcal_sleep_before_restore = true;
 		schedule_work(&kcal_restore_backup_work);
 		pr_info("fpf screen on\n");
 		}
