@@ -1253,6 +1253,7 @@ static int last_value = 0;
 static unsigned long MAX_DIFF = 200 * JIFFY_MUL;
 
 #define FINGERPRINT_VIB_TIME_EXCEPTION 40
+#define ALARM_VIB_TIME_EXCEPTION 500
 #define CALL_VIB_TIME_EXCEPTION 1000
 #define SQUEEZE_VIB_TIME_EXCEPTION 15
 #define DOUBLETAP_VIB_TIME_EXCEPTION 25
@@ -1331,7 +1332,7 @@ int register_haptic(int value)
 		register_input_event();
 		return value;
 	}
-	if (value == CALL_VIB_TIME_EXCEPTION) {
+	if (value == CALL_VIB_TIME_EXCEPTION || value == ALARM_VIB_TIME_EXCEPTION) {
 		register_input_event();
 		stop_kernel_ambient_display(true);
 		return value;

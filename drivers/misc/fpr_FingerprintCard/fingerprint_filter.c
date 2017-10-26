@@ -173,7 +173,11 @@ static void kcal_set(struct work_struct * kcal_set_work)
 		pr_info("%s kad\n",__func__);
 		if (((is_kad_on() && kad_kcal) || is_squeeze_peek_kcal()) && !kad_kcal_overlay_on) // && !kad_kcal_backed_up ) 
 		{
+			int max_try = 9;
 			msleep(230);
+			while (!screen_on && max_try-->=0) {
+				msleep(100);
+			}
 			if ((kad_kcal || is_squeeze_peek_kcal()) && screen_on && !kad_kcal_overlay_on) {
 				pr_info("%s kad backup... BBBBBBBBBBBB   screen %d kad %d overlay_on %d backed_up %d need_restore %d\n",__func__, screen_on, kad_running, kad_kcal_overlay_on, kad_kcal_backed_up, needs_kcal_restore_on_screen_on);
 				kcal_internal_backup();
