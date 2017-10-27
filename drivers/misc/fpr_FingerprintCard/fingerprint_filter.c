@@ -1316,8 +1316,20 @@ static enum alarmtimer_restart kad_repeat_rtc_callback(struct alarm *al, ktime_t
 void kernel_ambient_display(void) {
 
 	if (!is_kad_on()) return;
+	pr_info("%s kad -- ||||||| +++++++++++++ KAD +++++++++++++ ////// screen_on %d kad_running %d \n",__func__,screen_on, kad_running);
 	kad_repeat_counter = 0;
-	do_kernel_ambient_display();
+	//do_kernel_ambient_display();
+	if (!screen_on && !kad_running)
+	{
+		// alarm timer
+		// ...to wait a bit with starting the first instance, because of phone calls/alarms can turn screen on in the meantime
+		ktime_t wakeup_time;
+		ktime_t curr_time = { .tv64 = 0 };
+		wakeup_time = ktime_add_us(curr_time,
+			500LL * 1000LL); // 0.5sec
+		alarm_cancel(&kad_repeat_rtc);
+		alarm_start_relative(&kad_repeat_rtc, wakeup_time); // start new...
+	}
 }
 EXPORT_SYMBOL(kernel_ambient_display);
 void stop_kernel_ambient_display(bool interrupt_ongoing) {
