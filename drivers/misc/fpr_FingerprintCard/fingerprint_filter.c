@@ -1342,7 +1342,7 @@ void stop_kernel_ambient_display(bool interrupt_ongoing) {
 }
 EXPORT_SYMBOL(stop_kernel_ambient_display);
 int is_kernel_ambient_display(void) {
-	return is_kad_on();
+	return is_kad_on() && (!kad_only_on_charger || input_is_charging());
 }
 EXPORT_SYMBOL(is_kernel_ambient_display);
 
