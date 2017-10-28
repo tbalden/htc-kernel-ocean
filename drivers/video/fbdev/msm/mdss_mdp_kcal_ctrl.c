@@ -603,11 +603,17 @@ static int fb_notifier_callback(struct notifier_block *nb,
 int stored_sat = 0;
 int stored_val = 0;
 int stored_cont = 0;
+int stored_r = 0;
+int stored_g = 0;
+int stored_b = 0;
+int stored_enable = 0;
+
+//#define KCAL_RGB
 
 //DEFINE_MUTEX(kcal_int_lock);
 struct platform_device *g_dev = NULL;
 
-void kcal_internal_override(int kcal_sat, int kcal_val, int kcal_cont)
+void kcal_internal_override(int kcal_sat, int kcal_val, int kcal_cont, int r, int g, int b)
 {
 //	if (!mutex_trylock(&kcal_int_lock)) {
 //		pr_info("%s kad unable to lock\n",__func__);
@@ -619,8 +625,19 @@ void kcal_internal_override(int kcal_sat, int kcal_val, int kcal_cont)
 		lut_data->sat = kcal_sat;
 		lut_data->val = kcal_val;
 		lut_data->cont = kcal_cont;
-		if (mdss_mdp_kcal_is_panel_on())
+#ifdef KCAL_RGB
+		lut_data->red = r;
+		lut_data->green = g;
+		lut_data->blue = b;
+		lut_data->enable = 1;
+#endif
+		if (mdss_mdp_kcal_is_panel_on()) {
 			mdss_mdp_kcal_update_pa(lut_data);
+#ifdef KCAL_RGB
+			mdss_mdp_kcal_update_pcc(lut_data);
+			mdss_mdp_kcal_update_igc(lut_data);
+#endif
+		}
 		else
 			lut_data->queue_changes = true;
 	}
@@ -640,6 +657,12 @@ void kcal_internal_backup(void)
 		stored_sat = lut_data->sat;
 		stored_val = lut_data->val;
 		stored_cont = lut_data->cont;
+
+		stored_enable = lut_data->enable;
+		stored_r = lut_data->red;
+		stored_g = lut_data->green;
+		stored_b = lut_data->blue;
+		pr_info("%s kad lock ### store kcal rgb: r %d g %d b %d enaled %d\n",__func__, stored_r,stored_g,stored_b,stored_enable);
 	//	}
 	}
 //	mutex_unlock(&kcal_int_lock);
@@ -658,9 +681,20 @@ void kcal_internal_restore(void)
 			lut_data->sat = stored_sat;
 			lut_data->val = stored_val;
 			lut_data->cont = stored_cont;
+#ifdef KCAL_RGB
+			lut_data->enable = stored_enable;
+			lut_data->red = stored_r;
+			lut_data->green = stored_g;
+			lut_data->blue = stored_b;
+#endif
 //			stored_sat = 0;
-			if (mdss_mdp_kcal_is_panel_on())
+			if (mdss_mdp_kcal_is_panel_on()) {
 				mdss_mdp_kcal_update_pa(lut_data);
+#ifdef KCAL_RGB
+				mdss_mdp_kcal_update_pcc(lut_data);
+				mdss_mdp_kcal_update_igc(lut_data);
+#endif
+			}
 			else
 				lut_data->queue_changes = true;
 		}

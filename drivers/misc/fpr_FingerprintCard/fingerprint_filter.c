@@ -75,6 +75,11 @@ static int kad_repeat_multiply_period = 1; // make periods between each longer?
 static int kad_repeat_period_sec = 12; // period between each repeat
 static int squeeze_peek_kcal = 0;
 
+static int kad_kcal_r = 150;
+static int kad_kcal_g = 150;
+static int kad_kcal_b = 254;
+
+
 static int kad_on_override = 0;
 void override_kad_on(int override) {
 	kad_on_override = !!override;
@@ -109,7 +114,7 @@ static enum alarmtimer_restart register_input_rtc_callback(struct alarm *al, kti
 	return ALARMTIMER_NORESTART;
 }
 
-extern void kcal_internal_override(int kcal_sat, int kcal_val, int kcal_cont);
+extern void kcal_internal_override(int kcal_sat, int kcal_val, int kcal_cont, int r, int g, int b);
 extern void kcal_internal_restore(void);
 extern void kcal_internal_backup(void);
 
@@ -186,7 +191,7 @@ static void kcal_set(struct work_struct * kcal_set_work)
 		}
 		if (((is_kad_on() && kad_kcal) || is_squeeze_peek_kcal()) && kad_kcal_backed_up && !kad_kcal_overlay_on) {
 			pr_info("%s kad override... SSSSSSSSSS   screen %d kad %d overlay_on %d backed_up %d need_restore %d\n",__func__, screen_on, kad_running, kad_kcal_overlay_on, kad_kcal_backed_up, needs_kcal_restore_on_screen_on);
-			kcal_internal_override(128,180,200);
+			kcal_internal_override(128,180,200, kad_kcal_r, kad_kcal_g, kad_kcal_b);
 			kad_kcal_overlay_on = 1; 
 		}
 	}
@@ -2339,6 +2344,90 @@ static DEVICE_ATTR(kad_disable_fp_input, (S_IWUSR|S_IRUGO),
 	kad_disable_fp_input_show, kad_disable_fp_input_dump);
 
 
+static ssize_t kad_kcal_red_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", kad_kcal_r);
+}
+
+static ssize_t kad_kcal_red_dump(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int ret;
+	unsigned long input;
+
+	ret = kstrtoul(buf, 0, &input);
+	if (ret < 0)
+		return ret;
+
+	if (input < 30 || input > 255)
+		input = 0;
+
+	kad_kcal_r = input;
+
+	return count;
+}
+
+static DEVICE_ATTR(kad_kcal_red, (S_IWUSR|S_IRUGO),
+	kad_kcal_red_show, kad_kcal_red_dump);
+
+
+static ssize_t kad_kcal_green_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", kad_kcal_g);
+}
+
+static ssize_t kad_kcal_green_dump(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int ret;
+	unsigned long input;
+
+	ret = kstrtoul(buf, 0, &input);
+	if (ret < 0)
+		return ret;
+
+	if (input < 30 || input > 255)
+		input = 255;
+
+	kad_kcal_g = input;
+
+	return count;
+}
+
+static DEVICE_ATTR(kad_kcal_green, (S_IWUSR|S_IRUGO),
+	kad_kcal_green_show, kad_kcal_green_dump);
+
+
+static ssize_t kad_kcal_blue_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", kad_kcal_b);
+}
+
+static ssize_t kad_kcal_blue_dump(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int ret;
+	unsigned long input;
+
+	ret = kstrtoul(buf, 0, &input);
+	if (ret < 0)
+		return ret;
+
+	if (input < 30 || input > 255)
+		input = 255;
+
+	kad_kcal_b = input;
+
+	return count;
+}
+
+static DEVICE_ATTR(kad_kcal_blue, (S_IWUSR|S_IRUGO),
+	kad_kcal_blue_show, kad_kcal_blue_dump);
+
+
 
 static struct kobject *fpf_kobj;
 
@@ -2537,6 +2626,18 @@ static int __init fpf_init(void)
 	rc = sysfs_create_file(fpf_kobj, &dev_attr_kad_disable_fp_input.attr);
 	if (rc)
 		pr_err("%s: sysfs_create_file failed for kad_disable_fp_input\n", __func__);
+
+	rc = sysfs_create_file(fpf_kobj, &dev_attr_kad_kcal_red.attr);
+	if (rc)
+		pr_err("%s: sysfs_create_file failed for kad_kcal_red\n", __func__);
+
+	rc = sysfs_create_file(fpf_kobj, &dev_attr_kad_kcal_green.attr);
+	if (rc)
+		pr_err("%s: sysfs_create_file failed for kad_kcal_green\n", __func__);
+
+	rc = sysfs_create_file(fpf_kobj, &dev_attr_kad_kcal_blue.attr);
+	if (rc)
+		pr_err("%s: sysfs_create_file failed for kad_kcal_blue\n", __func__);
 
 	rc = sysfs_create_file(fpf_kobj, &dev_attr_notification_booster.attr);
 	if (rc)
