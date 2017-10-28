@@ -981,6 +981,7 @@ extern int is_kernel_ambient_display(void);
 extern void stop_kernel_ambient_display(bool interrupt_ongoing);
 
 void register_input_event(void);
+void register_input_event_early(void);
 
 static int blink_running = 0;
 static int vary1 = 1;
@@ -1086,7 +1087,7 @@ void register_charging(int on)
 	// if going into no-charge mode, overwrite last charge state, 
 	// ...so next time charging starts multicolored led will be set one time
 	if (!charging) last_charge_state = 0;
-	register_input_event();
+	register_input_event_early();
 	stop_kernel_ambient_display(true);
 }
 EXPORT_SYMBOL(register_charging);
@@ -1282,6 +1283,14 @@ static enum alarmtimer_restart flash_stop_rtc_callback(struct alarm *al, ktime_t
 }
 
 static unsigned long last_input_event = 0;
+void register_input_event_early(void) {
+	wake_by_user = 1;
+	last_input_event = jiffies;
+	if (screen_on_early) {
+		// user is inputing phone, no haptic blinking should trigger BLN when screen off
+		bln_on_screenoff = 0;
+	}
+}
 void register_input_event(void) {
 //	pr_info("%s kad self wake: blocking event\n",__func__);
 	wake_by_user = 1;

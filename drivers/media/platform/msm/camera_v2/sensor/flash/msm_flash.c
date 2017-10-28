@@ -41,6 +41,7 @@ static struct kobject *led_status_obj; // tmp remove for fc-1
 DEFINE_MSM_MUTEX(msm_flash_mutex);
 
 #if 1
+static int init_done = 0;
 static struct alarm flash_blink_rtc;
 static struct alarm flash_blink_do_blink_rtc;
 static struct alarm vib_rtc;
@@ -472,6 +473,8 @@ void flash_blink(bool haptic) {
 	// if torch i on, don't blink
 	if (currently_torch_mode) return;
 
+	if (!init_done) return;
+
 	queue_work(flash_start_blink_workqueue, &flash_start_blink_work);
 }
 EXPORT_SYMBOL(flash_blink);
@@ -529,6 +532,7 @@ static enum alarmtimer_restart flash_blink_do_blink_rtc_callback(struct alarm *a
 
 void flash_stop_blink(void) {
 	pr_info("%s flash_blink\n",__func__);
+	if (!init_done) return;
 	queue_work(flash_stop_blink_workqueue, &flash_stop_blink_work);
 }
 EXPORT_SYMBOL(flash_stop_blink);
@@ -2113,6 +2117,7 @@ static int __init msm_flash_init_module(void)
 	INIT_WORK(&flash_blink_work, flash_blink_work_func);
 	INIT_WORK(&flash_start_blink_work, flash_start_blink_work_func);
 	INIT_WORK(&flash_stop_blink_work, flash_stop_blink_work_func);
+	init_done = 1;
 #endif
 
 	return rc;
