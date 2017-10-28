@@ -1252,6 +1252,7 @@ EXPORT_SYMBOL(register_charge_level);
 static unsigned long last_haptic_jiffies = 0;
 static int last_value = 0;
 static unsigned long MAX_DIFF = 200 * JIFFY_MUL;
+static unsigned long MAX_DIFF_LONG_VIB = 310 * JIFFY_MUL;
 
 #define FINGERPRINT_VIB_TIME_EXCEPTION 40
 #define ALARM_VIB_TIME_EXCEPTION 500
@@ -1360,7 +1361,7 @@ int register_haptic(int value)
 
 	if (screen_on && wake_by_user) return value;
 	if (last_value == value) {
-		if (diff_jiffies < MAX_DIFF) {
+		if ((value > 500 && diff_jiffies < MAX_DIFF_LONG_VIB) || diff_jiffies < MAX_DIFF) {
 			if (value <= 200) {
 				short_vib_notif = 1;
 			} else {
