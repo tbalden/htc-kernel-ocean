@@ -3626,7 +3626,6 @@ static int fb_notifier_led_callback(struct notifier_block *self,
 		vk_off_time_passed = 0;
 		blink_running = 0;
 		alarm_cancel(&blinkstopfunc_rtc); // stop pending alarm...
-//		flash_stop_blink();
 		I("screen on -early\n");
             break;
             
@@ -3658,6 +3657,7 @@ static int fb_notifier_led_callback(struct notifier_block *self,
 		alarm_cancel(&blinkstopfunc_rtc); // stop pending alarm...
 		if (wake_by_user) {
 			bln_on_screenoff = 0;
+			flash_stop_blink();
 			stop_kernel_ambient_display(false);
 		}
 		I("screen on\n");

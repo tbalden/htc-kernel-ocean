@@ -1132,7 +1132,7 @@ void register_squeeze(unsigned long timestamp, int vibration) {
 					squeeze_swipe_trigger();
 				} else {
 					last_screen_event_timestamp = jiffies;
-					fpf_pwrtrigger(0,__func__);
+					fpf_pwrtrigger(0,__func__); // SCREEN ON
 				}
 			}
 			return;
@@ -1175,7 +1175,7 @@ void register_squeeze(unsigned long timestamp, int vibration) {
 						squeeze_swipe_trigger();
 					} else {
 						last_screen_event_timestamp = jiffies;
-						fpf_pwrtrigger(0,__func__);
+						fpf_pwrtrigger(0,__func__); // SCREEN ON
 					}
 				}
 				return;
@@ -1237,7 +1237,7 @@ void register_squeeze(unsigned long timestamp, int vibration) {
 					squeeze_swipe_trigger();
 				} else {
 					last_screen_event_timestamp = jiffies;
-					fpf_pwrtrigger(0,__func__);
+					fpf_pwrtrigger(0,__func__); // SCREEN ON
 				}
 			}
 		} else if (!screen_on && diff>MAX_SQUEEZE_TIME && diff<=MAX_SQUEEZE_TIME_LONG && squeeze_peek) {
