@@ -652,7 +652,7 @@ static DEFINE_MUTEX(squeeze_swipe_lock);
 
 #define SWIPE_ACCELERATED_TIME_LIMIT 150 * JIFFY_MUL
 int interrupt_swipe_longcount = 0;
-int swipe_longcount_finished = 0;
+int swipe_longcount_finished = 1;
 unsigned long swipe_longcount_start = 0;
 static void swipe_longcount(struct work_struct * swipe_longcount_work) {
 	while (1) {
@@ -664,7 +664,7 @@ static void swipe_longcount(struct work_struct * swipe_longcount_work) {
 		if (jiffies - swipe_longcount_start > SWIPE_ACCELERATED_TIME_LIMIT) {
 			pr_info("%s ######## squeeze call || swipe_longcount VIBRATION !! \n",__func__);
 			swipe_longcount_finished = 1;
-			if (squeeze_swipe_vibration) {
+			if (squeeze_swipe_vibration && screen_on) {
 				set_vibrate(1);
 			}
 			return;
