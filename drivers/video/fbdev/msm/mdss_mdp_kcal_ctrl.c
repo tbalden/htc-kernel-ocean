@@ -613,11 +613,11 @@ int stored_enable = 0;
 DEFINE_MUTEX(kcal_int_lock);
 struct platform_device *g_dev = NULL;
 
-void kcal_internal_override(int kcal_sat, int kcal_val, int kcal_cont, int r, int g, int b)
+int kcal_internal_override(int kcal_sat, int kcal_val, int kcal_cont, int r, int g, int b)
 {
 	if (!mutex_trylock(&kcal_int_lock)) {
 		pr_info("%s kad unable to lock\n",__func__);
-		return;
+		return 0;
 	}
 	if (g_dev) {
 		struct kcal_lut_data *lut_data = dev_get_drvdata(&g_dev->dev);
@@ -642,6 +642,7 @@ void kcal_internal_override(int kcal_sat, int kcal_val, int kcal_cont, int r, in
 			lut_data->queue_changes = true;
 	}
 	mutex_unlock(&kcal_int_lock);
+	return 1;
 }
 EXPORT_SYMBOL(kcal_internal_override);
 void kcal_internal_backup(void)
@@ -668,11 +669,11 @@ void kcal_internal_backup(void)
 //	mutex_unlock(&kcal_int_lock);
 }
 EXPORT_SYMBOL(kcal_internal_backup);
-void kcal_internal_restore(void)
+int kcal_internal_restore(void)
 {
 	if (!mutex_trylock(&kcal_int_lock)) {
 		pr_info("%s kad unable to lock\n",__func__);
-		return;
+		return 0;
 	}
 	if (g_dev) {
 		struct kcal_lut_data *lut_data = dev_get_drvdata(&g_dev->dev);
@@ -700,6 +701,7 @@ void kcal_internal_restore(void)
 		}
 	}
 	mutex_unlock(&kcal_int_lock);
+	return 1;
 }
 EXPORT_SYMBOL(kcal_internal_restore);
 

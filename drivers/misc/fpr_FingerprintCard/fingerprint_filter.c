@@ -54,6 +54,7 @@ static struct workqueue_struct *kcal_listener_wq;
 	static int screen_on = 1;
 	// full screen on flag
 	static int screen_on_full = 1;
+	static int screen_off_early = 0;
 	struct notifier_block *fb_notifier;
 
 int input_is_screen_on(void) {
@@ -114,8 +115,8 @@ static enum alarmtimer_restart register_input_rtc_callback(struct alarm *al, kti
 	return ALARMTIMER_NORESTART;
 }
 
-extern void kcal_internal_override(int kcal_sat, int kcal_val, int kcal_cont, int r, int g, int b);
-extern void kcal_internal_restore(void);
+extern int kcal_internal_override(int kcal_sat, int kcal_val, int kcal_cont, int r, int g, int b);
+extern int kcal_internal_restore(void);
 extern void kcal_internal_backup(void);
 
 static int kad_kcal_overlay_on = 0;
@@ -123,26 +124,32 @@ static int kad_kcal_backed_up = 0;
 
 static bool kcal_sleep_before_restore = false;
 
-static void kcal_restore_backup_sync(void) {
+static void kcal_restore_sync(void) {
 	if (!kad_running && needs_kcal_restore_on_screen_on && kad_kcal_backed_up && kad_kcal_overlay_on) {
 		pr_info("%s kad\n",__func__);
 		if (((is_kad_on() && kad_kcal) || is_squeeze_peek_kcal()) && screen_on) { 
-			needs_kcal_restore_on_screen_on = 0;
+			int retry_count = 2;
 			pr_info("%s kad RRRRRRRRRRRR restore... screen %d kad %d overlay_on %d backed_up %d need_restore %d\n",__func__, screen_on, kad_running, kad_kcal_overlay_on, kad_kcal_backed_up, needs_kcal_restore_on_screen_on);
-			kcal_internal_restore();
-			kad_kcal_overlay_on = 0;
-			kad_kcal_backed_up = 0; // changes to kcal may happen in user apps...don't take granted it's backed up (like night mode)
+			while (retry_count-->0) {
+				if (screen_on && kcal_internal_restore()) {
+					needs_kcal_restore_on_screen_on = 0;
+					kad_kcal_overlay_on = 0;
+					kad_kcal_backed_up = 0; // changes to kcal may happen in user apps...don't take granted it's backed up (like night mode)
+					break;
+				}
+				msleep(5);
+			}
 		}
 	}
 }
 
-static void kcal_restore_backup(struct work_struct * kcal_restore_backup_work) 
+static void kcal_restore(struct work_struct * kcal_restore_work) 
 {
 	pr_info("%s kad ############ restore_backup     screen %d kad %d overlay_on %d backed_up %d need_restore %d\n",__func__, screen_on, kad_running, kad_kcal_overlay_on, kad_kcal_backed_up, needs_kcal_restore_on_screen_on);
 	if (kcal_sleep_before_restore) { msleep(300); } // squeeze peek timed out, wait a bit till screen faded enough... otherwise instant restore
-	kcal_restore_backup_sync();
+	kcal_restore_sync();
 }
-static DECLARE_WORK(kcal_restore_backup_work, kcal_restore_backup);
+static DECLARE_WORK(kcal_restore_work, kcal_restore);
 
 static int kcal_push_restore = 0;
 static int kcal_push_break = 0;
@@ -154,8 +161,8 @@ static void kcal_listener(struct work_struct * kcal_listener_work)
 			pr_info("%s kad !! kcal listener restore  screen %d kad %d overlay_on %d backed_up %d need_restore %d\n",__func__, screen_on, kad_running, kad_kcal_overlay_on, kad_kcal_backed_up, needs_kcal_restore_on_screen_on);
 			kcal_push_restore = 0;
 			kcal_push_break = 0;
-			if (kcal_sleep_before_restore) { msleep(230); } // 230 is ok, before a screen off happens fully...
-			kcal_restore_backup_sync();
+			if (kcal_sleep_before_restore) { msleep(180); } // 230 is ok, before a screen off happens fully...
+			if (screen_on) kcal_restore_sync();
 			break;
 		}
 		if (kcal_push_break) {
@@ -164,7 +171,7 @@ static void kcal_listener(struct work_struct * kcal_listener_work)
 			kcal_push_break = 0;
 			break;
 		}
-		mdelay(5);
+		msleep(5);
 //		pr_info("%s kad !! kcal listener running   screen %d kad %d overlay_on %d backed_up %d need_restore %d\n",__func__, screen_on, kad_running, kad_kcal_overlay_on, kad_kcal_backed_up, needs_kcal_restore_on_screen_on);
 	}
 }
@@ -184,15 +191,28 @@ static void kcal_set(struct work_struct * kcal_set_work)
 				msleep(100);
 			}
 			if ((kad_kcal || is_squeeze_peek_kcal()) && screen_on && !kad_kcal_overlay_on) {
+				int retry_count = 2;
 				pr_info("%s kad backup... BBBBBBBBBBBB   screen %d kad %d overlay_on %d backed_up %d need_restore %d\n",__func__, screen_on, kad_running, kad_kcal_overlay_on, kad_kcal_backed_up, needs_kcal_restore_on_screen_on);
-				kcal_internal_backup();
-				kad_kcal_backed_up = 1;
+				while (retry_count-->0) {
+					if (screen_on) {
+						kcal_internal_backup();
+						kad_kcal_backed_up = 1;
+						break;
+					}
+					msleep(5);
+				}
 			}
 		}
 		if (((is_kad_on() && kad_kcal) || is_squeeze_peek_kcal()) && kad_kcal_backed_up && !kad_kcal_overlay_on) {
+			int retry_count = 2;
 			pr_info("%s kad override... SSSSSSSSSS   screen %d kad %d overlay_on %d backed_up %d need_restore %d\n",__func__, screen_on, kad_running, kad_kcal_overlay_on, kad_kcal_backed_up, needs_kcal_restore_on_screen_on);
-			kcal_internal_override(128,180,200, kad_kcal_r, kad_kcal_g, kad_kcal_b);
-			kad_kcal_overlay_on = 1; 
+			while (retry_count-->0) {
+				if (screen_on && kcal_internal_override(128,180,200, kad_kcal_r, kad_kcal_g, kad_kcal_b)) {
+					kad_kcal_overlay_on = 1; 
+					break;
+				}
+				msleep(5);
+			}
 		}
 	}
 }
@@ -438,7 +458,7 @@ static void ts_poke(void);
 extern void register_input_event(void);
 void register_fp_wake(void) {
 	pr_info("%s kad fpf fp wake registered\n",__func__);
-	if (screen_on_full && (!kad_disable_fp_input || !kad_running || kad_running_for_kcal_only)) {
+	if (screen_on_full && !screen_off_early && (!kad_disable_fp_input || !kad_running || kad_running_for_kcal_only)) {
 		bool poke = kad_running && !kad_running_for_kcal_only;
 		squeeze_peek_wait = 0; // interrupt peek wait, touchscreen was interacted, don't turn screen off after peek time over...
 		if (init_done) {
@@ -461,7 +481,7 @@ void register_fp_wake(void) {
 EXPORT_SYMBOL(register_fp_wake);
 void register_fp_irq(void) {
 	pr_info("%s kad fpf fp tap irq registered\n",__func__);
-	if (screen_on_full && (!kad_disable_fp_input || !kad_running || kad_running_for_kcal_only)) {
+	if (screen_on_full && !screen_off_early && (!kad_disable_fp_input || !kad_running || kad_running_for_kcal_only)) {
 		bool poke = kad_running && !kad_running_for_kcal_only;
 		squeeze_peek_wait = 0; // interrupt peek wait, touchscreen was interacted, don't turn screen off after peek time over...
 		if (init_done) {
@@ -472,7 +492,7 @@ void register_fp_irq(void) {
 			ts_poke();
 		}
 	}
-	if (init_done && screen_on_full) { 
+	if (init_done && screen_on_full && !screen_off_early) { 
 	// only register user input when screen is on, cause FP Wake is not enabled for FP, meaning it shouldn't count as a user input while screen is still off
 		ktime_t wakeup_time;
 		ktime_t curr_time = { .tv64 = 0 };
@@ -501,7 +521,7 @@ static bool fpf_input_filter(struct input_handle *handle,
 		return false;
 
 	register_input_event();
-	if (screen_on_full) squeeze_peek_wait = 0; // interrupt peek wait, touchscreen was interacted, don't turn screen off after peek time over...
+	if (screen_on_full && !screen_off_early) squeeze_peek_wait = 0; // interrupt peek wait, touchscreen was interacted, don't turn screen off after peek time over...
 
 	// if it's not on, don't filter anything...
 	if (fpf_switch == 0) return false;
@@ -1584,7 +1604,7 @@ static bool ts_input_filter(struct input_handle *handle,
 
 #endif
 skip_ts:
-	if (screen_on_full) {
+	if (screen_on_full && !screen_off_early) {
 		if (!kad_running || kad_running_for_kcal_only || !kad_disable_touch_input || (type==EV_KEY && code!=158 && code !=580)) { // if not in KAD display mode, or not touchscreen input
 			squeeze_peek_wait = 0; // interrupt peek wait, touchscreen was interacted, don't turn screen off after peek time over...
 			if (kad_running) { 
@@ -2448,6 +2468,7 @@ static int fb_notifier_callback(struct notifier_block *self,
         switch (*blank) {
         case FB_BLANK_UNBLANK:
 		screen_on = 1;
+		screen_off_early = 0;
 		pr_info("fpf kad screen on -early\n");
             break;
 
@@ -2456,7 +2477,8 @@ static int fb_notifier_callback(struct notifier_block *self,
         case FB_BLANK_VSYNC_SUSPEND:
         case FB_BLANK_NORMAL:
 		screen_on = 0;
-		screen_on_full = 0;
+		screen_off_early = 1;
+		//screen_on_full = 0;
 		pr_info("fpf kad screen off -early\n");
             break;
         }
@@ -2471,7 +2493,7 @@ static int fb_notifier_callback(struct notifier_block *self,
 		last_screen_event_timestamp = jiffies;
 		pr_info("%s kad screen on\n",__func__);
 		kcal_sleep_before_restore = true;
-		schedule_work(&kcal_restore_backup_work);
+		schedule_work(&kcal_restore_work);
 		pr_info("fpf screen on\n");
 		}
             break;
