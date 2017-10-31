@@ -449,19 +449,17 @@ static void flash_start_blink_work_func(struct work_struct *work)
 
 static void flash_stop_blink_work_func(struct work_struct *work)
 {
-	pr_info("%s flash_blink\n",__func__);
 	mutex_lock(&flash_blink_lock);
-	pr_info("%s flash_blink lock\n",__func__);
 
-	if (!flash_blink_on && !currently_blinking) goto exit;
+	if (!currently_blinking) goto exit;
 	if (currently_torch_mode) goto exit;
+	pr_info("%s flash_blink\n",__func__);
 	currently_blinking = 0;
 	htc_torch_main(0,0);
 	interrupt_retime = 1;
 	alarm_cancel(&flash_blink_rtc); // stop pending alarm...
 exit:
 	mutex_unlock(&flash_blink_lock);
-	pr_info("%s flash_blink unlock\n",__func__);
 }
 
 void flash_blink(bool haptic) {
@@ -531,7 +529,7 @@ static enum alarmtimer_restart flash_blink_do_blink_rtc_callback(struct alarm *a
 
 
 void flash_stop_blink(void) {
-	pr_info("%s flash_blink\n",__func__);
+//	pr_info("%s flash_blink\n",__func__);
 	if (!init_done) return;
 	queue_work(flash_stop_blink_workqueue, &flash_stop_blink_work);
 }
