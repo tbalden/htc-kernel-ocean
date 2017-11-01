@@ -3242,6 +3242,15 @@ static void lp5562_vk_led_set_brightness(struct led_classdev *led_cdev,
 		VK_brightness = VK_brightness / divider;
 		if (VK_brightness < 16) VK_brightness = 16;
 	}
+	// if divider set to max, turn off button lights permanently
+	if (bln_coeff_divider==21) {
+		ldata->VK_brightness = 0;
+		VK_brightness = 0;
+		if (vk_led_blink) {
+			virtual_key_led_blink(0,0);
+			return;
+		}
+	}
 	I(" %s , VK_brightness after bln coeff division = %u\n" , __func__, VK_brightness);
 #endif
 
