@@ -28,21 +28,34 @@
 
 #include "cyttsp5_regs.h"
 
+#if 1
+extern int is_real_ts_input_filtered(void);
+#endif
+
 static void cyttsp5_final_sync(struct input_dev *input, int max_slots,
 		int mt_sync_count, unsigned long *ids)
 {
+#if 1
+	if (is_real_ts_input_filtered()) return;
+#endif
 	if (mt_sync_count)
 		input_sync(input);
 }
 
 static void cyttsp5_input_sync(struct input_dev *input)
 {
+#if 1
+	if (is_real_ts_input_filtered()) return;
+#endif
 	input_mt_sync(input);
 }
 
 static void cyttsp5_input_report(struct input_dev *input, int sig,
 		int t, int type)
 {
+#if 1
+	if (is_real_ts_input_filtered()) return;
+#endif
 	if (type == CY_OBJ_STANDARD_FINGER || type == CY_OBJ_GLOVE
 			|| type == CY_OBJ_HOVER) {
 		input_report_key(input, BTN_TOOL_FINGER, CY_BTN_PRESSED);
@@ -61,6 +74,9 @@ static void cyttsp5_input_report(struct input_dev *input, int sig,
 static void cyttsp5_report_slot_liftoff(struct cyttsp5_mt_data *md,
 		int max_slots)
 {
+#if 1
+	if (is_real_ts_input_filtered()) return;
+#endif
 	input_report_key(md->input, BTN_TOUCH, CY_BTN_RELEASED);
 	input_report_key(md->input, BTN_TOOL_FINGER, CY_BTN_RELEASED);
 	input_report_key(md->input, BTN_TOOL_PEN, CY_BTN_RELEASED);

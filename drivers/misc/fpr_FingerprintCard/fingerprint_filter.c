@@ -663,6 +663,7 @@ static int squeeze_swipe_vibration = 1;
 // members...
 static int squeeze_swipe_dir = 1;
 int last_mt_slot = 0;
+int highest_mt_slot = 0;
 int pseudo_rnd = 0;
 
 int swipe_step_wait_time_mul = 100; // tune this to find optimal slowness of swipe for all kinds of apps
@@ -701,38 +702,92 @@ static void swipe_longcount_trigger(void) {
 
 
 #if 1
-#define TS_MAP_SIZE 500
+#define TS_MAP_SIZE 1000
 static int ts_current_type[TS_MAP_SIZE], ts_current_code[TS_MAP_SIZE], ts_current_value[TS_MAP_SIZE];
 static int ts_current_count = 0;
 static int ts_emulated_events_in_progress = 0;
-static void ts_call_input_event(void *p, int type, int code, int value)
-{
-	ts_emulated_events_in_progress++;
-	ts_current_type[ts_current_count] = type;
-	ts_current_code[ts_current_count] = code;
-	ts_current_value[ts_current_count] = value;
-	ts_current_count = ts_current_count==(TS_MAP_SIZE-1) ? 0 : (ts_current_count+1);
-	input_event(ts_device,type,code,value);
+// global filter, ts finger touching counter...
+static int finger_counter = 0;
+
+static int ts_track_type[TS_MAP_SIZE], ts_track_code[TS_MAP_SIZE], ts_track_value[TS_MAP_SIZE];
+static int ts_track_size = 0;
+static int ts_track_intercepted = 0;
+static int ts_track_mistmatch = 0;
+static int ts_track_47_count = 0;
+static void ts_track_event_clear(bool clear_mismatch) {
+	pr_info("%s\n",__func__);
+	ts_track_size = 0;
+	ts_track_intercepted = 0;
+	if (clear_mismatch) ts_track_mistmatch = 0;
 }
+static void ts_track_event_gather(int type, int code, int value) {
+	ts_track_type[ts_track_size] = type;
+	ts_track_code[ts_track_size] = code;
+	ts_track_value[ts_track_size] = value;
+	ts_track_size++;
+	pr_info("%s ---- add Input: %d %d %d Size: %d\n",__func__,type,code,value,ts_track_size);
+}
+static void ts_track_event_run(void) {
+	int i;
+	for (i=0;i<ts_track_size;i++) {
+		input_event(ts_device,ts_track_type[i],ts_track_code[i],ts_track_value[i]);
+	}
+}
+DEFINE_MUTEX(track_check_lock);
+static int ts_track_event_check(int type, int code, int value) {
+	//mutex_lock(&track_check_lock);
+	{
+	int i = ts_track_intercepted;
+	pr_info("%s #### checking Input: %d %d %d Against: %d %d %d | size %d | found %d \n",__func__,type,code,value, ts_track_type[i], ts_track_code[i], ts_track_value[i], ts_track_size, ts_track_intercepted);
+	if (ts_track_type[i] == type &&
+		ts_track_code[i] == code &&
+		ts_track_value[i] == value) {
+		pr_info("%s ++++ intercepted Input: %d %d %d Against: %d %d %d \n",__func__,type,code,value, ts_track_type[i], ts_track_code[i], ts_track_value[i]);
+		if (ts_track_47_count>0) { ts_track_47_count--; }
+		ts_track_intercepted++;
+		//mutex_unlock(&track_check_lock);
+		return 1;
+	}
+	if (type == EV_ABS && code == 47) {
+		ts_track_47_count++;
+	} else {
+		if (ts_track_47_count>0) { ts_track_47_count--; ts_track_intercepted++; }
+	}
+	pr_info("%s ---- mismatch Input: %d %d %d Against: %d %d %d \n",__func__,type,code,value, ts_track_type[i], ts_track_code[i], ts_track_value[i]);
+	ts_track_mistmatch++;
+	}
+	//mutex_unlock(&track_check_lock);
+	return 0;
+}
+static int dump_count = 0;
+static int ts_track_event_complete(void) {
+	pr_info("%s ???? checking | size %d | found %d \n",__func__, ts_track_size, ts_track_intercepted);
+	if (dump_count++ % 20 && ts_track_size <4) {
+		int i = 0;
+		for (i = ts_track_intercepted; i<ts_track_size;i++) 
+		{
+			pr_info("%s ----# Input left [%d]: %d %d %d \n",__func__, i, ts_track_type[i], ts_track_code[i], ts_track_value[i]);
+		}
+		dump_count = 0;
+	}
+	return ts_track_intercepted == ts_track_size;
+}
+
 
 static int longcount_squeeze_swipe_dir_change = 0;
 
 static int last_swipe_very_quick = 0;
 
-// global filter, ts finger touching counter...
-static int finger_counter = 0;
 
-static void ts_free_input(struct work_struct * ts_free_input_work) {
-	mutex_lock(&squeeze_swipe_lock);
-	ts_call_input_event(ts_device, EV_ABS, ABS_MT_TRACKING_ID, --last_mt_slot);
-	ts_call_input_event(ts_device, EV_ABS, ABS_MT_TRACKING_ID, -1);
-	ts_call_input_event(ts_device, EV_SYN, 0, 0);
-	mutex_unlock(&squeeze_swipe_lock);
+
+int is_real_ts_input_filtered(void) {
+	return (mutex_is_locked(&squeeze_swipe_lock));
 }
-static DECLARE_DELAYED_WORK(ts_free_input_work, ts_free_input);
+EXPORT_SYMBOL(is_real_ts_input_filtered);
 
 static void ts_poke_emulate(struct work_struct * ts_poke_emulate_work) {
 	int i;
+	int local_slot = last_mt_slot;
 	pr_info("%s ts_input checking finger counter over 0, then don't simulate %d\n",__func__, finger_counter);
 	pr_info("%s ts_input ######### squeeze try_lock #########\n",__func__);
 	if (!mutex_trylock(&squeeze_swipe_lock)) {
@@ -741,6 +796,7 @@ static void ts_poke_emulate(struct work_struct * ts_poke_emulate_work) {
 	for (i=0; i<TS_MAP_SIZE; i++) {
 		ts_current_type[i]=100;
 	}
+	ts_emulated_events_in_progress = 0;
 	ts_current_type[0] = 3;	ts_current_code[0] = 47;ts_current_value[0] = 31;
 	ts_current_count = 1;
 	{
@@ -749,34 +805,118 @@ static void ts_poke_emulate(struct work_struct * ts_poke_emulate_work) {
 		int y_steps = 10;
 		int pseudo_rnd = 0;
 		swipe_step_wait_time_mul = 100;
-			ts_call_input_event(ts_device, EV_ABS, ABS_MT_TRACKING_ID, --last_mt_slot);
+		{
+			int empty_check_count = 0;
+			int first_steps = 1;
+			int second_step_done = 0;
+			unsigned long start_time = jiffies;
+			unsigned int diff_time = 0;
+
+			ts_track_event_clear(true);
 			while (y_steps-->0) {
-				ts_call_input_event(ts_device, EV_ABS, ABS_MT_POSITION_X, 700+ (pseudo_rnd++)%2);
-				ts_call_input_event(ts_device, EV_ABS, ABS_MT_POSITION_Y, 1000+y_diff);
+				if (first_steps) {
+					ts_track_event_gather(EV_ABS, ABS_MT_TRACKING_ID, --local_slot);
+					first_steps = 0;
+				} else {
+					if (!second_step_done) {
+						ts_track_event_clear(true); // clear out "47" mismatch at start
+						second_step_done = 1;
+					}
+					ts_track_event_clear(false);
+				}
+				ts_track_event_gather(EV_ABS, ABS_MT_POSITION_X, 700+ (pseudo_rnd++)%2);
+				ts_track_event_gather(EV_ABS, ABS_MT_POSITION_Y, 1000+y_diff);
 				y_diff += y_delta;
-				ts_call_input_event(ts_device, EV_ABS, ABS_MT_PRESSURE, 70+ (pseudo_rnd%2));
-				ts_call_input_event(ts_device, EV_SYN, 0, 0);
+				ts_track_event_gather(EV_ABS, ABS_MT_PRESSURE, 70+ (pseudo_rnd%2));
+				ts_track_event_gather(EV_SYN, 0, 0);
+				ts_track_event_run();
 				udelay(5 * swipe_step_wait_time_mul);
 				if (y_steps%10==0) {
 					pr_info("%s ts_input squeeze emulation step = %d POS_Y = %d \n",__func__,y_steps, 1000+y_diff);
 				}
+				while(!ts_track_event_complete()) {
+					msleep(1);
+				}
 			}
+			pr_info("fpf %s ts DOWN 0 \n",__func__);
+			{
+				ts_track_event_clear(true);
+			}
+			ts_track_event_gather(EV_ABS, ABS_MT_TRACKING_ID, -1);
+			ts_track_event_gather(EV_SYN, 0, 0);
+			ts_track_event_run();
+			msleep(1);
 
-			msleep(300);
-			pr_info("fpf %s ts DOWN 0 \n",__func__);
-			ts_call_input_event(ts_device, EV_ABS, ABS_MT_TRACKING_ID, -1);
-			ts_call_input_event(ts_device, EV_SYN, 0, 0);
-			msleep(300);
-			ts_call_input_event(ts_device, EV_ABS, ABS_MT_TRACKING_ID, --last_mt_slot);
-			pr_info("fpf %s ts DOWN 0 \n",__func__);
-			ts_call_input_event(ts_device, EV_ABS, ABS_MT_TRACKING_ID, -1);
-			ts_call_input_event(ts_device, EV_SYN, 0, 0);
-//			msleep(1);
+			while(!ts_track_event_complete()) {
+				msleep(1);
+				empty_check_count++;
+				if (empty_check_count%100==30) {
+					pr_info("%s ts_check || fallback\n",__func__);
+					input_event(ts_device,EV_ABS,47,0);
+					input_event(ts_device,EV_ABS,ABS_MT_TRACKING_ID,-1);
+					input_event(ts_device,EV_SYN,0,0);
+					msleep(5);
+
+					ts_track_event_clear(true);
+					ts_track_event_gather(EV_ABS,47,31);
+					ts_track_event_gather(EV_ABS, ABS_MT_TRACKING_ID, highest_mt_slot+1);
+					ts_track_event_gather(EV_ABS, ABS_MT_POSITION_X, 0);
+					ts_track_event_gather(EV_ABS, ABS_MT_POSITION_Y, 0);
+					ts_track_event_gather(EV_ABS, ABS_MT_PRESSURE, 40);
+					ts_track_event_gather(EV_SYN, 0, 0);
+					ts_track_event_run();
+					while(!ts_track_event_complete()) {
+						msleep(1);
+						pr_info("%s ts_check || fallback wait 1\n",__func__);
+						diff_time = jiffies - start_time;
+						if (diff_time>30) break;
+					}
+					ts_track_event_clear(true);
+					ts_track_event_gather(EV_ABS, ABS_MT_TRACKING_ID, -1);
+					ts_track_event_gather(EV_SYN, 0, 0);
+					ts_track_event_run();
+					while(!ts_track_event_complete()) {
+						msleep(1);
+						pr_info("%s ts_check || fallback wait 2\n",__func__);
+						diff_time = jiffies - start_time;
+						if (diff_time>30) break;
+					}
+					msleep(10);
+
+					ts_track_event_clear(true);
+					ts_track_event_gather(EV_ABS,47,30);
+					ts_track_event_gather(EV_ABS, ABS_MT_TRACKING_ID, highest_mt_slot);
+					ts_track_event_gather(EV_ABS, ABS_MT_POSITION_X, 1);
+					ts_track_event_gather(EV_ABS, ABS_MT_POSITION_Y, 1);
+					ts_track_event_gather(EV_ABS, ABS_MT_PRESSURE, 41);
+					ts_track_event_gather(EV_SYN, 0, 0);
+					ts_track_event_run();
+					while(!ts_track_event_complete()) {
+						msleep(1);
+						pr_info("%s ts_check || fallback wait 1\n",__func__);
+						diff_time = jiffies - start_time;
+						if (diff_time>30) break;
+					}
+					ts_track_event_clear(true);
+					ts_track_event_gather(EV_ABS, ABS_MT_TRACKING_ID, -1);
+					ts_track_event_gather(EV_SYN, 0, 0);
+					ts_track_event_run();
+					while(!ts_track_event_complete()) {
+						msleep(1);
+						pr_info("%s ts_check || fallback wait 2\n",__func__);
+						diff_time = jiffies - start_time;
+						if (diff_time>30) break;
+					}
+					msleep(10);
+				}
+				diff_time = jiffies - start_time;
+				if (diff_time>30) break;
+			}
+		}
 	}
 	while (ts_emulated_events_in_progress>10) {
 		msleep(1);
 	}
-	schedule_delayed_work(&ts_free_input_work, 10);
 	msleep(20);
 	mutex_unlock(&squeeze_swipe_lock);
 	pr_info("%s ts_input ######### squeeze unlock #########\n",__func__);
@@ -828,6 +968,7 @@ END ALL
 */
 static void ts_scroll_emulate(int down, int full) {
 
+	int local_slot = last_mt_slot;
 	int y_diff;
 	int y_delta;
 	int y_steps; // tune this for optimal page size of scrolling
@@ -838,12 +979,11 @@ static void ts_scroll_emulate(int down, int full) {
 	int double_swipe = 0;
 
 
-	pr_info("%s ts_input checking finger counter over 0, then don't simulate %d\n",__func__, finger_counter);
-	if (finger_counter>0) return;
 	pr_info("%s ts_input ######### squeeze try_lock #########\n",__func__);
 	if (!mutex_trylock(&squeeze_swipe_lock)) {
 		return;
 	}
+	ts_emulated_events_in_progress = 0;
 
 	// if last scroll close enough, double round of swipe, if it's intended to be a full swipe...
 	if (last_scroll_time_diff <= SWIPE_ACCELERATED_TIME_LIMIT && !swipe_longcount_finished && full) {
@@ -860,8 +1000,6 @@ static void ts_scroll_emulate(int down, int full) {
 	for (i=0; i<TS_MAP_SIZE; i++) {
 		ts_current_type[i]=100;
 	}
-	ts_current_type[0] = 3;	ts_current_code[0] = 47;ts_current_value[0] = 31;
-	ts_current_count = 1;
 
 	if (last_scroll_time_diff > 5000 * JIFFY_MUL) { // a higher value...passed?
 		if (full == 1) {
@@ -910,33 +1048,123 @@ static void ts_scroll_emulate(int down, int full) {
 		// TODO how to determine portrait/landscape mode? currently only portrait
 
 		if (screen_on) {
+			int empty_check_count = 0;
+			int first_steps = 1;
+			int second_step_done = 0;
+			unsigned long start_time = jiffies;
+			unsigned int diff_time = 0;
 			pr_info("fpf %s ts DOWN 1 \n",__func__);
-			ts_call_input_event(ts_device, EV_ABS, ABS_MT_TRACKING_ID, --last_mt_slot);
+			ts_track_event_clear(true);
 			while (y_steps-->0) {
-				ts_call_input_event(ts_device, EV_ABS, ABS_MT_POSITION_X, 800+ (pseudo_rnd++)%2);
-				ts_call_input_event(ts_device, EV_ABS, ABS_MT_POSITION_Y, 1000+y_diff);
+				if (first_steps) {
+					ts_track_event_gather(EV_ABS, ABS_MT_TRACKING_ID, --local_slot);
+					first_steps = 0;
+				} else {
+					if (!second_step_done) {
+						ts_track_event_clear(true); // clear out "47" mismatch at start
+						second_step_done = 1;
+					}
+					ts_track_event_clear(false);
+				}
+				ts_track_event_gather(EV_ABS, ABS_MT_POSITION_X, 800+ (pseudo_rnd++)%2);
+				ts_track_event_gather(EV_ABS, ABS_MT_POSITION_Y, 1000+y_diff);
 				y_diff += y_delta;
-				ts_call_input_event(ts_device, EV_ABS, ABS_MT_PRESSURE, 70+ (pseudo_rnd%2));
-				ts_call_input_event(ts_device, EV_SYN, 0, 0);
+				ts_track_event_gather(EV_ABS, ABS_MT_PRESSURE, 70+ (pseudo_rnd%2));
+				ts_track_event_gather(EV_SYN, 0, 0);
+				ts_track_event_run();
 				usleep_range(5 * swipe_step_wait_time_mul , (5 * swipe_step_wait_time_mul) + 1);
 				if (y_steps%10==0) {
 					pr_info("%s ts_input squeeze emulation step = %d POS_Y = %d \n",__func__,y_steps, 1000+y_diff);
 				}
+				while(!ts_track_event_complete()) {
+					diff_time = jiffies - start_time;
+					if (diff_time>30) break;
+					msleep(1);
+				}
 			}
-
 			pr_info("fpf %s ts DOWN 0 \n",__func__);
-			ts_call_input_event(ts_device, EV_ABS, ABS_MT_TRACKING_ID, -1);
-			ts_call_input_event(ts_device, EV_SYN, 0, 0);
+			{
+				ts_track_event_clear(true);
+			}
+			ts_track_event_gather(EV_ABS, ABS_MT_TRACKING_ID, -1);
+			ts_track_event_gather(EV_SYN, 0, 0);
+			ts_track_event_run();
 			msleep(1);
+
+			while(!ts_track_event_complete()) {
+				msleep(1);
+				empty_check_count++;
+				if (empty_check_count%100==30) {
+					pr_info("%s ts_check || fallback\n",__func__);
+					input_event(ts_device,EV_ABS,47,0);
+					input_event(ts_device,EV_ABS,ABS_MT_TRACKING_ID,-1);
+					input_event(ts_device,EV_SYN,0,0);
+					msleep(5);
+
+					ts_track_event_clear(true);
+					ts_track_event_gather(EV_ABS,47,31);
+					ts_track_event_gather(EV_ABS, ABS_MT_TRACKING_ID, highest_mt_slot+1);
+					ts_track_event_gather(EV_ABS, ABS_MT_POSITION_X, 0);
+					ts_track_event_gather(EV_ABS, ABS_MT_POSITION_Y, 0);
+					ts_track_event_gather(EV_ABS, ABS_MT_PRESSURE, 40);
+					ts_track_event_gather(EV_SYN, 0, 0);
+					ts_track_event_run();
+					while(!ts_track_event_complete()) {
+						msleep(1);
+						pr_info("%s ts_check || fallback wait 1\n",__func__);
+						diff_time = jiffies - start_time;
+						if (diff_time>30) break;
+					}
+					ts_track_event_clear(true);
+					ts_track_event_gather(EV_ABS, ABS_MT_TRACKING_ID, -1);
+					ts_track_event_gather(EV_SYN, 0, 0);
+					ts_track_event_run();
+					while(!ts_track_event_complete()) {
+						msleep(1);
+						pr_info("%s ts_check || fallback wait 2\n",__func__);
+						diff_time = jiffies - start_time;
+						if (diff_time>30) break;
+					}
+					msleep(10);
+
+					ts_track_event_clear(true);
+					ts_track_event_gather(EV_ABS,47,30);
+					ts_track_event_gather(EV_ABS, ABS_MT_TRACKING_ID, highest_mt_slot);
+					ts_track_event_gather(EV_ABS, ABS_MT_POSITION_X, 1);
+					ts_track_event_gather(EV_ABS, ABS_MT_POSITION_Y, 1);
+					ts_track_event_gather(EV_ABS, ABS_MT_PRESSURE, 41);
+					ts_track_event_gather(EV_SYN, 0, 0);
+					ts_track_event_run();
+					while(!ts_track_event_complete()) {
+						msleep(1);
+						pr_info("%s ts_check || fallback wait 1\n",__func__);
+						diff_time = jiffies - start_time;
+						if (diff_time>30) break;
+					}
+					ts_track_event_clear(true);
+					ts_track_event_gather(EV_ABS, ABS_MT_TRACKING_ID, -1);
+					ts_track_event_gather(EV_SYN, 0, 0);
+					ts_track_event_run();
+					while(!ts_track_event_complete()) {
+						msleep(1);
+						pr_info("%s ts_check || fallback wait 2\n",__func__);
+						diff_time = jiffies - start_time;
+						if (diff_time>30) break;
+					}
+					msleep(10);
+				}
+				diff_time = jiffies - start_time;
+				if (diff_time>30) break;
+			}
 		}
 		pr_info("%s ts_input ######### squeeze emulation ended #########\n",__func__);
 	}
 	if (pseudo_rnd>4) pseudo_rnd = 0;
 	msleep(100);
 	while (ts_emulated_events_in_progress>10) {
+		pr_info("%s ts_input ######### squeeze emulation left events %d  -- finger count %d \n",__func__,ts_emulated_events_in_progress, finger_counter);
 		msleep(1);
 	}
-	schedule_delayed_work(&ts_free_input_work, 10);
 	msleep(20);
 	mutex_unlock(&squeeze_swipe_lock);
 	pr_info("%s ts_input ######### squeeze unlock #########\n",__func__);
@@ -1511,9 +1739,6 @@ static bool ts_input_filter(struct input_handle *handle,
 	}
 
 	//pr_info("%s ts input filter called t %d c %d v %d\n",__func__, type,code,value);
-	if (type == EV_ABS && code == ABS_MT_TRACKING_ID && value!=-1) {
-		last_mt_slot = value;
-	}
 
 	if (type == EV_KEY) {
 		pr_info("%s ts_input key %d %d %d\n",__func__,type,code,value);
@@ -1554,17 +1779,38 @@ static bool ts_input_filter(struct input_handle *handle,
 		finger_counter--;
 		finger_touch_event = true;
 	}
+	if (type == EV_ABS && code == 47) { // number id
+		finger_touch_event = true;
+	}
+
+	if (type == EV_ABS && code == ABS_MT_TRACKING_ID && value!=-1) {
+		// store highest multitouch slot...
+		if (highest_mt_slot<value) highest_mt_slot = value;
+	}
+
+	// if in track mode, only let through events emulated...
+	if (mutex_is_locked(&squeeze_swipe_lock)) {
+		if (!ts_track_event_complete()) {
+			return !ts_track_event_check(type,code,value);
+		}
+	}
 
 	if (mutex_is_locked(&squeeze_swipe_lock)) {
-		// in emulated swipe...block event that is not the event matching emulation event values... always let through finger touch/release true...
+		// in emulated swipe...block event that is not the event matching emulation event values... ??? always let through finger touch/release true...
 		if (!check_ts_current_map(type,code,value) && !finger_touch_event) {
 			pr_info("%s ts_input filtering ts input while emulated scroll! %d %d %d\n",__func__,type,code,value);
 			return true;
 		} else {
-			//pr_info("%s ts_input LETTING THROUGH ts input while emulated scroll! %d %d %d -- finger_counter %d \n",__func__,type,code,value,finger_counter);
+//			pr_info("%s ts_input LETTING THROUGH ts input while emulated scroll! %d %d %d -- finger_counter %d -- ts_emulated_events yet: %d \n",__func__,type,code,value,finger_counter, ts_emulated_events_in_progress);
 		}
 	} else 
 	{
+		// only overwrite last_mt_slot when not in emulation! otherwise order will be confused on userspace
+		if (type == EV_ABS && code == ABS_MT_TRACKING_ID && value!=-1) {
+			last_mt_slot = value;
+		}
+		check_ts_current_map(type,code,value); // we still need to continue emptying the map, to keep blocking other events, meanwhile squeeze scrolling...
+
 		if (code == ABS_MT_POSITION_X) {
 			c_x = value;
 		}

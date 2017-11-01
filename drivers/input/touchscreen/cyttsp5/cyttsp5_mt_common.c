@@ -58,9 +58,18 @@ static const char htc_cyttsp5_event_id_string[CY_EV_LIFTOFF+1][16] = {
 };
 //htc-
 
+#if 1
+extern int is_real_ts_input_filtered(void);
+#endif
+
 static void cyttsp5_mt_lift_all(struct cyttsp5_mt_data *md)
 {
 	int max = md->si->tch_abs[CY_TCH_T].max;
+#if 1
+	if (is_real_ts_input_filtered()) {
+		return;
+	}
+#endif
 
 	if (md->num_prv_rec != 0) {
 		if (md->mt_function.report_slot_liftoff)
@@ -209,7 +218,12 @@ static void cyttsp5_report_event(struct cyttsp5_mt_data *md, int event,
 		int value)
 {
 	int sig = MT_PARAM_SIGNAL(md, event);
-
+#if 1
+	if (is_real_ts_input_filtered()) {
+		pr_info("%s ts_input check blocking event %d sig %d value %d\n",__func__, event, sig, value);
+		return;
+	}
+#endif
 	if (sig != CY_IGNORE_VALUE)
 		input_report_abs(md->input, sig, value);
 }

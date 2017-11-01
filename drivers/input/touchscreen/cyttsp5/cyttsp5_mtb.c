@@ -30,10 +30,17 @@
 #include <linux/input/mt.h>
 #include <linux/version.h>
 
+#if 1
+extern int is_real_ts_input_filtered(void);
+#endif
+
 static void cyttsp5_final_sync(struct input_dev *input, int max_slots,
 		int mt_sync_count, unsigned long *ids)
 {
 	int t;
+#if 1
+	if (is_real_ts_input_filtered()) return;
+#endif
 
 	for (t = 0; t < max_slots; t++) {
 		if (test_bit(t, ids))
@@ -48,6 +55,9 @@ static void cyttsp5_final_sync(struct input_dev *input, int max_slots,
 static void cyttsp5_input_report(struct input_dev *input, int sig,
 		int t, int type)
 {
+#if 1
+	if (is_real_ts_input_filtered()) return;
+#endif
 	input_mt_slot(input, t);
 
 	if (type == CY_OBJ_STANDARD_FINGER || type == CY_OBJ_GLOVE
@@ -62,6 +72,9 @@ static void cyttsp5_report_slot_liftoff(struct cyttsp5_mt_data *md,
 {
 	int t;
 
+#if 1
+	if (is_real_ts_input_filtered()) return;
+#endif
 	if (md->num_prv_rec == 0)
 		return;
 
