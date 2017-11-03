@@ -621,7 +621,7 @@ int kcal_internal_override(int kcal_sat, int kcal_val, int kcal_cont, int r, int
 	}
 	if (g_dev) {
 		struct kcal_lut_data *lut_data = dev_get_drvdata(&g_dev->dev);
-		pr_info("%s kad lock\n",__func__);
+		pr_info("%s kad lock ### override kcal rgb: sat %d val %d cont %d | r %d g %d b %d\n",__func__, kcal_sat, kcal_val, kcal_cont, r,g,b);
 		lut_data->sat = kcal_sat;
 		lut_data->val = kcal_val;
 		lut_data->cont = kcal_cont;
@@ -663,7 +663,7 @@ void kcal_internal_backup(void)
 		stored_r = lut_data->red;
 		stored_g = lut_data->green;
 		stored_b = lut_data->blue;
-		pr_info("%s kad lock ### store kcal rgb: r %d g %d b %d enaled %d\n",__func__, stored_r,stored_g,stored_b,stored_enable);
+		pr_info("%s kad lock ### store kcal rgb: sat %d val %d cont %d | r %d g %d b %d enaled %d\n",__func__, stored_sat, stored_val, stored_cont, stored_r,stored_g,stored_b,stored_enable);
 	//	}
 	}
 //	mutex_unlock(&kcal_int_lock);

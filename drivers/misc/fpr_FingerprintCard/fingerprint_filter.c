@@ -52,6 +52,7 @@ static struct workqueue_struct *kcal_listener_wq;
 #ifdef CONFIG_FB
 	// early screen on flag
 	static int screen_on = 1;
+	static unsigned long last_screen_on_early_time = 0;
 	// full screen on flag
 	static int screen_on_full = 1;
 	static int screen_off_early = 0;
@@ -75,6 +76,7 @@ static int kad_repeat_times = 4; // how many times...
 static int kad_repeat_multiply_period = 1; // make periods between each longer?
 static int kad_repeat_period_sec = 12; // period between each repeat
 static int squeeze_peek_kcal = 0;
+static int kad_poke_for_squeeze_peek = 1;
 
 static int kad_kcal_r = 150;
 static int kad_kcal_g = 150;
@@ -185,10 +187,11 @@ static void kcal_set(struct work_struct * kcal_set_work)
 		pr_info("%s kad\n",__func__);
 		if (((is_kad_on() && kad_kcal) || is_squeeze_peek_kcal()) && !kad_kcal_overlay_on) // && !kad_kcal_backed_up ) 
 		{
-			int max_try = 9;
-			msleep(230);
-			while (!screen_on && max_try-->=0) {
-				msleep(100);
+			unsigned int time_since_screen_on = jiffies - last_screen_on_early_time;
+			int max_try = 1999;
+			while ((!screen_on || time_since_screen_on < 8*JIFFY_MUL) && max_try-->=0 ) {
+				usleep_range(650,700);
+				time_since_screen_on = jiffies - last_screen_on_early_time;
 			}
 			if ((kad_kcal || is_squeeze_peek_kcal()) && screen_on && !kad_kcal_overlay_on) {
 				int retry_count = 2;
@@ -459,7 +462,7 @@ extern void register_input_event(void);
 void register_fp_wake(void) {
 	pr_info("%s kad fpf fp wake registered\n",__func__);
 	if (screen_on_full && !screen_off_early && (!kad_disable_fp_input || !kad_running || kad_running_for_kcal_only)) {
-		bool poke = kad_running && !kad_running_for_kcal_only;
+		bool poke = kad_running && (!kad_running_for_kcal_only || kad_poke_for_squeeze_peek);
 		squeeze_peek_wait = 0; // interrupt peek wait, touchscreen was interacted, don't turn screen off after peek time over...
 		if (init_done) {
 			alarm_cancel(&kad_repeat_rtc);
@@ -482,7 +485,7 @@ EXPORT_SYMBOL(register_fp_wake);
 void register_fp_irq(void) {
 	pr_info("%s kad fpf fp tap irq registered\n",__func__);
 	if (screen_on_full && !screen_off_early && (!kad_disable_fp_input || !kad_running || kad_running_for_kcal_only)) {
-		bool poke = kad_running && !kad_running_for_kcal_only;
+		bool poke = kad_running && (!kad_running_for_kcal_only || kad_poke_for_squeeze_peek);
 		squeeze_peek_wait = 0; // interrupt peek wait, touchscreen was interacted, don't turn screen off after peek time over...
 		if (init_done) {
 			alarm_cancel(&kad_repeat_rtc);
@@ -1368,7 +1371,7 @@ void register_squeeze(unsigned long timestamp, int vibration) {
 				squeeze_peekmode_trigger();
 			}
 			if (screen_on && squeeze_peek_wait) { // checking if short squeeze happening while peeking the screen with squeeze2peek...
-				bool poke = kad_running && !kad_running_for_kcal_only;
+				bool poke = kad_running && (!kad_running_for_kcal_only || kad_poke_for_squeeze_peek);
 				last_screen_event_timestamp = jiffies;
 				squeeze_peek_wait = 0; // yes, so interrupt peek sleep, screen should remain on after a second short squeeze happened still in time window of peek...
 				stop_kad_running(true);
@@ -1411,7 +1414,7 @@ void register_squeeze(unsigned long timestamp, int vibration) {
 					squeeze_peekmode_trigger();
 				}
 				if (screen_on && squeeze_peek_wait) { // screen on and squeeze peek going on?
-					bool poke = kad_running && !kad_running_for_kcal_only;
+					bool poke = kad_running && (!kad_running_for_kcal_only || kad_poke_for_squeeze_peek);
 					last_screen_event_timestamp = jiffies;
 					squeeze_peek_wait = 0; // interrupt peek sleep, screen should remain on after a second short squeeze while still in time window of peek...
 					stop_kad_running(true);
@@ -1473,7 +1476,7 @@ void register_squeeze(unsigned long timestamp, int vibration) {
 				squeeze_peekmode_trigger();
 			}
 			if (screen_on && squeeze_peek_wait) { // screen on and squeeze peek going on?
-				bool poke = kad_running && !kad_running_for_kcal_only;
+				bool poke = kad_running && (!kad_running_for_kcal_only || kad_poke_for_squeeze_peek);
 				last_screen_event_timestamp = jiffies;
 				squeeze_peek_wait = 0; // interrupt peek sleep, screen should remain on after a second short squeeze while still in time window of peek...
 				stop_kad_running(true);
@@ -2715,6 +2718,7 @@ static int fb_notifier_callback(struct notifier_block *self,
         case FB_BLANK_UNBLANK:
 		screen_on = 1;
 		screen_off_early = 0;
+		last_screen_on_early_time = jiffies;
 		pr_info("fpf kad screen on -early\n");
             break;
 
