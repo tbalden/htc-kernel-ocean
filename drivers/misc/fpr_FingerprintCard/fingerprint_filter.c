@@ -872,7 +872,7 @@ static void ts_poke_emulate(struct work_struct * ts_poke_emulate_work) {
 						msleep(1);
 						pr_info("%s ts_check || fallback wait 1\n",__func__);
 						diff_time = jiffies - start_time;
-						if (diff_time>30) break;
+						if (diff_time>30*JIFFY_MUL) break;
 					}
 					ts_track_event_clear(true);
 					ts_track_event_gather(EV_ABS, ABS_MT_TRACKING_ID, -1);
@@ -882,7 +882,7 @@ static void ts_poke_emulate(struct work_struct * ts_poke_emulate_work) {
 						msleep(1);
 						pr_info("%s ts_check || fallback wait 2\n",__func__);
 						diff_time = jiffies - start_time;
-						if (diff_time>30) break;
+						if (diff_time>30*JIFFY_MUL) break;
 					}
 					msleep(10);
 
@@ -898,7 +898,7 @@ static void ts_poke_emulate(struct work_struct * ts_poke_emulate_work) {
 						msleep(1);
 						pr_info("%s ts_check || fallback wait 1\n",__func__);
 						diff_time = jiffies - start_time;
-						if (diff_time>30) break;
+						if (diff_time>30*JIFFY_MUL) break;
 					}
 					ts_track_event_clear(true);
 					ts_track_event_gather(EV_ABS, ABS_MT_TRACKING_ID, -1);
@@ -908,12 +908,12 @@ static void ts_poke_emulate(struct work_struct * ts_poke_emulate_work) {
 						msleep(1);
 						pr_info("%s ts_check || fallback wait 2\n",__func__);
 						diff_time = jiffies - start_time;
-						if (diff_time>30) break;
+						if (diff_time>30*JIFFY_MUL) break;
 					}
 					msleep(10);
 				}
 				diff_time = jiffies - start_time;
-				if (diff_time>30) break;
+				if (diff_time>30*JIFFY_MUL) break;
 			}
 		}
 	}
@@ -1081,7 +1081,7 @@ static void ts_scroll_emulate(int down, int full) {
 				}
 				while(!ts_track_event_complete()) {
 					diff_time = jiffies - start_time;
-					if (diff_time>30) break;
+					if (diff_time>30*JIFFY_MUL) break;
 					msleep(1);
 				}
 			}
@@ -1116,7 +1116,7 @@ static void ts_scroll_emulate(int down, int full) {
 						msleep(1);
 						pr_info("%s ts_check || fallback wait 1\n",__func__);
 						diff_time = jiffies - start_time;
-						if (diff_time>30) break;
+						if (diff_time>30*JIFFY_MUL) break;
 					}
 					ts_track_event_clear(true);
 					ts_track_event_gather(EV_ABS, ABS_MT_TRACKING_ID, -1);
@@ -1126,7 +1126,7 @@ static void ts_scroll_emulate(int down, int full) {
 						msleep(1);
 						pr_info("%s ts_check || fallback wait 2\n",__func__);
 						diff_time = jiffies - start_time;
-						if (diff_time>30) break;
+						if (diff_time>30*JIFFY_MUL) break;
 					}
 					msleep(10);
 
@@ -1142,7 +1142,7 @@ static void ts_scroll_emulate(int down, int full) {
 						msleep(1);
 						pr_info("%s ts_check || fallback wait 1\n",__func__);
 						diff_time = jiffies - start_time;
-						if (diff_time>30) break;
+						if (diff_time>30*JIFFY_MUL) break;
 					}
 					ts_track_event_clear(true);
 					ts_track_event_gather(EV_ABS, ABS_MT_TRACKING_ID, -1);
@@ -1152,12 +1152,12 @@ static void ts_scroll_emulate(int down, int full) {
 						msleep(1);
 						pr_info("%s ts_check || fallback wait 2\n",__func__);
 						diff_time = jiffies - start_time;
-						if (diff_time>30) break;
+						if (diff_time>30*JIFFY_MUL) break;
 					}
 					msleep(10);
 				}
 				diff_time = jiffies - start_time;
-				if (diff_time>30) break;
+				if (diff_time>30*JIFFY_MUL) break;
 			}
 		}
 		pr_info("%s ts_input ######### squeeze emulation ended #########\n",__func__);
