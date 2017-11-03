@@ -1423,6 +1423,7 @@ static enum alarmtimer_restart double_double_vol_rtc_callback(struct alarm *al, 
 	pr_info("%s override kad on 1",__func__);
 	override_kad_on(0);
 	set_vib_notification_reminder(0);
+	stop_kernel_ambient_display(true);
 	return ALARMTIMER_NORESTART;
 }
 
@@ -1451,6 +1452,7 @@ void register_double_volume_key_press(int long_press) {
 		lights_down_divider = 16;
 		alarm_cancel(&vibrate_rtc); // stop pending alarm...
 		alarm_start_relative(&vibrate_rtc, wakeup_time); // start new...
+		stop_kernel_ambient_display(true);
 	} else {
 		set_suspend_booster(0); // single or double short press means enable boosting again...
 		if (!double_double_vol_check_running) {
@@ -1482,6 +1484,7 @@ void register_double_volume_key_press(int long_press) {
 			set_vibrate(110);
 			alarm_cancel(&vibrate_rtc); // stop pending alarm...
 			alarm_start_relative(&vibrate_rtc, wakeup_time); // start new...vibrate a second one...
+			stop_kernel_ambient_display(true);
 		}
 	}
 }
