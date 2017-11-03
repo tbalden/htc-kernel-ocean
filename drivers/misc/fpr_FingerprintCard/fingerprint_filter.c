@@ -1233,10 +1233,11 @@ static void squeeze_longcount_trigger(void) {
 	schedule_work(&squeeze_longcount_work);
 }
 
-
-
+// through this peekmode wait (while kad is on) can be interrupted for earlier kad ending and powerdown
+static int interrupt_kad_peekmode_wait = 0;
 static void squeeze_peekmode(struct work_struct * squeeze_peekmode_work) {
 	unsigned int squeeze_reg_diff = 0;
+	interrupt_kad_peekmode_wait = 0;
 	squeeze_peek_wait = 1;
 	if (wait_for_squeeze_power) {
 		// wait_for_squeeze_power = 0; not reset "wait_for..." here.. it will be done in fpf_pwrtrigger part!
@@ -1251,14 +1252,17 @@ static void squeeze_peekmode(struct work_struct * squeeze_peekmode_work) {
 		}
 	}
 	if (kad_running && !kad_running_for_kcal_only) {
-		msleep(kad_halfseconds * 500);
+		int count = kad_halfseconds * 2;
+		while (!interrupt_kad_peekmode_wait && !count--<=0) {
+			msleep(250);
+		}
 	} else {
 		msleep(squeeze_peek_halfseconds * 500);
 	}
 	// screen still on and sqeueeze peek wait was not interrupted...
 	if (screen_on && squeeze_peek_wait) {
 		fpf_pwrtrigger(0,__func__);
-		if (kad_running && !kad_running_for_kcal_only) { // not interrupted, and kad mode peek.. see if re-schedule is needed...
+		if (kad_running && !kad_running_for_kcal_only && !interrupt_kad_peekmode_wait) { // not interrupted, and kad mode peek.. see if re-schedule is needed...
 			kad_repeat_counter++;
 			if (kad_repeat_counter<kad_repeat_times) {
 				// alarm timer
@@ -1544,6 +1548,9 @@ EXPORT_SYMBOL(register_squeeze);
 
 extern int input_is_charging(void);
 
+static unsigned long kad_first_one_finger_touch_time = 0;
+static unsigned long kad_first_one_finger_done = 0;
+
 // -- KAD (Kernel Ambient Display --
 void do_kernel_ambient_display(void) {
 	pr_info("%s kad -- screen_on %d kad_running %d \n",__func__,screen_on, kad_running);
@@ -1554,6 +1561,8 @@ void do_kernel_ambient_display(void) {
 		start_kad_running(0);
 		pr_info("%s kad -- power onoff - PEEK MODE - PEEK wake: %d\n",__func__,stage);
 		last_screen_event_timestamp = jiffies;
+		kad_first_one_finger_touch_time = 0;
+		kad_first_one_finger_done = 0;
 		squeeze_peekmode_trigger();
 		fpf_pwrtrigger(0,__func__);
 	// TODO framebuffer driver Brightness lowering...
@@ -1728,6 +1737,7 @@ static unsigned long filtering_ts_event_last_event = 0;
 static int kad_three_finger_gesture = 1;
 static int kad_finger_counter = 0;
 
+
 static bool ts_input_filter(struct input_handle *handle,
                                     unsigned int type, unsigned int code,
                                     int value)
@@ -1870,8 +1880,38 @@ skip_ts:
 
 			if (code == 57 && value>0) {
 				kad_finger_counter++;
+				if (kad_finger_counter>1) {
+					// over one finger, reset kad_first_one_finger_done...
+					pr_info("%s kad first_one done = 0 (1) \n",__func__);
+					kad_first_one_finger_done = 0;
+				}
 			}
 			if (code == 57 && value<0) {
+				if (kad_finger_counter == 1) {
+					// exactly one finger leaving the screen...
+					if (!kad_first_one_finger_done) {
+						// first time...
+						pr_info("%s kad first_one done = 1\n",__func__);
+						kad_first_one_finger_touch_time = jiffies;
+						kad_first_one_finger_done = 1;
+					} else {
+						unsigned int time_diff = jiffies - kad_first_one_finger_touch_time;
+						pr_info("%s kad first_one done == 1 check time_diff %u \n",__func__,time_diff);
+						kad_first_one_finger_touch_time = 0;
+						kad_first_one_finger_done = 0;
+						if (time_diff < 30*JIFFY_MUL) { // double tap single finger happened, stop kad without waking...
+							// make timeout for kad
+							pr_info("%s kad first_one done == 1 DOUBLE TAP, interrupt kad and vibrate \n",__func__);
+							interrupt_kad_peekmode_wait = 1; // signal interruption for kad squeeze_peekmode work...
+							register_input_event(); // stop flashlight...
+							set_vibrate(2);
+						}
+					}
+				} else {
+					pr_info("%s kad first_one done = 0 (2) \n",__func__);
+					kad_first_one_finger_touch_time = 0;
+					kad_first_one_finger_done = 0;
+				}
 				kad_finger_counter--;
 			}
 
