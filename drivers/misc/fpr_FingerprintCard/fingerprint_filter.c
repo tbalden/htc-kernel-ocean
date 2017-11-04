@@ -5,12 +5,14 @@
 #include <linux/delay.h>
 #include <linux/slab.h>
 
+
 #ifdef CONFIG_FB
 #include <linux/notifier.h>
 #include <linux/fb.h>
 #endif
 
 #include <linux/alarmtimer.h>
+#include <linux/notification/notification.h>
 
 #define DRIVER_AUTHOR "illes pal <illespal@gmail.com>"
 #define DRIVER_DESCRIPTION "fingerprint_filter driver"
@@ -64,6 +66,91 @@ int input_is_screen_on(void) {
 EXPORT_SYMBOL(input_is_screen_on);
 #endif
 
+#define S_HOUR_MINS 60
+
+// --- smart notification settings --
+// how many inactive minutes to start trimming some types of notifications' periodicity/length of timeout/repetitions
+// should be set to 0 if smart trim is inactive
+static int smart_trim_inactive_seconds = 6 * S_HOUR_MINS;// 6 mins
+// notif settings for trim period
+static int smart_trim_kad = NOTIF_TRIM;
+static int smart_trim_flashlight = NOTIF_TRIM;
+static int smart_trim_vib_reminder = NOTIF_DEFAULT;
+static int smart_trim_notif_booster = NOTIF_DEFAULT;
+static int smart_trim_bln_light = NOTIF_DEFAULT;
+static int smart_trim_pulse_light = NOTIF_DEFAULT;
+
+// how many inactive minutes to start stopping some types of notifications
+// should be set to 0 if smart stop is inactive
+static int smart_stop_inactive_seconds = 60 * S_HOUR_MINS; // 60 mins
+// notif settings for stop period
+static int smart_stop_kad = NOTIF_STOP;
+static int smart_stop_flashlight = NOTIF_DIM;
+static int smart_stop_vib_reminder = NOTIF_TRIM;
+static int smart_stop_notif_booster = NOTIF_DEFAULT;
+static int smart_stop_bln_light = NOTIF_DIM;
+static int smart_stop_pulse_light = NOTIF_DIM;
+
+// how many inactive minutes to start hibarnete (extended stop) some types of notifications
+// should be set to 0 if smart stop is inactive
+static int smart_hibernate_inactive_seconds = 4 * 60 * S_HOUR_MINS; // 4 * 60 mins
+// notif settings for hibernate period
+static int smart_hibernate_kad = NOTIF_STOP;
+static int smart_hibernate_flashlight = NOTIF_STOP;
+static int smart_hibernate_vib_reminder = NOTIF_STOP;
+static int smart_hibernate_notif_booster = NOTIF_STOP;
+static int smart_hibernate_bln_light = NOTIF_DIM;
+static int smart_hibernate_pulse_light = NOTIF_DIM;
+
+static unsigned long smart_last_user_activity_time = 0;
+void smart_set_last_user_activity_time(unsigned long time) {
+	smart_last_user_activity_time = time;
+	pr_info("%s smart_notif - set activity sys time sec %lu\n",__func__, time / (100*JIFFY_MUL));
+}
+EXPORT_SYMBOL(smart_set_last_user_activity_time);
+
+int smart_get_inactivity_time(void) {
+	unsigned int diff = jiffies - smart_last_user_activity_time;
+	int diff_in_sec = (diff / (100 * JIFFY_MUL));
+	pr_info("%s smart_notif - inactivity in sec: %d\n",__func__, diff_in_sec);
+	return diff_in_sec;
+}
+
+int smart_get_notification_level(int notif_type) {
+	int diff_in_sec = smart_get_inactivity_time();
+	int ret = NOTIF_DEFAULT;
+	bool trim = smart_trim_inactive_seconds > 0 && diff_in_sec > smart_trim_inactive_seconds;
+	bool stop = smart_stop_inactive_seconds > 0 && diff_in_sec > smart_stop_inactive_seconds;
+	bool hibr = smart_hibernate_inactive_seconds > 0 && diff_in_sec > smart_hibernate_inactive_seconds;
+	switch (notif_type) {
+		case NOTIF_KAD:
+			ret = hibr?smart_hibernate_kad:(stop?smart_stop_kad:(trim?smart_trim_kad:NOTIF_DEFAULT));
+			break;
+		case NOTIF_FLASHLIGHT:
+			ret = hibr?smart_hibernate_flashlight:(stop?smart_stop_flashlight:(trim?smart_trim_flashlight:NOTIF_DEFAULT));
+			break;
+		case NOTIF_VIB_REMINDER:
+			if ( (hibr?smart_hibernate_flashlight:(stop?smart_stop_flashlight:(trim?smart_trim_flashlight:NOTIF_DEFAULT) )) == NOTIF_STOP ) ret = NOTIF_STOP; else // without flashlight, no reminder possible
+			ret = hibr?smart_hibernate_vib_reminder:(stop?smart_stop_vib_reminder:(trim?smart_trim_vib_reminder:NOTIF_DEFAULT));
+			break;
+		case NOTIF_VIB_BOOSTER:
+			ret = hibr?smart_hibernate_notif_booster:(stop?smart_stop_notif_booster:(trim?smart_trim_notif_booster:NOTIF_DEFAULT));
+			break;
+		case NOTIF_BUTTON_LIGHT:
+			ret = hibr?smart_hibernate_bln_light:(stop?smart_stop_bln_light:(trim?smart_trim_bln_light:NOTIF_DEFAULT));
+			break;
+		case NOTIF_PULSE_LIGHT:
+			ret = hibr?smart_hibernate_pulse_light:(stop?smart_stop_pulse_light:(trim?smart_trim_pulse_light:NOTIF_DEFAULT));
+			break;
+	}
+	pr_info("%s smart_notif - level for type %d is %d -- state trim %d stop %d hibr %d \n",__func__, notif_type, ret, trim,stop,hibr);
+	return ret;
+}
+EXPORT_SYMBOL(smart_get_notification_level);
+
+// /// smart notif ////
+
+
 // kad
 // -- KAD (Kernel Ambient Display --
 static int kad_on = 0; // is kad enabled?
@@ -76,7 +163,27 @@ static int kad_repeat_times = 4; // how many times...
 static int kad_repeat_multiply_period = 1; // make periods between each longer?
 static int kad_repeat_period_sec = 12; // period between each repeat
 static int squeeze_peek_kcal = 0;
-static int kad_poke_for_squeeze_peek = 1;
+
+static int get_kad_halfseconds(void) {
+	int level = smart_get_notification_level(NOTIF_KAD);
+	int ret = kad_halfseconds;
+	if (level != NOTIF_DEFAULT) {
+		ret = max(5,kad_halfseconds/2);
+	}
+	pr_info("%s smart_notif =========== level: %d  kad halfsec %d \n",__func__, level, ret);
+	return ret;
+}
+static int get_kad_repeat_times(void) {
+	int level = smart_get_notification_level(NOTIF_KAD);
+	if (level == NOTIF_DEFAULT) return kad_repeat_times;
+	return max(1,kad_halfseconds/2);
+}
+static int get_kad_repeat_period_sec(void) {
+	int level = smart_get_notification_level(NOTIF_KAD);
+	if (level == NOTIF_DEFAULT) return kad_repeat_period_sec;
+	return kad_repeat_period_sec*2;
+}
+
 
 static int kad_kcal_r = 150;
 static int kad_kcal_g = 150;
@@ -90,7 +197,18 @@ void override_kad_on(int override) {
 EXPORT_SYMBOL(override_kad_on);
 
 int is_kad_on(void) {
-	return kad_on || kad_on_override;
+	if (kad_on || kad_on_override) {
+		return 1;
+	}
+	return 0;
+}
+
+int should_kad_start(void) {
+	if (kad_on || kad_on_override) {
+		int level = smart_get_notification_level(NOTIF_KAD);
+		if (level != NOTIF_STOP) return 1;
+	}
+	return 0;
 }
 
 int is_squeeze_peek_kcal(void) {
@@ -453,6 +571,7 @@ static void stop_kad_running(bool instant_sat_restore)
 			kcal_push_restore = 1;
 		}
 	}
+	kad_running_for_kcal_only = 0;
 	mutex_unlock(&stop_kad_mutex);
 }
 
@@ -462,7 +581,7 @@ extern void register_input_event(void);
 void register_fp_wake(void) {
 	pr_info("%s kad fpf fp wake registered\n",__func__);
 	if (screen_on_full && !screen_off_early && (!kad_disable_fp_input || !kad_running || kad_running_for_kcal_only)) {
-		bool poke = kad_running && (!kad_running_for_kcal_only || kad_poke_for_squeeze_peek);
+		bool poke = kad_kcal_overlay_on;
 		squeeze_peek_wait = 0; // interrupt peek wait, touchscreen was interacted, don't turn screen off after peek time over...
 		if (init_done) {
 			alarm_cancel(&kad_repeat_rtc);
@@ -472,20 +591,21 @@ void register_fp_wake(void) {
 			ts_poke();
 		}
 	}
-	if (init_done) {
+// fp tee driver does not call ever the register_fp_irq part, so the vibration based detection will handle register input event part instead. Leave this commented, to avoid "pocket-touches" cancelling out notifications
+/*	if (init_done && (!kad_running || !kad_disable_fp_input) && screen_on_full) {
 		ktime_t wakeup_time;
 		ktime_t curr_time = { .tv64 = 0 };
 		wakeup_time = ktime_add_us(curr_time,
 		    (1 * 500LL)); // msec to usec
 		alarm_cancel(&register_input_rtc);
 		alarm_start_relative(&register_input_rtc, wakeup_time); // start new...
-	}
+	}*/
 }
 EXPORT_SYMBOL(register_fp_wake);
 void register_fp_irq(void) {
 	pr_info("%s kad fpf fp tap irq registered\n",__func__);
 	if (screen_on_full && !screen_off_early && (!kad_disable_fp_input || !kad_running || kad_running_for_kcal_only)) {
-		bool poke = kad_running && (!kad_running_for_kcal_only || kad_poke_for_squeeze_peek);
+		bool poke = kad_kcal_overlay_on;
 		squeeze_peek_wait = 0; // interrupt peek wait, touchscreen was interacted, don't turn screen off after peek time over...
 		if (init_done) {
 			alarm_cancel(&kad_repeat_rtc);
@@ -1252,7 +1372,7 @@ static void squeeze_peekmode(struct work_struct * squeeze_peekmode_work) {
 		}
 	}
 	if (kad_running && !kad_running_for_kcal_only) {
-		int count = kad_halfseconds * 2;
+		int count = get_kad_halfseconds() * 2;
 		while (!interrupt_kad_peekmode_wait && !count--<=0) {
 			msleep(250);
 		}
@@ -1264,12 +1384,12 @@ static void squeeze_peekmode(struct work_struct * squeeze_peekmode_work) {
 		fpf_pwrtrigger(0,__func__);
 		if (kad_running && !kad_running_for_kcal_only && !interrupt_kad_peekmode_wait) { // not interrupted, and kad mode peek.. see if re-schedule is needed...
 			kad_repeat_counter++;
-			if (kad_repeat_counter<kad_repeat_times) {
+			if (should_kad_start() && kad_repeat_counter<get_kad_repeat_times()) { // only reschedule if kad should still smart start...and counter is below times limit...
 				// alarm timer
 				ktime_t wakeup_time;
 				ktime_t curr_time = { .tv64 = 0 };
 				wakeup_time = ktime_add_us(curr_time,
-					(kad_repeat_period_sec * (kad_repeat_multiply_period?kad_repeat_counter:1) * 1000LL * 1000LL)); // msec to usec
+					(get_kad_repeat_period_sec() * (kad_repeat_multiply_period?kad_repeat_counter:1) * 1000LL * 1000LL)); // msec to usec
 				alarm_cancel(&kad_repeat_rtc);
 				alarm_start_relative(&kad_repeat_rtc, wakeup_time); // start new...
 			}
@@ -1291,12 +1411,14 @@ static struct alarm check_single_fp_vib_rtc;
 int check_single_fp_running = 0;
 static enum alarmtimer_restart check_single_fp_vib_rtc_callback(struct alarm *al, ktime_t now)
 {
+	// FP single vibration: unlock device event...
 	pr_info("%s kad double fp vibration detection: single vib detected Stop KAD!\n",__func__);
 	squeeze_peek_wait = 0;
 	stop_kad_running(true);
 	if (init_done) {
 		alarm_cancel(&kad_repeat_rtc);
 	}
+	register_input_event(); // this is unlocking screen, register it as intentional input event...
 	check_single_fp_running = 0;
 	return ALARMTIMER_NORESTART;
 }
@@ -1304,11 +1426,19 @@ static enum alarmtimer_restart check_single_fp_vib_rtc_callback(struct alarm *al
 // this callback allows registration of FP vibration, in which case peek timeout auto screen off should be canceled...
 int register_fp_vibration(void) {
 	// fp scanner pressed, cancel peek timeout, but only do that automatically if not in kad mode (otherwise a double fp vibration check is due)
-	if (!kad_running || kad_running_for_kcal_only) {
+	if ((!kad_running && screen_on) || kad_running_for_kcal_only) {
 		squeeze_peek_wait = 0;
 		stop_kad_running(true);
+		register_input_event();
 	} else {
 		if (check_single_fp_running) {
+			if (((!kad_running || !kad_disable_fp_input) && screen_on) || (kad_running_for_kcal_only && screen_on)) {
+				squeeze_peek_wait = 0;
+				stop_kad_running(true);
+				register_input_event(); // KAD is not running or shouldnt block fp input, (for KAD a double FP vib means no stopping if kad fp input disabled, 
+				// ...so might be pocket touch, do not register!)
+				// ...so it's either for a screen on state, or for Squeeze peek KCAL only, so registering user activity to cancel smart timing is ok.
+			}
 			pr_info("%s kad double fp vibration detected, should not stop KAD!\n",__func__);
 			alarm_cancel(&check_single_fp_vib_rtc);
 			check_single_fp_running = 0;
@@ -1375,7 +1505,7 @@ void register_squeeze(unsigned long timestamp, int vibration) {
 				squeeze_peekmode_trigger();
 			}
 			if (screen_on && squeeze_peek_wait) { // checking if short squeeze happening while peeking the screen with squeeze2peek...
-				bool poke = kad_running && (!kad_running_for_kcal_only || kad_poke_for_squeeze_peek);
+				bool poke = kad_kcal_overlay_on;
 				last_screen_event_timestamp = jiffies;
 				squeeze_peek_wait = 0; // yes, so interrupt peek sleep, screen should remain on after a second short squeeze happened still in time window of peek...
 				stop_kad_running(true);
@@ -1418,7 +1548,7 @@ void register_squeeze(unsigned long timestamp, int vibration) {
 					squeeze_peekmode_trigger();
 				}
 				if (screen_on && squeeze_peek_wait) { // screen on and squeeze peek going on?
-					bool poke = kad_running && (!kad_running_for_kcal_only || kad_poke_for_squeeze_peek);
+					bool poke = kad_kcal_overlay_on;
 					last_screen_event_timestamp = jiffies;
 					squeeze_peek_wait = 0; // interrupt peek sleep, screen should remain on after a second short squeeze while still in time window of peek...
 					stop_kad_running(true);
@@ -1480,7 +1610,7 @@ void register_squeeze(unsigned long timestamp, int vibration) {
 				squeeze_peekmode_trigger();
 			}
 			if (screen_on && squeeze_peek_wait) { // screen on and squeeze peek going on?
-				bool poke = kad_running && (!kad_running_for_kcal_only || kad_poke_for_squeeze_peek);
+				bool poke = kad_kcal_overlay_on;
 				last_screen_event_timestamp = jiffies;
 				squeeze_peek_wait = 0; // interrupt peek sleep, screen should remain on after a second short squeeze while still in time window of peek...
 				stop_kad_running(true);
@@ -1580,7 +1710,7 @@ static enum alarmtimer_restart kad_repeat_rtc_callback(struct alarm *al, ktime_t
 // this method is to initialize peek screen on aka "in-kernel AmbientDisplay" feature
 void kernel_ambient_display(void) {
 
-	if (!is_kad_on()) return;
+	if (!should_kad_start()) return;
 	pr_info("%s kad -- ||||||| +++++++++++++ KAD +++++++++++++ ////// screen_on %d kad_running %d \n",__func__,screen_on, kad_running);
 	kad_repeat_counter = 0;
 	//do_kernel_ambient_display();
@@ -1904,7 +2034,7 @@ skip_ts:
 							pr_info("%s kad first_one done == 1 DOUBLE TAP, interrupt kad and vibrate \n",__func__);
 							interrupt_kad_peekmode_wait = 1; // signal interruption for kad squeeze_peekmode work...
 							register_input_event(); // stop flashlight...
-							set_vibrate(2);
+							if (vib_strength) set_vibrate(9); // only vibrate if fp home button vibrates too...
 						}
 					}
 				} else {
@@ -2737,6 +2867,93 @@ static DEVICE_ATTR(kad_kcal_blue, (S_IWUSR|S_IRUGO),
 	kad_kcal_blue_show, kad_kcal_blue_dump);
 
 
+// ------------- smart notification timing ------------------------
+//smart_trim_inactive_seconds
+//smart_stop_inactive_seconds
+//smart_hibernate_inactive_seconds
+static ssize_t smart_trim_inactive_minutes_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", smart_trim_inactive_seconds/60);
+}
+
+static ssize_t smart_trim_inactive_minutes_dump(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int ret;
+	unsigned long input;
+
+	ret = kstrtoul(buf, 0, &input);
+	if (ret < 0)
+		return ret;
+
+	if (input < 0 || input > 2 * 24 * 60)
+		input = 0;
+
+	smart_trim_inactive_seconds = input * 60;
+
+	return count;
+}
+
+static DEVICE_ATTR(smart_trim_inactive_minutes, (S_IWUSR|S_IRUGO),
+	smart_trim_inactive_minutes_show, smart_trim_inactive_minutes_dump);
+
+
+static ssize_t smart_stop_inactive_minutes_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", smart_stop_inactive_seconds/60);
+}
+
+static ssize_t smart_stop_inactive_minutes_dump(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int ret;
+	unsigned long input;
+
+	ret = kstrtoul(buf, 0, &input);
+	if (ret < 0)
+		return ret;
+
+	if (input < 0 || input > 2 * 24 * 60)
+		input = 0;
+
+	smart_stop_inactive_seconds = input * 60;
+
+	return count;
+}
+
+static DEVICE_ATTR(smart_stop_inactive_minutes, (S_IWUSR|S_IRUGO),
+	smart_stop_inactive_minutes_show, smart_stop_inactive_minutes_dump);
+
+
+static ssize_t smart_hibernate_inactive_minutes_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", smart_hibernate_inactive_seconds/60);
+}
+
+static ssize_t smart_hibernate_inactive_minutes_dump(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int ret;
+	unsigned long input;
+
+	ret = kstrtoul(buf, 0, &input);
+	if (ret < 0)
+		return ret;
+
+	if (input < 0 || input > 2 * 24 * 60)
+		input = 0;
+
+	smart_hibernate_inactive_seconds = input * 60;
+
+	return count;
+}
+
+static DEVICE_ATTR(smart_hibernate_inactive_minutes, (S_IWUSR|S_IRUGO),
+	smart_hibernate_inactive_minutes_show, smart_hibernate_inactive_minutes_dump);
+
 
 static struct kobject *fpf_kobj;
 
@@ -2970,6 +3187,18 @@ static int __init fpf_init(void)
 	rc = sysfs_create_file(fpf_kobj, &dev_attr_vib_strength.attr);
 	if (rc)
 		pr_err("%s: sysfs_create_file failed for vib_strength\n", __func__);
+
+	rc = sysfs_create_file(fpf_kobj, &dev_attr_smart_trim_inactive_minutes.attr);
+	if (rc)
+		pr_err("%s: sysfs_create_file failed for smart_trim_inactive_minutes\n", __func__);
+
+	rc = sysfs_create_file(fpf_kobj, &dev_attr_smart_stop_inactive_minutes.attr);
+	if (rc)
+		pr_err("%s: sysfs_create_file failed for smart_stop_inactive_minutes\n", __func__);
+
+	rc = sysfs_create_file(fpf_kobj, &dev_attr_smart_hibernate_inactive_minutes.attr);
+	if (rc)
+		pr_err("%s: sysfs_create_file failed for smart_hibernate_inactive_minutes\n", __func__);
 
 	alarm_init(&register_input_rtc, ALARM_REALTIME,
 		register_input_rtc_callback);

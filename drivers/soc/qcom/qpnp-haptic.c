@@ -31,6 +31,10 @@
 #include <linux/vibtrig.h>
 #include <linux/spinlock.h>
 
+#if 1
+#include <linux/notification/notification.h>
+#endif
+
 #define VIB_DBG_LOG(fmt, ...) \
 		printk(KERN_DEBUG "[VIB][DBG] " fmt, ##__VA_ARGS__)
 #define VIB_INFO_LOG(fmt, ...) \
@@ -1738,6 +1742,18 @@ int should_not_boost(void) {
 	return 0;
 }
 int skip_register_haptic = 0;
+
+static int smart_get_boost_on(void) {
+	int level = smart_get_notification_level(NOTIF_VIB_BOOSTER);
+	int ret = !suspend_booster && notification_booster;
+	if (level != NOTIF_DEFAULT) {
+		ret = 0; // should suspend boosting if not DEFAULT level
+	}
+	pr_info("%s smart_notif =========== level: %d  notif vib should boost %d \n",__func__, level, ret);
+	return ret;
+}
+
+
 #endif
 
 /* enable interface from timed output class */
@@ -1769,7 +1785,7 @@ static void qpnp_hap_td_enable(struct timed_output_dev *dev, int value)
 		}
 
 		// if booster, and screen is off, or call or alarm value for timed device, then we may need a boosting...
-		if (!suspend_booster && notification_booster && (!should_not_boost() || value == MIN_TD_VALUE_NOTIFICATION_CALL || value == MIN_TD_VALUE_NOTIFICATION_ALARM) ) {
+		if (smart_get_boost_on() && (!should_not_boost() || value == MIN_TD_VALUE_NOTIFICATION_CALL || value == MIN_TD_VALUE_NOTIFICATION_ALARM) ) {
 			if (value>=MIN_TD_VALUE_NOTIFICATION) {
 				// detect repeating alarm... if it's not repeating frequently, then it can be some other apps vibration with its length value
 				if (should_not_boost() && value == MIN_TD_VALUE_NOTIFICATION_ALARM) {

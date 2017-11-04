@@ -23,6 +23,7 @@
 #define CONFIG_LEDS_QPNP_BUTTON_BLINK
 #ifdef CONFIG_LEDS_QPNP_BUTTON_BLINK
 #include <linux/alarmtimer.h>
+#include <linux/notification/notification.h>
 #endif
 
 //HTC_START
@@ -237,13 +238,62 @@ void set_flash_dim_period_hours(int startValue, int endValue) {
 }
 EXPORT_SYMBOL(set_flash_dim_period_hours);
 void get_flash_dim_period_hours(int *r) {
-//	int r[2] = {dim_start_hour, dim_end_hour};
 	r[0] = dim_start_hour;
 	r[1] = dim_end_hour;
 }
 EXPORT_SYMBOL(get_flash_dim_period_hours);
 
-
+static int smart_get_flash_blink_on(void) {
+	int ret = 0;
+	int level = smart_get_notification_level(NOTIF_FLASHLIGHT);
+	if (flash_blink_on) {
+		if (level!=NOTIF_STOP) {
+			ret = 1;
+		}
+	}
+	pr_info("%s smart_notif =========== level: %d  flash_blink_on %d \n",__func__, level, ret);
+	return ret;
+}
+static int smart_get_flash_dim_mode(void) {
+	int ret = dim_mode;
+	int level = smart_get_notification_level(NOTIF_FLASHLIGHT);
+	if (!dim_mode) { // not yet dimming...
+		if (level==NOTIF_DIM) {
+			ret = 1; // should DIM!
+		}
+	}
+	pr_info("%s smart_notif =========== level: %d  flash_dim_mode %d \n",__func__, level, ret);
+	return ret;
+}
+static int smart_get_flash_dim_use_period(void) {
+	int ret = dim_use_period;
+	int level = smart_get_notification_level(NOTIF_FLASHLIGHT);
+	if (dim_use_period) { // using period for dimming...
+		if (level==NOTIF_DIM) {
+			ret = 0; // should dim anyway, override to Not use Dim period
+		}
+	}
+	pr_info("%s smart_notif =========== level: %d  flash_dim_use_period %d \n",__func__, level, ret);
+	return ret;
+}
+static int smart_get_flash_blink_wait_sec(void) {
+	int ret = flash_blink_wait_sec;
+	int level = smart_get_notification_level(NOTIF_FLASHLIGHT);
+	if (level!=NOTIF_DEFAULT) {
+		ret = ret * 2;
+	}
+	pr_info("%s smart_notif =========== level: %d  flash_blink_wait_sec %d \n",__func__, level, ret);
+	return ret;
+}
+static int smart_get_flash_blink_bright_number(void) {
+	int ret = flash_blink_bright_number;
+	int level = smart_get_notification_level(NOTIF_FLASHLIGHT);
+	if (level!=NOTIF_DEFAULT) {
+		ret = ret * 2;
+	}
+	pr_info("%s smart_notif =========== level: %d  flash_blink_bright_number %d \n",__func__, level, ret);
+	return ret;
+}
 
 
 static int current_blink_num = 0;
@@ -264,12 +314,12 @@ int is_dim_blink_needed(void)
 	int hour = get_hour_of_day();
 	int in_dim_period = 0;
 
-	if (!dim_mode) return 0;
+	if (!smart_get_flash_dim_mode()) return 0;
 
 	pr_info("%s hour %d\n",__func__,hour);
-	in_dim_period = (dim_use_period && ( (dim_start_hour>dim_end_hour && ( (hour<24 && hour>=dim_start_hour) || (hour>=0 && hour<dim_end_hour) )) || (dim_start_hour<dim_end_hour && hour>=dim_start_hour && hour<dim_end_hour)));
+	in_dim_period = (smart_get_flash_dim_use_period() && ( (dim_start_hour>dim_end_hour && ( (hour<24 && hour>=dim_start_hour) || (hour>=0 && hour<dim_end_hour) )) || (dim_start_hour<dim_end_hour && hour>=dim_start_hour && hour<dim_end_hour)));
 
-	if (dim_mode && (!dim_use_period || (dim_use_period && in_dim_period))) return dim_mode;
+	if (smart_get_flash_dim_mode() && (!smart_get_flash_dim_use_period() || (smart_get_flash_dim_use_period() && in_dim_period))) return smart_get_flash_dim_mode();
 	return 0;
 }
 
@@ -308,6 +358,27 @@ int get_vib_notification_length(void) {
 }
 EXPORT_SYMBOL(get_vib_notification_length);
 
+static int smart_get_vib_notification_reminder(void) {
+	int ret = 0;
+	if (vib_notification_reminder) {
+		int level = smart_get_notification_level(NOTIF_VIB_REMINDER);
+		if (level!=NOTIF_STOP) {
+			pr_info("%s smart_notif =========== level: %d vib_notification_reminder %d \n",__func__, level, ret);
+			ret = 1;
+		}
+	}
+	return ret;
+}
+
+static int smart_get_vib_notification_slowness(void) {
+	int ret = vib_notification_slowness;
+	int level = smart_get_notification_level(NOTIF_VIB_REMINDER);
+	if (level!=NOTIF_DEFAULT) {
+		pr_info("%s smart_notif =========== level: %d vib_notification_slowness %d \n",__func__, level, ret);
+		ret = ret * 2;
+	}
+	return ret;
+}
 
 extern void boosted_vib(int time);
 
@@ -348,7 +419,7 @@ void do_flash_blink(void) {
 		currently_blinking = 0;
 		goto exit;
 	}
-	if (dim == 0 && flash_blink_bright && current_blink_num % flash_blink_bright_number == 0) {
+	if (dim == 0 && flash_blink_bright && current_blink_num % smart_get_flash_blink_bright_number() == 0) {
 		bright = 1;
 	}
 
@@ -381,7 +452,7 @@ void do_flash_blink(void) {
 	}
 	}
 
-	if (vib_notification_reminder && current_blink_num % vib_notification_slowness == (vib_notification_slowness - 1)) {
+	if (smart_get_vib_notification_reminder() && current_blink_num % smart_get_vib_notification_slowness() == (smart_get_vib_notification_slowness() - 1)) {
 		{
 			ktime_t curr_time = { .tv64 = 0 };
 			wakeup_time_vib = ktime_add_us(curr_time,
@@ -401,10 +472,11 @@ void do_flash_blink(void) {
 		goto exit;
 	}
 	current_blink_num++;
+	if (smart_get_flash_blink_on()) // only reschedule if still flashblink is on...
 	{
 		ktime_t curr_time = { .tv64 = 0 };
 		wakeup_time = ktime_add_us(curr_time,
-			( (flash_blink_wait_sec + min(max(((current_blink_num-6)/4),0),flash_blink_wait_inc_max) * flash_blink_wait_inc) * 1000LL * 1000LL)); // msec to usec 
+			( (smart_get_flash_blink_wait_sec() + min(max(((current_blink_num-6)/4),0),flash_blink_wait_inc_max) * flash_blink_wait_inc) * 1000LL * 1000LL)); // msec to usec 
 		pr_info("%s: Current Time tv_sec: %ld, Alarm set to tv_sec: %ld\n",
 			__func__,
 			ktime_to_timeval(curr_time).tv_sec,
@@ -465,7 +537,7 @@ exit:
 void flash_blink(bool haptic) {
 	pr_info("%s flash_blink\n",__func__);
 	// is flash blink on?
-	if (!flash_blink_on) return;
+	if (!smart_get_flash_blink_on()) return;
 	// if not a haptic notificcation and haptic blink mode on, do not do blinking...
 	if (!haptic && haptic_mode) return;
 	// if torch i on, don't blink
