@@ -773,6 +773,16 @@ static int smart_get_button_dimming(void) {
 	pr_info("%s smart_notif =========== level: %d  buttonlight_dimming %d \n",__func__, level, ret);
 	return ret;
 }
+static int smart_get_bln_no_charger_switch(void) {
+	int ret = bln_no_charger_switch;
+	int level = smart_get_notification_level(NOTIF_BUTTON_LIGHT);
+	if (level==NOTIF_TRIM) {
+		ret = 0; // should not blink if not on charger
+	}
+	pr_info("%s smart_notif =========== level: %d  bln_no_charger_switch %d \n",__func__, level, ret);
+	return ret;
+}
+
 // ----------------
 
 /* BLN - VK blink codes */
@@ -1601,7 +1611,7 @@ static void lp5562_color_blink(struct i2c_client *client, uint8_t red, uint8_t g
 #ifdef CONFIG_LEDS_QPNP_BUTTON_BLINK
 		// BLN
 		// sysfs configuation bln_no_charger_switch == 1 -> always blink even if not on charger
-		if (bln_switch && bln_no_charger_switch && (smart_get_button_dimming()==1)) {
+		if (bln_switch && smart_get_bln_no_charger_switch() && (smart_get_button_dimming()==1)) {
 			if (!wake_by_user || vk_screen_is_off()) {
 				bln_on_screenoff = 1;
 				pr_info("%s kad bln_on_screenoff %d\n", __func__, bln_on_screenoff);

@@ -88,8 +88,8 @@ static int smart_stop_kad = NOTIF_STOP;
 static int smart_stop_flashlight = NOTIF_DIM;
 static int smart_stop_vib_reminder = NOTIF_TRIM;
 static int smart_stop_notif_booster = NOTIF_DEFAULT;
-static int smart_stop_bln_light = NOTIF_DIM;
-static int smart_stop_pulse_light = NOTIF_DIM;
+static int smart_stop_bln_light = NOTIF_TRIM;
+static int smart_stop_pulse_light = NOTIF_DEFAULT;
 
 // how many inactive minutes to start hibarnete (extended stop) some types of notifications
 // should be set to 0 if smart stop is inactive
