@@ -116,7 +116,7 @@ static int full_or_dim = 1;
 
 static int lights_down_divider = 1;
 static int rgb_coeff_divider = 1; // value between 1 - 20
-static int bln_coeff_divider = 21;//6; // value between 1 - 21 ... on sysfs 0-20
+static int bln_coeff_divider = 6; // value between 1 - 21 ... on sysfs 0-20
 
 static int pulse_rgb_blink = 1;  // 0 - normal stock blinking / 1 - pulsating
 static int pulse_rgb_pattern =  RGB_PATTERN_NORMAL;
