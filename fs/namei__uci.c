@@ -37,10 +37,6 @@
 #include <linux/hash.h>
 #include <asm/uaccess.h>
 
-#ifdef CONFIG_UCI
-#include <linux/uci/uci.h>
-#endif
-
 #include "internal.h"
 #include "mount.h"
 
@@ -124,6 +120,8 @@
  */
 
 #define EMBEDDED_NAME_MAX	(PATH_MAX - offsetof(struct filename, iname))
+
+static bool g_uci = false;
 
 struct filename *
 getname_flags(const char __user *filename, int flags, int *empty)
@@ -312,6 +310,7 @@ static int acl_permission_check(struct inode *inode, int mask)
 	 */
 	if ((mask & ~mode & (MAY_READ | MAY_WRITE | MAY_EXEC)) == 0)
 		return 0;
+	//WARN_ON(1);
 	return -EACCES;
 }
 
@@ -1899,12 +1898,11 @@ static inline u64 hash_name(const char *name)
  * Returns 0 and nd will have valid dentry and mnt on success.
  * Returns error and drops reference to input namei data on failure.
  */
-static int link_path_walk(const char *name, struct nameidata *nd)
+static int link_path_walk_uci(const char *name, struct nameidata *nd, bool uci)
 {
 	int err;
-#ifdef CONFIG_UCI
-	bool uci = is_uci_path(name);
-#endif
+	if (uci) pr_info("%s uci error 1 %d\n",__func__,err);
+
 	while (*name=='/')
 		name++;
 	if (!*name)
@@ -1916,9 +1914,10 @@ static int link_path_walk(const char *name, struct nameidata *nd)
 		int type;
 
 		err = may_lookup(nd);
-#ifdef CONFIG_UCI
-		if (uci && err==-13) { pr_info("%s uci overriding may_lookup error. file name %s err %d\n",__func__,name, err); err = 0; }
-#endif
+		if (uci) pr_info("%s uci may_lookup err %d %s\n",__func__,err, name);
+
+		if (uci) err = 0;
+
  		if (err)
 			return err;
 
@@ -1941,6 +1940,7 @@ static int link_path_walk(const char *name, struct nameidata *nd)
 			if (unlikely(parent->d_flags & DCACHE_OP_HASH)) {
 				struct qstr this = { { .hash_len = hash_len }, .name = name };
 				err = parent->d_op->d_hash(parent, &this);
+				if (uci && err<0) pr_info("%s uci parent d_hash... err %d\n",__func__,err);
 				if (err < 0)
 					return err;
 				hash_len = this.hash_len;
@@ -1976,11 +1976,13 @@ OK:
 		} else {
 			err = walk_component(nd, WALK_GET);
 		}
+		if (uci && err<0) pr_info("%s uci parent %s... err %d\n",__func__,name, err);
 		if (err < 0)
 			return err;
 
 		if (err) {
 			const char *s = get_link(nd);
+			if (uci && IS_ERR(s)) pr_info("%s uci get_link %s... err %li\n",__func__,name, PTR_ERR(s));
 
 			if (IS_ERR(s))
 				return PTR_ERR(s);
@@ -2002,6 +2004,11 @@ OK:
 			return -ENOTDIR;
 		}
 	}
+}
+
+static int link_path_walk(const char *name, struct nameidata *nd)
+{
+	return link_path_walk_uci(name,nd,false);
 }
 
 static const char *path_init(struct nameidata *nd, unsigned flags)
@@ -3023,9 +3030,9 @@ out_dput:
 /*
  * Handle the last step of open()
  */
-static int do_last(struct nameidata *nd,
+static int do_last_uci(struct nameidata *nd,
 		   struct file *file, const struct open_flags *op,
-		   int *opened)
+		   int *opened, bool uci)
 {
 	struct dentry *dir = nd->path.dentry;
 	int open_flag = op->open_flag;
@@ -3092,6 +3099,8 @@ retry_lookup:
 	mutex_lock(&dir->d_inode->i_mutex);
 	error = lookup_open(nd, &path, file, op, got_write, opened);
 	mutex_unlock(&dir->d_inode->i_mutex);
+
+	if (uci) pr_info("%s uci lookup_open %d\n",__func__,error);
 
 	if (error <= 0) {
 		if (error)
@@ -3193,11 +3202,13 @@ finish_open:
 	}
 finish_open_created:
 	error = may_open(&nd->path, acc_mode, open_flag);
+	if (uci) pr_info("%s uci may_open %d\n",__func__,error);
 	if (error)
 		goto out;
 
 	BUG_ON(*opened & FILE_OPENED); /* once it's opened, it's opened */
 	error = vfs_open(&nd->path, file, current_cred());
+	if (uci) pr_info("%s uci vfs_open %d\n",__func__,error);
 	if (!error) {
 		*opened |= FILE_OPENED;
 	} else {
@@ -3207,6 +3218,7 @@ finish_open_created:
 	}
 opened:
 	error = open_check_o_direct(file);
+	if (uci) pr_info("%s uci open_check_o_direct %d\n",__func__,error);
 	if (error)
 		goto exit_fput;
 	error = ima_file_check(file, op->acc_mode, *opened);
@@ -3226,6 +3238,7 @@ out:
 	if (got_write)
 		mnt_drop_write(nd->path.mnt);
 	path_put(&save_parent);
+	if (uci) pr_info("%s uci return error: %d\n",__func__,error);
 	return error;
 
 exit_fput:
@@ -3250,6 +3263,12 @@ stale_open:
 	retried = true;
 	goto retry_lookup;
 }
+/*static int do_last(struct nameidata *nd,
+		   struct file *file, const struct open_flags *op,
+		   int *opened)
+{
+	return do_last_uci(nd, file, op, opened, false);
+}*/
 
 static int do_tmpfile(struct nameidata *nd, unsigned flags,
 		const struct open_flags *op,
@@ -3309,36 +3328,70 @@ out:
 	return error;
 }
 
+#if 0
 static struct file *path_openat(struct nameidata *nd,
 			const struct open_flags *op, unsigned flags)
+#endif
+#if 1
+static struct file *path_openat_uci(struct nameidata *nd,
+			const struct open_flags *op, unsigned flags, bool uci)
+#endif
 {
 	const char *s;
 	struct file *file;
 	int opened = 0;
 	int error;
 
-	file = get_empty_filp();
-	if (IS_ERR(file))
-		return file;
+#if 1
+	if (uci) pr_info("%s uci get_empty_filp #1\n",__func__);
+#endif
 
+	file = get_empty_filp();
+#if 1
+	if (uci) pr_info("%s uci get_empty_filp #2\n",__func__);
+#endif
+	if (IS_ERR(file))
+#if 1
+	{
+		if (uci) pr_info("%s uci get_empty_filp %li \n",__func__,PTR_ERR(file));
+#endif
+		return file;
+#if 1
+	}
+#endif
 	file->f_flags = op->open_flag;
+#if 1
+	if (uci) pr_info("%s uci get_empty_filp #3\n",__func__);
+#endif
 
 	if (unlikely(file->f_flags & __O_TMPFILE)) {
 		error = do_tmpfile(nd, flags, op, file, &opened);
+#if 1
+		if (uci) pr_info("%s uci do_tmpfile %d \n",__func__,error);
+#endif
 		goto out2;
 	}
 
 	s = path_init(nd, flags);
+#if 1
+	if (uci) pr_info("%s uci get_empty_filp #4 error %d \n",__func__, error);
+#endif
 	if (IS_ERR(s)) {
 		put_filp(file);
+#if 1
+		if (uci) pr_info("%s uci error path_init %li \n",__func__,PTR_ERR(s));
+#endif
 		return ERR_CAST(s);
 	}
-	while (!(error = link_path_walk(s, nd)) &&
-		(error = do_last(nd, file, op, &opened)) > 0) {
+	while (!(error = link_path_walk_uci(s, nd, uci)) &&
+		(error = do_last_uci(nd, file, op, &opened, uci)) > 0) {
 		nd->flags &= ~(LOOKUP_OPEN|LOOKUP_CREATE|LOOKUP_EXCL);
 		s = trailing_symlink(nd);
 		if (IS_ERR(s)) {
 			error = PTR_ERR(s);
+#if 1
+			if (uci) pr_info("%s uci error %d %pd\n",__func__,error, file->f_path.dentry);
+#endif
 			break;
 		}
 	}
@@ -3357,8 +3410,18 @@ out2:
 		}
 		file = ERR_PTR(error);
 	}
+#if 1
+	if (uci) pr_info("%s uci get_empty_filp #5 error %d \n",__func__, error);
+#endif
 	return file;
 }
+#if 1
+static struct file *path_openat(struct nameidata *nd,
+			const struct open_flags *op, unsigned flags)
+{
+	return path_openat_uci(nd, op, flags, false);
+}
+#endif
 
 struct file *do_filp_open(int dfd, struct filename *pathname,
 		const struct open_flags *op)
@@ -3366,13 +3429,29 @@ struct file *do_filp_open(int dfd, struct filename *pathname,
 	struct nameidata nd;
 	int flags = op->lookup_flags;
 	struct file *filp;
-
+#if 1
+	bool uci = !strcmp(pathname->name,"/storage/emulated/0/uci_user.cfg");
+	g_uci = uci;
+	if (uci) {
+		pr_info("%s uci do_filp_open\n",__func__);
+	}
+#endif
 	set_nameidata(&nd, dfd, pathname);
-	filp = path_openat(&nd, op, flags | LOOKUP_RCU);
+	filp = path_openat_uci(&nd, op, flags | LOOKUP_RCU, uci);
+#if 1
+	if (uci && IS_ERR(filp)) {
+		pr_info("%s uci do_filp_open  error 1 %li \n",__func__, PTR_ERR(filp));
+	}
+#endif
 	if (unlikely(filp == ERR_PTR(-ECHILD)))
-		filp = path_openat(&nd, op, flags);
+		filp = path_openat_uci(&nd, op, flags, uci);
 	if (unlikely(filp == ERR_PTR(-ESTALE)))
-		filp = path_openat(&nd, op, flags | LOOKUP_REVAL);
+		filp = path_openat_uci(&nd, op, flags | LOOKUP_REVAL, uci);
+#if 1
+	if (uci && IS_ERR(filp)) {
+		pr_info("%s uci do_filp_open  error 2 %li \n",__func__, PTR_ERR(filp));
+	}
+#endif
 	restore_nameidata();
 	return filp;
 }

@@ -34,10 +34,6 @@
 
 #include "internal.h"
 
-#ifdef CONFIG_UCI
-#include <linux/uci/uci.h>
-#endif
-
 #ifdef CONFIG_HTC_FD_MONITOR
 extern int in_fd_list(const int fd, const int mid);
 #endif
@@ -971,6 +967,12 @@ struct file *file_open_name(struct filename *name, int flags, umode_t mode)
 {
 	struct open_flags op;
 	int err = build_open_flags(flags, mode, &op);
+#if 1
+	bool uci = !strcmp(name->name,"/storage/emulated/0/uci_user.cfg");
+	if (uci) {
+		pr_info("%s uci file open - build open flags %d \n",__func__, err);
+	}
+#endif
 	return err ? ERR_PTR(err) : do_filp_open(AT_FDCWD, name, &op);
 }
 
@@ -989,10 +991,20 @@ struct file *filp_open(const char *filename, int flags, umode_t mode)
 {
 	struct filename *name = getname_kernel(filename);
 	struct file *file = ERR_CAST(name);
-	
+#if 1
+	bool uci = !strcmp(filename,"/storage/emulated/0/uci_user.cfg");
+	if (uci) {
+		pr_info("%s uci filp 0 getname_kernel\n",__func__);
+	}
+#endif
 	if (!IS_ERR(name)) {
 		file = file_open_name(name, flags, mode);
 		putname(name);
+#if 1
+		if (uci) {
+			pr_info("%s uci filp 0 file_open_name %d\n",__func__,(file?1:0));
+		}
+#endif
 	}
 	return file;
 }
@@ -1074,13 +1086,6 @@ SYSCALL_DEFINE2(creat, const char __user *, pathname, umode_t, mode)
 int filp_close(struct file *filp, fl_owner_t id)
 {
 	int retval = 0;
-#ifdef CONFIG_UCI
-	const char *name = filp->f_path.dentry->d_name.name;
-	if (is_uci_file(name)) {
-		pr_info("%s uci filp close uci file %s\n", __func__, name);
-		notify_uci_file_closed(name);
-	}
-#endif
 
 	if (!file_count(filp)) {
 		printk(KERN_ERR "VFS: Close: file count is 0\n");
