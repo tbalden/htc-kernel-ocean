@@ -24,6 +24,7 @@
 #ifdef CONFIG_LEDS_QPNP_BUTTON_BLINK
 #include <linux/alarmtimer.h>
 #include <linux/notification/notification.h>
+#include <linux/uci/uci.h>
 #endif
 
 //HTC_START
@@ -139,7 +140,6 @@ static int dim_use_period = 1; // 0 - don't use dimming period hours, 1 - use ho
 static int dim_start_hour = 22; // start hour
 static int dim_end_hour = 6; // end hour
 
-
 void set_flash_blink_on(int value) {
 	flash_blink_on = !!value;
 }
@@ -246,12 +246,12 @@ EXPORT_SYMBOL(get_flash_dim_period_hours);
 static int smart_get_flash_blink_on(void) {
 	int ret = 0;
 	int level = smart_get_notification_level(NOTIF_FLASHLIGHT);
-	if (flash_blink_on) {
+	if (uci_get_user_property_int_mm("flash_blink", flash_blink_on, 0, 1)) {
 		if (level!=NOTIF_STOP) {
 			ret = 1;
 		}
 	}
-	pr_info("%s smart_notif =========== level: %d  flash_blink_on %d \n",__func__, level, ret);
+	pr_info("%s smart_notif =========== level: %d  uci_get_flash_blink_on() %d \n",__func__, level, ret);
 	return ret;
 }
 static int smart_get_flash_dim_mode(void) {
@@ -360,7 +360,7 @@ EXPORT_SYMBOL(get_vib_notification_length);
 
 static int smart_get_vib_notification_reminder(void) {
 	int ret = 0;
-	if (vib_notification_reminder) {
+	if (uci_get_user_property_int_mm("vib_notification_reminder", vib_notification_reminder, 0, 1)) {
 		int level = smart_get_notification_level(NOTIF_VIB_REMINDER);
 		if (level!=NOTIF_STOP) {
 			pr_info("%s smart_notif =========== level: %d vib_notification_reminder %d \n",__func__, level, ret);
@@ -539,7 +539,7 @@ void flash_blink(bool haptic) {
 	// is flash blink on?
 	if (!smart_get_flash_blink_on()) return;
 	// if not a haptic notificcation and haptic blink mode on, do not do blinking...
-	if (!haptic && haptic_mode) return;
+	if (!haptic && uci_get_user_property_int_mm("flash_haptic_mode", haptic_mode, 0, 1)) return;
 	// if torch i on, don't blink
 	if (currently_torch_mode) return;
 

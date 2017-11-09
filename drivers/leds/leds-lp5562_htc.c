@@ -39,6 +39,7 @@
 #ifdef CONFIG_LEDS_QPNP_BUTTON_BLINK
 #include <linux/alarmtimer.h>
 #include <linux/notification/notification.h>
+#include <linux/uci/uci.h>
 #endif
 
 #ifdef CONFIG_HZ_300
@@ -120,6 +121,7 @@ static int bln_coeff_divider = 6; // value between 1 - 21 ... on sysfs 0-20
 
 static int pulse_rgb_blink = 1;  // 0 - normal stock blinking / 1 - pulsating
 static int pulse_rgb_pattern =  RGB_PATTERN_NORMAL;
+
 static int pattern_brightness[5][6] = {
 					{0x32,0x90,0xc8,0x90,0x62,0x22}, // normal
 					{0x12,0x36,0x74,0x50,0x30,0x12}, // oneplus5
@@ -774,7 +776,7 @@ static int smart_get_button_dimming(void) {
 	return ret;
 }
 static int smart_get_bln_no_charger_switch(void) {
-	int ret = bln_no_charger_switch;
+	int ret = uci_get_user_property_int_mm("bln_no_charger_switch", bln_no_charger_switch, 0, 1);
 	int level = smart_get_notification_level(NOTIF_BUTTON_LIGHT);
 	if (level==NOTIF_TRIM) {
 		ret = 0; // should not blink if not on charger
@@ -791,7 +793,7 @@ static int vk_led_step(uint8_t command_data[], int reg_index, uint8_t brightness
 	if (set_brightness) {
 		/*=== Set PWM to brightness ===*/
 		command_data[reg_index++] = 0x40;
-		command_data[reg_index++]  = brightness / (bln_coeff_divider * smart_get_button_dimming());
+		command_data[reg_index++]  = brightness / ((uci_get_user_property_int_mm("bln_light_level", bln_coeff_divider, 0, 20)+1) * smart_get_button_dimming());
 	}
 
 	/*=== wait for time ===*/
@@ -858,7 +860,7 @@ static void virtual_key_led_blink(int onoff, int dim)
 	struct i2c_client *client = private_lp5562_client;
 	int ret = 0, reg_index = 0;
 	int dim_division = (onoff?0:dim)?8:1;
-	int dimming = (dim_division * bln_coeff_divider * smart_get_button_dimming());
+	int dimming = (dim_division * (uci_get_user_property_int_mm("bln_light_level", bln_coeff_divider, 0, 20)+1) * smart_get_button_dimming());
 	int step_time = pulse_rgb_pattern == RGB_PATTERN_ONEPLUS5 ? 7:3;
 	uint8_t data;
 	uint8_t ramp_data[2] = {0x00,0x00};
@@ -1072,6 +1074,7 @@ static enum alarmtimer_restart blinkstop_rtc_callback(struct alarm *al, ktime_t 
 static int vary = 1;
 static void vk_blink_work_func(struct work_struct *work)
 {
+	int uci_bln_number = uci_get_user_property_int_mm("bln_number", bln_number, 0, 50);
 	I(" %s +++\n" , __func__);
 	if (screen_on) return;
 	full_or_dim = 1;
@@ -1079,10 +1082,9 @@ static void vk_blink_work_func(struct work_struct *work)
 		blink_running = 1;
 		virtual_key_led_blink(1,bln_dim_blink);
 	}
-
-	if (bln_number > 0 && !charging) { // if blink number is not infinite and is not charging, schedule CANCEL work
+	if (uci_bln_number > 0 && !charging) { // if blink number is not infinite and is not charging, schedule CANCEL work
 		if (!mutex_is_locked(&blinkstopworklock)) {
-			int sleeptime = bln_get_alarm_time() * (vary?(vary==2?bln_number+2:bln_number):(bln_number-2));
+			int sleeptime = bln_get_alarm_time() * (vary?(vary==2?uci_bln_number+2:uci_bln_number):(uci_bln_number-2));
 
 			ktime_t wakeup_time;
 			ktime_t curr_time = { .tv64 = 0 };
@@ -1400,7 +1402,7 @@ int register_haptic(int value)
 			} else {
 				short_vib_notif = 0;
 			}
-			if (!vk_led_blink && bln_switch && ((!charging && smart_get_button_dimming()==1) || charging) ) { // do not trigger blink if not on charger and lights down mode
+			if (!vk_led_blink && uci_get_user_property_int_mm("bln", bln_switch, 0, 1) && ((!charging && smart_get_button_dimming()==1) || charging) ) { // do not trigger blink if not on charger and lights down mode
 				// store haptic blinking, so if ambient display blocks the bln, later in BLANK screen off, still it can be triggered
 				bln_on_screenoff = 1;
 				pr_info("%s kad bln_on_screenoff %d\n", __func__, bln_on_screenoff);
@@ -1611,7 +1613,7 @@ static void lp5562_color_blink(struct i2c_client *client, uint8_t red, uint8_t g
 #ifdef CONFIG_LEDS_QPNP_BUTTON_BLINK
 		// BLN
 		// sysfs configuation bln_no_charger_switch == 1 -> always blink even if not on charger
-		if (bln_switch && smart_get_bln_no_charger_switch() && (smart_get_button_dimming()==1)) {
+		if (uci_get_user_property_int_mm("bln", bln_switch, 0, 1) && smart_get_bln_no_charger_switch() && (smart_get_button_dimming()==1)) {
 			if (!wake_by_user || vk_screen_is_off()) {
 				bln_on_screenoff = 1;
 				pr_info("%s kad bln_on_screenoff %d\n", __func__, bln_on_screenoff);
@@ -3259,7 +3261,8 @@ static void lp5562_vk_led_set_brightness(struct led_classdev *led_cdev,
 {
 	struct lp5562_led *ldata;
 #ifdef CONFIG_LEDS_QPNP_BUTTON_BLINK
-	int divider = bln_coeff_divider*smart_get_button_dimming()>8?4:(bln_coeff_divider<3?1:(bln_coeff_divider/2));
+	int uci_bln_light_level = uci_get_user_property_int_mm("bln_light_level", bln_coeff_divider, 0, 20)+1;
+	int divider = (uci_bln_light_level)*smart_get_button_dimming()>8?4:(uci_bln_light_level<3?1:(uci_bln_light_level/2));
 #endif
 	ldata = container_of(led_cdev, struct lp5562_led, cdev);
 	ldata->VK_brightness = brightness == LED_FULL? 256 : brightness;
@@ -3281,7 +3284,7 @@ static void lp5562_vk_led_set_brightness(struct led_classdev *led_cdev,
 		if (VK_brightness < 16) VK_brightness = 16;
 	}
 	// if divider set to max, turn off button lights permanently
-	if (bln_coeff_divider==21) {
+	if (uci_bln_light_level==21) {
 		ldata->VK_brightness = 0;
 		VK_brightness = 0;
 		if (vk_led_blink) {

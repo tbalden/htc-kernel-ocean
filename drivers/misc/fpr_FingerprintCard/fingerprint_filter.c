@@ -13,6 +13,7 @@
 
 #include <linux/alarmtimer.h>
 #include <linux/notification/notification.h>
+#include <linux/uci/uci.h>
 
 #define DRIVER_AUTHOR "illes pal <illespal@gmail.com>"
 #define DRIVER_DESCRIPTION "fingerprint_filter driver"
@@ -164,7 +165,7 @@ static int kad_repeat_multiply_period = 1; // make periods between each longer?
 static int kad_repeat_period_sec = 12; // period between each repeat
 static int squeeze_peek_kcal = 0;
 
-static int get_kad_halfseconds(void) {
+static int smart_get_kad_halfseconds(void) {
 	int level = smart_get_notification_level(NOTIF_KAD);
 	int ret = kad_halfseconds;
 	if (level != NOTIF_DEFAULT) {
@@ -173,16 +174,17 @@ static int get_kad_halfseconds(void) {
 	pr_info("%s smart_notif =========== level: %d  kad halfsec %d \n",__func__, level, ret);
 	return ret;
 }
-static int get_kad_repeat_times(void) {
+static int smart_get_kad_repeat_times(void) {
 	int level = smart_get_notification_level(NOTIF_KAD);
 	if (level == NOTIF_DEFAULT) return kad_repeat_times;
 	return max(1,kad_halfseconds/2);
 }
-static int get_kad_repeat_period_sec(void) {
+static int smart_get_kad_repeat_period_sec(void) {
 	int level = smart_get_notification_level(NOTIF_KAD);
 	if (level == NOTIF_DEFAULT) return kad_repeat_period_sec;
 	return kad_repeat_period_sec*2;
 }
+
 
 
 static int kad_kcal_r = 150;
@@ -197,16 +199,19 @@ void override_kad_on(int override) {
 EXPORT_SYMBOL(override_kad_on);
 
 int is_kad_on(void) {
-	if (kad_on || kad_on_override) {
+	if (uci_get_user_property_int_mm("kad_on", kad_on, 0, 1) || kad_on_override) {
 		return 1;
 	}
 	return 0;
 }
 
 int should_kad_start(void) {
-	if (kad_on || kad_on_override) {
+	if (uci_get_user_property_int_mm("kad_on", kad_on, 0, 1) || kad_on_override) {
 		int level = smart_get_notification_level(NOTIF_KAD);
-		if (level != NOTIF_STOP) return 1;
+		if (level != NOTIF_STOP) {
+			int proximity = uci_get_sys_property_int_mm("proximity", 0, 0, 1);
+			return !proximity?1:0;
+		}
 	}
 	return 0;
 }
@@ -1372,7 +1377,7 @@ static void squeeze_peekmode(struct work_struct * squeeze_peekmode_work) {
 		}
 	}
 	if (kad_running && !kad_running_for_kcal_only) {
-		int count = get_kad_halfseconds() * 2;
+		int count = smart_get_kad_halfseconds() * 2;
 		while (!interrupt_kad_peekmode_wait && !count--<=0) {
 			msleep(250);
 		}
@@ -1384,12 +1389,12 @@ static void squeeze_peekmode(struct work_struct * squeeze_peekmode_work) {
 		fpf_pwrtrigger(0,__func__);
 		if (kad_running && !kad_running_for_kcal_only && !interrupt_kad_peekmode_wait) { // not interrupted, and kad mode peek.. see if re-schedule is needed...
 			kad_repeat_counter++;
-			if (should_kad_start() && kad_repeat_counter<get_kad_repeat_times()) { // only reschedule if kad should still smart start...and counter is below times limit...
+			if (should_kad_start() && kad_repeat_counter<smart_get_kad_repeat_times()) { // only reschedule if kad should still smart start...and counter is below times limit...
 				// alarm timer
 				ktime_t wakeup_time;
 				ktime_t curr_time = { .tv64 = 0 };
 				wakeup_time = ktime_add_us(curr_time,
-					(get_kad_repeat_period_sec() * (kad_repeat_multiply_period?kad_repeat_counter:1) * 1000LL * 1000LL)); // msec to usec
+					(smart_get_kad_repeat_period_sec() * (kad_repeat_multiply_period?kad_repeat_counter:1) * 1000LL * 1000LL)); // msec to usec
 				alarm_cancel(&kad_repeat_rtc);
 				alarm_start_relative(&kad_repeat_rtc, wakeup_time); // start new...
 			}
@@ -1685,7 +1690,7 @@ static unsigned long kad_first_one_finger_done = 0;
 void do_kernel_ambient_display(void) {
 	pr_info("%s kad -- screen_on %d kad_running %d \n",__func__,screen_on, kad_running);
 
-	if (kad_only_on_charger && !input_is_charging()) return;
+	if (uci_get_user_property_int_mm("kad_only_on_charger", kad_only_on_charger, 0, 1) && !input_is_charging()) return;
 
 	if (!screen_on && !kad_running) {
 		start_kad_running(0);
@@ -1737,7 +1742,7 @@ void stop_kernel_ambient_display(bool interrupt_ongoing) {
 }
 EXPORT_SYMBOL(stop_kernel_ambient_display);
 int is_kernel_ambient_display(void) {
-	return is_kad_on() && (!kad_only_on_charger || input_is_charging());
+	return should_kad_start() && (!uci_get_user_property_int_mm("kad_only_on_charger", kad_only_on_charger, 0, 1) || input_is_charging());
 }
 EXPORT_SYMBOL(is_kernel_ambient_display);
 
@@ -1875,7 +1880,7 @@ static bool ts_input_filter(struct input_handle *handle,
 #if 1
 	bool filter_event = false;
 	bool finger_touch_event = false;
-	if (kad_running && !kad_running_for_kcal_only && kad_disable_touch_input && (type!=EV_KEY || code == 158 || code == 580)) {
+	if (kad_running && !kad_running_for_kcal_only && uci_get_user_property_int_mm("kad_disable_touch_input", kad_disable_touch_input, 0, 1) && (type!=EV_KEY || code == 158 || code == 580)) {
 		// do nothing, don't stop stuff in led driver like flashlight etc...
 	} else {
 		register_input_event();
@@ -1994,12 +1999,12 @@ static bool ts_input_filter(struct input_handle *handle,
 #endif
 skip_ts:
 	if (screen_on_full && !screen_off_early) {
-		if (!kad_running || kad_running_for_kcal_only || !kad_disable_touch_input || (type==EV_KEY && code!=158 && code !=580)) { // if not in KAD display mode, or not touchscreen input
+		if (!kad_running || kad_running_for_kcal_only || !uci_get_user_property_int_mm("kad_disable_touch_input", kad_disable_touch_input, 0, 1) || (type==EV_KEY && code!=158 && code !=580)) { // if not in KAD display mode, or not touchscreen input
 			squeeze_peek_wait = 0; // interrupt peek wait, touchscreen was interacted, don't turn screen off after peek time over...
 			if (kad_running) { 
 				stop_kad_running(true);
 			}
-		} else if (kad_running && !kad_running_for_kcal_only && kad_disable_touch_input && (type!=EV_KEY || code == 158 || code == 580)) {
+		} else if (kad_running && !kad_running_for_kcal_only && uci_get_user_property_int_mm("kad_disable_touch_input", kad_disable_touch_input, 0, 1) && (type!=EV_KEY || code == 158 || code == 580)) {
 			// if kad running and filtering on... filter it...
 
 			if (code != 158 && code !=580) { // non virtual key, but real panel event:
