@@ -43,6 +43,7 @@ static DEFINE_MUTEX(fpfuncworklock);
 static struct workqueue_struct *fpf_input_wq;
 static struct work_struct fpf_input_work;
 static int vib_strength = VIB_STRENGTH;
+static int unlock_vib_strength = VIB_STRENGTH;
 
 // touchscreen input handler input work queue and work
 static struct workqueue_struct *ts_input_wq;
@@ -56,6 +57,9 @@ static int get_fpf_switch(void) {
 }
 static int get_vib_strength(void) {
 	return uci_get_user_property_int_mm("fp_vib_strength", vib_strength, 0, 90);
+}
+static int get_unlock_vib_strength(void) {
+	return uci_get_user_property_int_mm("fp_unlock_vib_strength", unlock_vib_strength, 0, 90);
 }
 
 #ifdef CONFIG_FB
@@ -244,7 +248,7 @@ int should_kad_start(void) {
 }
 
 int is_squeeze_peek_kcal(void) {
-	return uci_get_user_property_int_mm("queeze_peek_kcal", squeeze_peek_kcal, 0, 1) || (kad_on_override&&get_kad_kcal());
+	return uci_get_user_property_int_mm("squeeze_peek_kcal", squeeze_peek_kcal, 0, 1) || (kad_on_override&&get_kad_kcal());
 }
 
 // variables...
@@ -1508,7 +1512,7 @@ int register_fp_vibration(void) {
 			alarm_start_relative(&check_single_fp_vib_rtc, wakeup_time);
 		}
 	}
-	return get_vib_strength();
+	return get_unlock_vib_strength();
 }
 EXPORT_SYMBOL(register_fp_vibration);
 
@@ -2306,6 +2310,33 @@ static ssize_t vib_strength_dump(struct device *dev,
 
 static DEVICE_ATTR(vib_strength, (S_IWUSR|S_IRUGO),
 	vib_strength_show, vib_strength_dump);
+
+static ssize_t unlock_vib_strength_show(struct device *dev,
+		 struct device_attribute *attr, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", unlock_vib_strength);
+}
+
+static ssize_t unlock_vib_strength_dump(struct device *dev,
+		 struct device_attribute *attr, const char *buf, size_t count)
+{
+	int ret;
+	unsigned long input;
+
+	ret = kstrtoul(buf, 0, &input);
+	if (ret < 0)
+		return ret;
+
+	if (input < 0 || input > 90) 
+		input = 20;				
+
+	unlock_vib_strength = input;			
+	
+	return count;
+}
+
+static DEVICE_ATTR(unlock_vib_strength, (S_IWUSR|S_IRUGO),
+	unlock_vib_strength_show, unlock_vib_strength_dump);
 
 // ------------------- squeeze
 static ssize_t squeeze_sleep_show(struct device *dev,
@@ -3244,6 +3275,10 @@ static int __init fpf_init(void)
 	rc = sysfs_create_file(fpf_kobj, &dev_attr_vib_strength.attr);
 	if (rc)
 		pr_err("%s: sysfs_create_file failed for vib_strength\n", __func__);
+
+	rc = sysfs_create_file(fpf_kobj, &dev_attr_unlock_vib_strength.attr);
+	if (rc)
+		pr_err("%s: sysfs_create_file failed for unlock_vib_strength\n", __func__);
 
 	rc = sysfs_create_file(fpf_kobj, &dev_attr_smart_trim_inactive_minutes.attr);
 	if (rc)

@@ -92,7 +92,7 @@ struct file* uci_fopen(const char* path, int flags, int rights) {
 
 #define MAX_PARAMS 100
 #define MAX_STR_LEN 100
-#define MAX_FILE_SIZE 1000
+#define MAX_FILE_SIZE 2000
 
 char *user_cfg_keys[MAX_PARAMS];
 char *user_cfg_values[MAX_PARAMS];

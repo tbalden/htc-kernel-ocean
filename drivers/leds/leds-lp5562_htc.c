@@ -952,12 +952,12 @@ static void virtual_key_led_blink(int onoff, int dim)
 
 		} else {
 			if (get_bln_pulse_rgb_pattern()>RGB_PATTERN_ONEPLUS5 || dim_division != 1) {
-				reg_index = vk_led_step(command_data, reg_index, 0x20 / dim_division, pattern_time_button[pulse_rgb_pattern][0], 1);
-				reg_index = vk_led_step(command_data, reg_index, 0x70 / dim_division, pattern_time_button[pulse_rgb_pattern][1], 1);
-				reg_index = vk_led_step(command_data, reg_index, 0xb0 / dim_division, pattern_time_button[pulse_rgb_pattern][2], 1);
-				reg_index = vk_led_step(command_data, reg_index, 0xc8 / dim_division, pattern_time_button[pulse_rgb_pattern][3], 1);
-				reg_index = vk_led_step(command_data, reg_index, 0xb0 / dim_division, pattern_time_button[pulse_rgb_pattern][4], 1);
-				reg_index = vk_led_step(command_data, reg_index, 0x40 / dim_division, pattern_time_button[pulse_rgb_pattern][5], 1);
+				reg_index = vk_led_step(command_data, reg_index, 0x20 / dim_division, pattern_time_button[get_bln_pulse_rgb_pattern()][0], 1);
+				reg_index = vk_led_step(command_data, reg_index, 0x70 / dim_division, pattern_time_button[get_bln_pulse_rgb_pattern()][1], 1);
+				reg_index = vk_led_step(command_data, reg_index, 0xb0 / dim_division, pattern_time_button[get_bln_pulse_rgb_pattern()][2], 1);
+				reg_index = vk_led_step(command_data, reg_index, 0xc8 / dim_division, pattern_time_button[get_bln_pulse_rgb_pattern()][3], 1);
+				reg_index = vk_led_step(command_data, reg_index, 0xb0 / dim_division, pattern_time_button[get_bln_pulse_rgb_pattern()][4], 1);
+				reg_index = vk_led_step(command_data, reg_index, 0x40 / dim_division, pattern_time_button[get_bln_pulse_rgb_pattern()][5], 1);
 			} else {
 // set PWM start vaue to 5
 				command_data[reg_index++] = 0x40;
@@ -1713,12 +1713,12 @@ static void lp5562_color_blink(struct i2c_client *client, uint8_t red, uint8_t g
 		I(" %s BLINK +++ red:%d, green:%d, blue:%d\n" , __func__, red, green, blue);
 		/* # === set green blink === */
 		if (get_bln_pulse_rgb_pattern()>RGB_PATTERN_ONEPLUS5) {
-			reg_index = color_blink_step(client, pattern_brightness[pulse_rgb_pattern][0], pattern_time[pulse_rgb_pattern][0], reg_index);
-			reg_index = color_blink_step(client, pattern_brightness[pulse_rgb_pattern][1], pattern_time[pulse_rgb_pattern][1], reg_index);
-			reg_index = color_blink_step(client, pattern_brightness[pulse_rgb_pattern][2], pattern_time[pulse_rgb_pattern][2], reg_index);
-			reg_index = color_blink_step(client, pattern_brightness[pulse_rgb_pattern][3], pattern_time[pulse_rgb_pattern][3], reg_index);
-			reg_index = color_blink_step(client, pattern_brightness[pulse_rgb_pattern][4], pattern_time[pulse_rgb_pattern][4], reg_index);
-			reg_index = color_blink_step(client, pattern_brightness[pulse_rgb_pattern][5], pattern_time[pulse_rgb_pattern][5], reg_index);
+			reg_index = color_blink_step(client, pattern_brightness[get_bln_pulse_rgb_pattern()][0], pattern_time[get_bln_pulse_rgb_pattern()][0], reg_index);
+			reg_index = color_blink_step(client, pattern_brightness[get_bln_pulse_rgb_pattern()][1], pattern_time[get_bln_pulse_rgb_pattern()][1], reg_index);
+			reg_index = color_blink_step(client, pattern_brightness[get_bln_pulse_rgb_pattern()][2], pattern_time[get_bln_pulse_rgb_pattern()][2], reg_index);
+			reg_index = color_blink_step(client, pattern_brightness[get_bln_pulse_rgb_pattern()][3], pattern_time[get_bln_pulse_rgb_pattern()][3], reg_index);
+			reg_index = color_blink_step(client, pattern_brightness[get_bln_pulse_rgb_pattern()][4], pattern_time[get_bln_pulse_rgb_pattern()][4], reg_index);
+			reg_index = color_blink_step(client, pattern_brightness[get_bln_pulse_rgb_pattern()][5], pattern_time[get_bln_pulse_rgb_pattern()][5], reg_index);
 		} else {
 			int step_time = get_bln_pulse_rgb_pattern() == RGB_PATTERN_ONEPLUS5 ? 7:3;
 // set PWM start vaue to 5
@@ -3271,7 +3271,7 @@ static ssize_t lp5562_led_multi_color_store(struct device *dev,
 	supposedly_charging = ldata->Mode == 1 && (ldata->Red > 0 || ldata->Green > 0);
 	I(" %s , RED = %d supposedly charging %d charging %d\n" , __func__, ldata->Red, supposedly_charging, charging);
 
-	if (colored_charge_level && supposedly_charging && first_level_registered) {
+	if (get_bln_rgb_batt_colored() && supposedly_charging && first_level_registered) {
 		// if it's supposedly charging and first level registered from HTC battery, we can go and set charge level color mix instead of normal multicolor setting later...
 		led_multi_color_charge_level(charge_level);
 		// and return so color is not overwritten...
