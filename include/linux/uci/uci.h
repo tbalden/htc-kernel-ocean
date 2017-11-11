@@ -29,4 +29,9 @@ extern int uci_get_sys_property_int_mm(const char* property, int default_value, 
 */
 extern const char* uci_get_sys_property_str(const char* property, const char* default_value);
 
+/** add change listener to sys cfg*/
+extern void uci_add_sys_listener(void (*f)(void));
+/** add change listener to user cfg*/
+extern void uci_add_user_listener(void (*f)(void));
+
 #endif /* __UCI_H__ */

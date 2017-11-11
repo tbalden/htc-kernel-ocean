@@ -138,6 +138,10 @@ int parse_uci_cfg_file(const char *file_name, bool sys) {
 			pr_err("uci file too big\n"); 
 			return -1;
 		}
+		if (fsize==0) {
+			pr_err("uci file being deleted\n"); 
+			return -2;
+		}
 
 		buf=(char *) kmalloc(fsize+1,GFP_KERNEL);
 		uci_read(fp,0,buf,fsize);
@@ -145,9 +149,12 @@ int parse_uci_cfg_file(const char *file_name, bool sys) {
 
 		while ((line = strsep(&buf, "\n")) != NULL) {
 			pr_info("%s uci %s | %d\n",__func__, line, line_num);
+			if (line[0] == '#' || line[0]=='\0') continue; // comments, empty lines
 			token_num = 0;
 			while ((side = strsep(&line, "=")) != NULL) {
-				dupline = kstrdup(side, GFP_KERNEL);
+				char buf[256];
+				sscanf(side, "%s", buf); // trimming on both sides
+				dupline = kstrdup(buf, GFP_KERNEL);
 				if (token_num==0) {
 					l_cfg_keys[prop_num] = (char*)dupline;
 					pr_info("%s uci param key = %s | prop num: %d\n",__func__, dupline, prop_num);
@@ -255,13 +262,59 @@ static bool sys_cfg_parsed = false;
 static bool should_parse_user = true;
 static bool should_parse_sys = true;
 
+void (*user_listeners[100])(void);
+int user_listener_counter = 0;
+
+void uci_add_user_listener(void (*f)(void)) {
+	if (user_listener_counter<100) {
+		user_listeners[user_listener_counter++] = f;
+	} else {
+		// error;
+	}
+}
+EXPORT_SYMBOL(uci_add_user_listener);
+
 void parse_uci_user_cfg_file(void) {
 	int rc = parse_uci_cfg_file(UCI_USER_FILE,false);
 	if (!rc) { user_cfg_parsed = true; should_parse_user = false; }
+	if (!rc) { 
+		int i=0;
+		user_cfg_parsed = true; should_parse_user = false; 
+		for (;i<user_listener_counter;i++) {
+			(*user_listeners[i])();
+		}
+	}
 }
+
+void (*sys_listeners[100])(void);
+int sys_listener_counter = 0;
+
+void uci_add_sys_listener(void (*f)(void)) {
+	if (sys_listener_counter<100) {
+		sys_listeners[sys_listener_counter++] = f;
+	} else {
+		// error;
+	}
+}
+EXPORT_SYMBOL(uci_add_sys_listener);
+
+
 void parse_uci_sys_cfg_file(void) {
 	int rc = parse_uci_cfg_file(UCI_SYS_FILE,true);
-	if (!rc) { sys_cfg_parsed = true; should_parse_sys = false; }
+	int count = 0;
+	while (rc==-2) { // sys file is deleted by companion app...retry!
+		msleep(10); // sleep... then retry
+		rc = parse_uci_cfg_file(UCI_SYS_FILE,true);
+		count++;
+		if (count>5) break;
+	}
+	if (!rc) { 
+		int i=0;
+		sys_cfg_parsed = true; should_parse_sys = false; 
+		for (;i<sys_listener_counter;i++) {
+			(*sys_listeners[i])();
+		}
+	}
 }
 
 
@@ -282,11 +335,10 @@ const char* uci_get_user_property_str(const char* property, const char* default_
 		udelay(1);
 		while(1) {
 			const char *key = user_cfg_keys[param_count];
-			pr_info("%s uci key... %s",__func__,key);
 			if (key==NULL) break;
 			if (!strcmp(property,key)) {
-				pr_info("%s uci key %s -> value %s",__func__,key, ret);
 				ret = user_cfg_values[param_count];
+				pr_info("%s uci key %s -> value %s\n",__func__,key, ret);
 				get_user_in_progress = 0;
 				return  ret;
 			}
@@ -311,7 +363,7 @@ EXPORT_SYMBOL(uci_get_user_property_int);
 int uci_get_user_property_int_mm(const char* property, int default_value, int min, int max) {
 	int ret = uci_get_user_property_int(property, default_value);
 	if (ret<min || ret>max) ret = default_value;
-	pr_info("%s uci get user prop %d\n",__func__, ret);
+	pr_info("%s uci get user prop %s = %d\n",__func__, property, ret);
 	return ret;
 }
 EXPORT_SYMBOL(uci_get_user_property_int_mm);
@@ -334,7 +386,7 @@ const char* uci_get_sys_property_str(const char* property, const char* default_v
 			if (key==NULL) break;
 			if (!strcmp(property,key)) {
 				ret = sys_cfg_values[param_count];
-				pr_info("%s uci key %s -> value %s",__func__,key, ret);
+				pr_info("%s uci key %s -> value %s\n",__func__,key, ret);
 				get_sys_in_progress = 0;
 				return  ret;
 			}
@@ -349,7 +401,7 @@ EXPORT_SYMBOL(uci_get_sys_property_str);
 int uci_get_sys_property_int(const char* property, int default_value) {
 	const char* str = uci_get_sys_property_str(property, 0);
 	long int ret = 0;
-	pr_info("%s uci str = %s\n",__func__,str?str:"NULL");
+	pr_info("%s uci %s str = %s\n",__func__, property, str?str:"NULL");
 	if (!str) return default_value;
         if (kstrtol(str, 10, &ret) < 0)
                 return -EINVAL;
@@ -360,7 +412,7 @@ EXPORT_SYMBOL(uci_get_sys_property_int);
 int uci_get_sys_property_int_mm(const char* property, int default_value, int min, int max) {
 	int ret = uci_get_sys_property_int(property, default_value);
 	if (ret<min || ret>max) ret = default_value;
-	pr_info("%s uci get sys prop %d\n",__func__, ret);
+	pr_info("%s uci get sys prop %s = %d\n",__func__, property, ret);
 	return ret;
 }
 EXPORT_SYMBOL(uci_get_sys_property_int_mm);
@@ -413,7 +465,7 @@ static void start_alarm_parse(int sec) {
 
 void notify_uci_file_closed(const char *file_name) {
 	if (should_not_parse_next_close) {
-		pr_info("%s uci skipping for now\n",__func__);
+		pr_info("%s uci skipping for now %s\n",__func__, file_name);
 		return;
 	}
 	if (!strcmp(file_name, UCI_USER_FILE_END)) should_parse_user = true;
