@@ -50,6 +50,9 @@ static struct workqueue_struct *ts_input_wq;
 static struct work_struct ts_input_work;
 static struct input_dev *ts_device = NULL;
 
+static unsigned long last_screen_event_timestamp = 0;
+static unsigned long last_screen_off_timestamp = 0;
+
 static struct workqueue_struct *kcal_listener_wq;
 
 static int get_fpf_switch(void) {
@@ -77,12 +80,12 @@ int input_is_screen_on(void) {
 EXPORT_SYMBOL(input_is_screen_on);
 #endif
 
-#define S_HOUR_MINS 60
+#define S_MIN_SECS 60
 
 // --- smart notification settings --
 // how many inactive minutes to start trimming some types of notifications' periodicity/length of timeout/repetitions
 // should be set to 0 if smart trim is inactive
-static int smart_trim_inactive_seconds = 6 * S_HOUR_MINS;// 6 mins
+static int smart_trim_inactive_seconds = 6 * S_MIN_SECS;// 6 mins
 // notif settings for trim period
 static int smart_trim_kad = NOTIF_TRIM;
 static int smart_trim_flashlight = NOTIF_TRIM;
@@ -93,7 +96,7 @@ static int smart_trim_pulse_light = NOTIF_DEFAULT;
 
 // how many inactive minutes to start stopping some types of notifications
 // should be set to 0 if smart stop is inactive
-static int smart_stop_inactive_seconds = 60 * S_HOUR_MINS; // 60 mins
+static int smart_stop_inactive_seconds = 60 * S_MIN_SECS; // 60 mins
 // notif settings for stop period
 static int smart_stop_kad = NOTIF_STOP;
 static int smart_stop_flashlight = NOTIF_DIM;
@@ -104,7 +107,7 @@ static int smart_stop_pulse_light = NOTIF_DEFAULT;
 
 // how many inactive minutes to start hibarnete (extended stop) some types of notifications
 // should be set to 0 if smart stop is inactive
-static int smart_hibernate_inactive_seconds = 4 * 60 * S_HOUR_MINS; // 4 * 60 mins
+static int smart_hibernate_inactive_seconds = 4 * 60 * S_MIN_SECS; // 4 * 60 mins
 // notif settings for hibernate period
 static int smart_hibernate_kad = NOTIF_STOP;
 static int smart_hibernate_flashlight = NOTIF_STOP;
@@ -112,6 +115,40 @@ static int smart_hibernate_vib_reminder = NOTIF_STOP;
 static int smart_hibernate_notif_booster = NOTIF_STOP;
 static int smart_hibernate_bln_light = NOTIF_DIM;
 static int smart_hibernate_pulse_light = NOTIF_DIM;
+
+
+static int smart_silent_mode_stop = 1;
+static int smart_silent_mode_hibernate = 1;
+
+int uci_get_smart_trim_inactive_seconds(void) {
+	return uci_get_user_property_int_mm("smart_trim_inactive_mins", smart_trim_inactive_seconds/60, 0, 2 * 24 * 60)*60;
+}
+int uci_get_smart_stop_inactive_seconds(void) {
+	return uci_get_user_property_int_mm("smart_stop_inactive_mins", smart_stop_inactive_seconds/60, 0, 2 * 24 * 60)*60;
+}
+int uci_get_smart_hibernate_inactive_seconds(void) {
+	return uci_get_user_property_int_mm("smart_hibernate_inactive_mins", smart_hibernate_inactive_seconds/60, 0, 2 * 24 * 60)*60;
+}
+int uci_get_smart_silent_mode_hibernate(void) {
+	return uci_get_user_property_int_mm("smart_silent_mode_hibernate", smart_silent_mode_hibernate, 0, 1);
+}
+int uci_get_smart_silent_mode_stop(void) {
+	return uci_get_user_property_int_mm("smart_silent_mode_stop", smart_silent_mode_stop, 0, 1);
+}
+int silent_mode_hibernate(void) {
+	int silent = uci_get_sys_property_int_mm("silent", 0, 0, 1);
+	if (uci_get_smart_silent_mode_hibernate()) {
+		return silent;
+	}
+	return 0;
+}
+int silent_mode_stop(void) {
+	int silent = uci_get_sys_property_int_mm("silent", 0, 0, 1);
+	if (uci_get_smart_silent_mode_stop()) {
+		return silent;
+	}
+	return 0;
+}
 
 static unsigned long smart_last_user_activity_time = 0;
 void smart_set_last_user_activity_time(unsigned long time) {
@@ -130,9 +167,11 @@ int smart_get_inactivity_time(void) {
 int smart_get_notification_level(int notif_type) {
 	int diff_in_sec = smart_get_inactivity_time();
 	int ret = NOTIF_DEFAULT;
-	bool trim = smart_trim_inactive_seconds > 0 && diff_in_sec > smart_trim_inactive_seconds;
-	bool stop = smart_stop_inactive_seconds > 0 && diff_in_sec > smart_stop_inactive_seconds;
-	bool hibr = smart_hibernate_inactive_seconds > 0 && diff_in_sec > smart_hibernate_inactive_seconds;
+	bool trim = uci_get_smart_trim_inactive_seconds() > 0 && diff_in_sec > uci_get_smart_trim_inactive_seconds();
+	bool stop = uci_get_smart_stop_inactive_seconds() > 0 && diff_in_sec > uci_get_smart_stop_inactive_seconds();
+	bool hibr = uci_get_smart_hibernate_inactive_seconds() > 0 && diff_in_sec > uci_get_smart_hibernate_inactive_seconds();
+	if (silent_mode_hibernate()) hibr = true;
+	if (silent_mode_stop()) stop = true;
 	switch (notif_type) {
 		case NOTIF_KAD:
 			ret = hibr?smart_hibernate_kad:(stop?smart_stop_kad:(trim?smart_trim_kad:NOTIF_DEFAULT));
@@ -233,13 +272,29 @@ int is_kad_on(void) {
 	return 0;
 }
 
+bool is_screen_locked(void) {
+	int lock_timeout_sec = uci_get_sys_property_int_mm("lock_timeout", 0, 0, 1900);
+	int locked = uci_get_sys_property_int_mm("locked", 1, 0, 1);
+	unsigned int time_passed_j = jiffies - last_screen_off_timestamp;
+
+	int time_passed = ((time_passed_j) / (100*JIFFY_MUL));
+	pr_info("%s locked; %d lock timeout: %d time passed after blank: %d %ud \n",__func__,locked, lock_timeout_sec, time_passed, time_passed_j);
+
+	if (locked) return true;
+
+	if (time_passed>=lock_timeout_sec) {
+		return true;
+	}
+	return false;
+}
+
 int should_kad_start(void) {
 	if (uci_get_user_property_int_mm("kad_on", kad_on, 0, 1) || kad_on_override) {
 		int level = smart_get_notification_level(NOTIF_KAD);
 		if (level != NOTIF_STOP) {
 			int proximity = uci_get_sys_property_int_mm("proximity", 0, 0, 1);
-			int locked = 1;
-			pr_info("%s kadproximity %d\n",__func__,proximity);
+			int locked = is_screen_locked()?1:0;
+			pr_info("%s kadproximity %d locked %d\n",__func__,proximity, locked);
 				// TODO in companion app when screen is off, timeout and locking is not possible to detect... uci_get_sys_property_int_mm("locked", 1, 0, 1);
 			return !proximity&&locked?1:0;
 		}
@@ -247,8 +302,12 @@ int should_kad_start(void) {
 	return 0;
 }
 
-int is_squeeze_peek_kcal(void) {
-	return uci_get_user_property_int_mm("squeeze_peek_kcal", squeeze_peek_kcal, 0, 1) || (kad_on_override&&get_kad_kcal());
+static bool store_at_unblank_is_squeeze_peek_kcal = false;
+int is_squeeze_peek_kcal(bool unblank) {
+	if (unblank) {
+		store_at_unblank_is_squeeze_peek_kcal = (uci_get_user_property_int_mm("squeeze_peek_kcal", squeeze_peek_kcal, 0, 1) || (kad_on_override&&get_kad_kcal())) && (is_screen_locked());
+	}
+	return store_at_unblank_is_squeeze_peek_kcal;
 }
 
 // variables...
@@ -283,7 +342,7 @@ static bool kcal_sleep_before_restore = false;
 static void kcal_restore_sync(void) {
 	if (!kad_running && needs_kcal_restore_on_screen_on && kad_kcal_backed_up && kad_kcal_overlay_on) {
 		pr_info("%s kad\n",__func__);
-		if (((is_kad_on() && kad_kcal) || is_squeeze_peek_kcal()) && screen_on) { 
+		if (((is_kad_on() && kad_kcal) || is_squeeze_peek_kcal(false)) && screen_on) { 
 			int retry_count = 2;
 			pr_info("%s kad RRRRRRRRRRRR restore... screen %d kad %d overlay_on %d backed_up %d need_restore %d\n",__func__, screen_on, kad_running, kad_kcal_overlay_on, kad_kcal_backed_up, needs_kcal_restore_on_screen_on);
 			while (retry_count-->0) {
@@ -340,7 +399,7 @@ static void kcal_set(struct work_struct * kcal_set_work)
 	if (kad_running) {
 		int local_kad_kcal = get_kad_kcal();
 		pr_info("%s kad\n",__func__);
-		if (((is_kad_on() && local_kad_kcal) || is_squeeze_peek_kcal()) && !kad_kcal_overlay_on) // && !kad_kcal_backed_up ) 
+		if (((is_kad_on() && local_kad_kcal) || is_squeeze_peek_kcal(true)) && !kad_kcal_overlay_on) // && !kad_kcal_backed_up ) 
 		{
 			unsigned int time_since_screen_on = jiffies - last_screen_on_early_time;
 			int max_try = 1999;
@@ -348,7 +407,7 @@ static void kcal_set(struct work_struct * kcal_set_work)
 				usleep_range(650,700);
 				time_since_screen_on = jiffies - last_screen_on_early_time;
 			}
-			if ((local_kad_kcal || is_squeeze_peek_kcal()) && screen_on && !kad_kcal_overlay_on) {
+			if ((local_kad_kcal || is_squeeze_peek_kcal(true)) && screen_on && !kad_kcal_overlay_on) {
 				int retry_count = 2;
 				pr_info("%s kad backup... BBBBBBBBBBBB   screen %d kad %d overlay_on %d backed_up %d need_restore %d\n",__func__, screen_on, kad_running, kad_kcal_overlay_on, kad_kcal_backed_up, needs_kcal_restore_on_screen_on);
 				while (retry_count-->0) {
@@ -361,7 +420,7 @@ static void kcal_set(struct work_struct * kcal_set_work)
 				}
 			}
 		}
-		if (((is_kad_on() && local_kad_kcal) || is_squeeze_peek_kcal()) && kad_kcal_backed_up && !kad_kcal_overlay_on) {
+		if (((is_kad_on() && local_kad_kcal) || is_squeeze_peek_kcal(true)) && kad_kcal_backed_up && !kad_kcal_overlay_on) {
 			int retry_count = 2;
 			pr_info("%s kad override... SSSSSSSSSS   screen %d kad %d overlay_on %d backed_up %d need_restore %d\n",__func__, screen_on, kad_running, kad_kcal_overlay_on, kad_kcal_backed_up, needs_kcal_restore_on_screen_on);
 			while (retry_count-->0) {
@@ -790,11 +849,13 @@ static void start_kad_running(int for_squeeze) {
 	kad_running = 1;
 	kad_running_for_kcal_only = for_squeeze;
 	pr_info("%s kad\n",__func__);
-	if ((is_kad_on()&&get_kad_kcal())||is_squeeze_peek_kcal()) {
-		schedule_work(&kcal_set_work);//kcal_internal_override_sat(128);
-		kcal_push_restore = 0;
-		kcal_push_break = 0;
-		queue_work(kcal_listener_wq, &kcal_listener_work);
+	if (is_screen_locked()) {
+		if ((is_kad_on()&&get_kad_kcal())||is_squeeze_peek_kcal(true)) {
+			schedule_work(&kcal_set_work);//kcal_internal_override_sat(128);
+			kcal_push_restore = 0;
+			kcal_push_break = 0;
+			queue_work(kcal_listener_wq, &kcal_listener_work);
+		}
 	}
 	mutex_unlock(&start_kad_mutex);
 }
@@ -1517,7 +1578,6 @@ int register_fp_vibration(void) {
 EXPORT_SYMBOL(register_fp_vibration);
 
 static unsigned long last_squeeze_timestamp = 0;
-static unsigned long last_screen_event_timestamp = 0;
 static unsigned long last_nanohub_spurious_squeeze_timestamp = 0;
 
 #define STAGE_INIT 0
@@ -2959,6 +3019,62 @@ static DEVICE_ATTR(kad_kcal_blue, (S_IWUSR|S_IRUGO),
 //smart_trim_inactive_seconds
 //smart_stop_inactive_seconds
 //smart_hibernate_inactive_seconds
+static ssize_t smart_silent_mode_hibernate_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", smart_silent_mode_hibernate);
+}
+
+static ssize_t smart_silent_mode_hibernate_dump(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int ret;
+	unsigned long input;
+
+	ret = kstrtoul(buf, 0, &input);
+	if (ret < 0)
+		return ret;
+
+	if (input < 0 || input > 1)
+		input = 0;
+
+	smart_silent_mode_hibernate = input;
+
+	return count;
+}
+
+static DEVICE_ATTR(smart_silent_mode_hibernate, (S_IWUSR|S_IRUGO),
+	smart_silent_mode_hibernate_show, smart_silent_mode_hibernate_dump);
+
+
+static ssize_t smart_silent_mode_stop_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", smart_silent_mode_stop);
+}
+
+static ssize_t smart_silent_mode_stop_dump(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int ret;
+	unsigned long input;
+
+	ret = kstrtoul(buf, 0, &input);
+	if (ret < 0)
+		return ret;
+
+	if (input < 0 || input > 1)
+		input = 0;
+
+	smart_silent_mode_stop = input;
+
+	return count;
+}
+
+static DEVICE_ATTR(smart_silent_mode_stop, (S_IWUSR|S_IRUGO),
+	smart_silent_mode_stop_show, smart_silent_mode_stop_dump);
+
+
 static ssize_t smart_trim_inactive_minutes_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
@@ -3100,6 +3216,7 @@ static int fb_notifier_callback(struct notifier_block *self,
 		screen_on = 0;
 		screen_on_full = 0;
 		last_screen_event_timestamp = jiffies;
+		last_screen_off_timestamp = jiffies;
 		last_scroll_emulate_timestamp = 0;
 		pr_info("fpf kad screen off\n");
             break;
@@ -3283,6 +3400,14 @@ static int __init fpf_init(void)
 	rc = sysfs_create_file(fpf_kobj, &dev_attr_smart_trim_inactive_minutes.attr);
 	if (rc)
 		pr_err("%s: sysfs_create_file failed for smart_trim_inactive_minutes\n", __func__);
+
+	rc = sysfs_create_file(fpf_kobj, &dev_attr_smart_silent_mode_hibernate.attr);
+	if (rc)
+		pr_err("%s: sysfs_create_file failed for smart_silent_mode_hibernate\n", __func__);
+
+	rc = sysfs_create_file(fpf_kobj, &dev_attr_smart_silent_mode_stop.attr);
+	if (rc)
+		pr_err("%s: sysfs_create_file failed for smart_silent_mode_stop\n", __func__);
 
 	rc = sysfs_create_file(fpf_kobj, &dev_attr_smart_stop_inactive_minutes.attr);
 	if (rc)
