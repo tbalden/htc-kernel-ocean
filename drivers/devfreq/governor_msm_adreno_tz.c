@@ -24,6 +24,10 @@
 #include <soc/qcom/scm.h>
 #include "governor.h"
 
+#ifdef CONFIG_UCI
+#include <linux/uci/uci.h>
+#endif
+
 static DEFINE_SPINLOCK(tz_lock);
 static DEFINE_SPINLOCK(sample_lock);
 static DEFINE_SPINLOCK(suspend_lock);
@@ -61,6 +65,7 @@ static DEFINE_SPINLOCK(suspend_lock);
 #if 1
 static unsigned int adrenoboost = 1;
 #endif
+
 
 static u64 suspend_time;
 static u64 suspend_start;
@@ -396,6 +401,17 @@ static int lvl_divider_map_3[] = {10,1,1,1,1,14,12    ,1,1};
 
 #endif
 
+static int uci_adrenoboost = 1;
+#ifdef CONFIG_UCI
+// register user uci listener
+void uci_user_listener(void) {
+	pr_info("%s uci user parse happened...\n",__func__);
+	{
+		uci_adrenoboost = uci_get_user_property_int_mm("adrenoboost", adrenoboost, 0, 1);
+	}
+}
+#endif
+
 static int tz_get_target_freq(struct devfreq *devfreq, unsigned long *freq,
 								u32 *flag)
 {
@@ -409,7 +425,7 @@ static int tz_get_target_freq(struct devfreq *devfreq, unsigned long *freq,
 	int last_level = priv->bin.last_level;
 //	int max_state_val = devfreq->profile->max_state - 1;
 #endif
-
+	int loc_adrenoboost = uci_adrenoboost;
 	/* keeps stats.private_data == NULL   */
 	result = devfreq->profile->get_dev_status(devfreq->dev.parent, &stats);
 	if (result) {
@@ -422,14 +438,14 @@ static int tz_get_target_freq(struct devfreq *devfreq, unsigned long *freq,
 #if 1
 	// scale busy time up based on adrenoboost parameter, only if MIN_BUSY exceeded...
 //	if ((unsigned int)(priv->bin.busy_time + stats.busy_time) >= MIN_BUSY && adrenoboost) {
-	if (adrenoboost) {
-		if (adrenoboost == 1) {
-			priv->bin.busy_time += (unsigned int)((stats.busy_time * ( 1 + adrenoboost ) * lvl_multiplicator_map_1[ last_level ]) / lvl_divider_map_1[ last_level ]);
+	if (loc_adrenoboost) {
+		if (loc_adrenoboost == 1) {
+			priv->bin.busy_time += (unsigned int)((stats.busy_time * ( 1 + loc_adrenoboost ) * lvl_multiplicator_map_1[ last_level ]) / lvl_divider_map_1[ last_level ]);
 		} else
-		if (adrenoboost == 2) {
-			priv->bin.busy_time += (unsigned int)((stats.busy_time * ( 1 + adrenoboost ) * lvl_multiplicator_map_2[ last_level ]  * 7 ) / (lvl_divider_map_2[ last_level ] * 10));
+		if (loc_adrenoboost == 2) {
+			priv->bin.busy_time += (unsigned int)((stats.busy_time * ( 1 + loc_adrenoboost ) * lvl_multiplicator_map_2[ last_level ]  * 7 ) / (lvl_divider_map_2[ last_level ] * 10));
 		} else {
-			priv->bin.busy_time += (unsigned int)((stats.busy_time * ( 1 + adrenoboost ) * lvl_multiplicator_map_3[ last_level ]  * 8 ) / (lvl_divider_map_3[ last_level ] * 10));
+			priv->bin.busy_time += (unsigned int)((stats.busy_time * ( 1 + loc_adrenoboost ) * lvl_multiplicator_map_3[ last_level ]  * 8 ) / (lvl_divider_map_3[ last_level ] * 10));
 		}
 	} else {
 		priv->bin.busy_time += stats.busy_time;
@@ -491,7 +507,7 @@ static int tz_get_target_freq(struct devfreq *devfreq, unsigned long *freq,
 	 * frequency changes.
 	 */
 #if 1
-	if (!adrenoboost && val) {
+	if (!loc_adrenoboost && val) {
 		level += val;
 		level = max(level, 0);
 		level = min_t(int, level, devfreq->profile->max_state - 1);
@@ -766,6 +782,9 @@ static int __init msm_adreno_tz_init(void)
 	if (workqueue == NULL)
 		return -ENOMEM;
 
+#ifdef CONFIG_UCI
+	uci_add_user_listener(uci_user_listener);
+#endif
 	return devfreq_add_governor(&msm_adreno_tz);
 }
 subsys_initcall(msm_adreno_tz_init);

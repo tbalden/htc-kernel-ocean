@@ -33,6 +33,7 @@
 
 #if 1
 #include <linux/notification/notification.h>
+#include <linux/uci/uci.h>
 #endif
 
 #define VIB_DBG_LOG(fmt, ...) \
@@ -1720,6 +1721,10 @@ static int alarm_value_counter = 0;
 static int last_value = 0;
 static unsigned long last_alarm_value_jiffies = 0;
 
+int uci_get_notification_booster(void) {
+	return uci_get_user_property_int_mm("notification_booster", notification_booster,0,100);
+}
+
 void set_suspend_booster(int value) {
 	suspend_booster = !!value;
 }
@@ -1745,7 +1750,7 @@ int skip_register_haptic = 0;
 
 static int smart_get_boost_on(void) {
 	int level = smart_get_notification_level(NOTIF_VIB_BOOSTER);
-	int ret = !suspend_booster && notification_booster;
+	int ret = !suspend_booster && uci_get_notification_booster();
 	if (level != NOTIF_DEFAULT) {
 		ret = 0; // should suspend boosting if not DEFAULT level
 	}
@@ -1821,7 +1826,7 @@ static void qpnp_hap_td_enable(struct timed_output_dev *dev, int value)
 					alarm_value_counter = 0;
 				}
 				if (!vmax_needs_reset) {
-					u32 new_val = stored_vmax_mv * (notification_booster+1);
+					u32 new_val = stored_vmax_mv * (uci_get_notification_booster()+1);
 					if (new_val > VMAX_MV_NOTIFICATION) new_val = VMAX_MV_NOTIFICATION;
 					if (stored_vmax_mv > new_val) { goto skip_reset; } // stored value is higher than boosted notif MV then use stored in the end...
 					hap->vmax_mv = new_val;

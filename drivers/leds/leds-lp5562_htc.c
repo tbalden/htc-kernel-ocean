@@ -113,6 +113,7 @@ static int bln_number = BUTTON_BLINK_NUMBER_DEFAULT; // infinite = 0 - number of
 static int bln_speed = BUTTON_BLINK_SPEED_DEFAULT;
 static int bln_dim_blink = 0; // continue quarter strength blinking after bln_number passed blinking
 static int bln_dim_number = 0;//BUTTON_BLINK_NUMBER_DEFAULT * 2; // infinite = 0 - number of max dim button blinks when not on charger
+
 static int full_or_dim = 1;
 
 static int lights_down_divider = 1;
@@ -121,6 +122,42 @@ static int bln_coeff_divider = 6; // value between 1 - 21 ... on sysfs 0-20
 
 static int pulse_rgb_blink = 1;  // 0 - normal stock blinking / 1 - pulsating
 static int pulse_rgb_pattern =  RGB_PATTERN_NORMAL;
+
+static int colored_charge_level = 1; // if set to 1, colored charge level handling is enabled, 0 - not
+
+static int get_bln_switch(void) {
+	return uci_get_user_property_int_mm("bln", bln_switch, 0, 1);
+}
+static int get_bln_no_charger_switch(void) {
+	return uci_get_user_property_int_mm("bln_no_charger_witch", bln_switch, 0, 1);
+}
+static int get_bln_number(void) {
+	return uci_get_user_property_int_mm("bln_number", bln_number, 0, 50);
+}
+static int get_bln_light_level(void) {
+	return uci_get_user_property_int_mm("bln_light_level", bln_coeff_divider-1, 0, 20)+1;
+}
+static int get_bln_speed(void) {
+	return uci_get_user_property_int_mm("bln_speed", bln_speed, 0, 2);
+}
+static int get_bln_dim_blink(void) {
+	return uci_get_user_property_int_mm("bln_dim_blink", bln_dim_blink, 0, 1);
+}
+static int get_bln_dim_number(void) {
+	return uci_get_user_property_int_mm("bln_dim_number", bln_dim_number, 0, 50);
+}
+static int get_bln_rgb_blink_light_level(void) {
+	return uci_get_user_property_int_mm("bln_rgb_light_level", rgb_coeff_divider-1, 0, 20)+1;
+}
+static int get_bln_pulse_rgb_blink(void) {
+	return uci_get_user_property_int_mm("bln_rgb_pulse", pulse_rgb_blink, 0, 1);
+}
+static int get_bln_pulse_rgb_pattern(void) {
+	return uci_get_user_property_int_mm("bln_rgb_pulse_pattern", pulse_rgb_pattern, 0, 4);
+}
+static int get_bln_rgb_batt_colored(void) {
+	return uci_get_user_property_int_mm("bln_rgb_batt_colored", colored_charge_level, 0, 1);
+}
 
 static int pattern_brightness[5][6] = {
 					{0x32,0x90,0xc8,0x90,0x62,0x22}, // normal
@@ -150,7 +187,6 @@ static struct work_struct vk_unblink_work;
 
 static int charge_level = 0; // information from HTC battery driver
 static int supposedly_charging = 0; // information from led call (multicolor work)
-static int colored_charge_level = 1; // if set to 1, colored charge level handling is enabled, 0 - not
 static int first_level_registered = 0; // when register_charge_level first called set to 1
 static int short_vib_notif = 0; // if short vibration pattern this will be 1
 static struct lp5562_led *g_led_led_data_bln;
@@ -776,7 +812,7 @@ static int smart_get_button_dimming(void) {
 	return ret;
 }
 static int smart_get_bln_no_charger_switch(void) {
-	int ret = uci_get_user_property_int_mm("bln_no_charger_switch", bln_no_charger_switch, 0, 1);
+	int ret = get_bln_no_charger_switch();
 	int level = smart_get_notification_level(NOTIF_BUTTON_LIGHT);
 	if (level==NOTIF_TRIM) {
 		ret = 0; // should not blink if not on charger
@@ -808,15 +844,15 @@ static int vk_led_blink = 0;
 
 static uint8_t bln_get_sleep_time(int buttons) {
 		uint8_t data = 0x00;
-		switch (bln_speed) {
+		switch (get_bln_speed()) {
 			case 2:
 			data = 0x44;
 			break;
 			case 1:
-			data = pulse_rgb_pattern==RGB_PATTERN_TRIPLE_UP || pulse_rgb_pattern==RGB_PATTERN_TRIPLE_DOWN ? 44 : (buttons?0x7c:0x7c);
+			data = get_bln_pulse_rgb_pattern()==RGB_PATTERN_TRIPLE_UP || get_bln_pulse_rgb_pattern()==RGB_PATTERN_TRIPLE_DOWN ? 44 : (buttons?0x7c:0x7c);
 			break;
 			case 0:
-			data = pulse_rgb_pattern==RGB_PATTERN_TRIPLE_UP || pulse_rgb_pattern==RGB_PATTERN_TRIPLE_DOWN ? (buttons?0x7d:0x7c) : (buttons?0x7c:0x7c);
+			data = get_bln_pulse_rgb_pattern()==RGB_PATTERN_TRIPLE_UP || get_bln_pulse_rgb_pattern()==RGB_PATTERN_TRIPLE_DOWN ? (buttons?0x7d:0x7c) : (buttons?0x7c:0x7c);
 			break;
 		}
 		return data;
@@ -824,7 +860,7 @@ static uint8_t bln_get_sleep_time(int buttons) {
 
 static int bln_get_alarm_time(void) {
 		int data = 0x00;
-		switch (bln_speed) {
+		switch (get_bln_speed()) {
 			case 2:
 			data = 1500;
 			break;
@@ -860,8 +896,8 @@ static void virtual_key_led_blink(int onoff, int dim)
 	struct i2c_client *client = private_lp5562_client;
 	int ret = 0, reg_index = 0;
 	int dim_division = (onoff?0:dim)?8:1;
-	int dimming = (dim_division * (uci_get_user_property_int_mm("bln_light_level", bln_coeff_divider, 0, 20)+1) * smart_get_button_dimming());
-	int step_time = pulse_rgb_pattern == RGB_PATTERN_ONEPLUS5 ? 7:3;
+	int dimming = (dim_division * (get_bln_light_level()) * smart_get_button_dimming());
+	int step_time = get_bln_pulse_rgb_pattern() == RGB_PATTERN_ONEPLUS5 ? 7:3;
 	uint8_t data;
 	uint8_t ramp_data[2] = {0x00,0x00};
 	uint8_t command_data[50] = {0};
@@ -884,7 +920,7 @@ static void virtual_key_led_blink(int onoff, int dim)
 
 		if (short_vib_notif) {
 			short_vib_notif = 0; // reset, so if next time vibration is off, it doesn't accidentally trigger a double blink short notfi...
-			if (pulse_rgb_pattern>RGB_PATTERN_ONEPLUS5) {
+			if (get_bln_pulse_rgb_pattern()>RGB_PATTERN_ONEPLUS5) {
 				reg_index = vk_led_step(command_data, reg_index, 0x40 / dim_division, 0x44, 1);
 				reg_index = vk_led_step(command_data, reg_index, 0xc8 / dim_division, 0x44, 1);
 				reg_index = vk_led_step(command_data, reg_index, 0x50 / dim_division, 0x4a, 1);
@@ -915,7 +951,7 @@ static void virtual_key_led_blink(int onoff, int dim)
 			}
 
 		} else {
-			if (pulse_rgb_pattern>RGB_PATTERN_ONEPLUS5 || dim_division != 1) {
+			if (get_bln_pulse_rgb_pattern()>RGB_PATTERN_ONEPLUS5 || dim_division != 1) {
 				reg_index = vk_led_step(command_data, reg_index, 0x20 / dim_division, pattern_time_button[pulse_rgb_pattern][0], 1);
 				reg_index = vk_led_step(command_data, reg_index, 0x70 / dim_division, pattern_time_button[pulse_rgb_pattern][1], 1);
 				reg_index = vk_led_step(command_data, reg_index, 0xb0 / dim_division, pattern_time_button[pulse_rgb_pattern][2], 1);
@@ -949,7 +985,7 @@ static void virtual_key_led_blink(int onoff, int dim)
 		data = bln_get_sleep_time(1);
 		reg_index = vk_led_step(command_data, reg_index, 0x00, data, 1);
 		reg_index = vk_led_step(command_data, reg_index, 0x00, 0x7f, 0);
-		if (bln_speed==0) {
+		if (get_bln_speed()==0) {
 			reg_index = vk_led_step(command_data, reg_index, 0x00, 0x7f, 0);
 		}
 
@@ -1021,9 +1057,9 @@ static int vary1 = 1;
 static void vk_unblink_work_func(struct work_struct *work)
 {
 	I(" %s +++\n" , __func__);
-	if (full_or_dim == 1 && bln_dim_blink==1 && bln_dim_number > 0) { // won't keep dim blink?
+	if (full_or_dim == 1 && get_bln_dim_blink()==1 && get_bln_dim_number() > 0) { // won't keep dim blink?
 		if (!mutex_is_locked(&blinkstopworklock)) {
-			int sleeptime = bln_get_alarm_time() * (vary1?(vary1==2?bln_dim_number+2:bln_dim_number):(bln_dim_number-2));
+			int sleeptime = bln_get_alarm_time() * (vary1?(vary1==2?get_bln_dim_number()+2:get_bln_dim_number()):(get_bln_dim_number()-2));
 
 			ktime_t wakeup_time;
 			ktime_t curr_time = { .tv64 = 0 };
@@ -1045,8 +1081,8 @@ static void vk_unblink_work_func(struct work_struct *work)
 				ktime_to_timeval(wakeup_time).tv_sec);
 		}
 	}
-	blink_running = bln_dim_blink&&full_or_dim;
-	virtual_key_led_blink(0,bln_dim_blink&&full_or_dim);
+	blink_running = get_bln_dim_blink()&&full_or_dim;
+	virtual_key_led_blink(0,get_bln_dim_blink()&&full_or_dim);
 
 	full_or_dim = 0;
 }
@@ -1074,13 +1110,13 @@ static enum alarmtimer_restart blinkstop_rtc_callback(struct alarm *al, ktime_t 
 static int vary = 1;
 static void vk_blink_work_func(struct work_struct *work)
 {
-	int uci_bln_number = uci_get_user_property_int_mm("bln_number", bln_number, 0, 50);
+	int uci_bln_number = get_bln_number();
 	I(" %s +++\n" , __func__);
 	if (screen_on) return;
 	full_or_dim = 1;
 	if (!blink_running) {
 		blink_running = 1;
-		virtual_key_led_blink(1,bln_dim_blink);
+		virtual_key_led_blink(1,get_bln_dim_blink());
 	}
 	if (uci_bln_number > 0 && !charging) { // if blink number is not infinite and is not charging, schedule CANCEL work
 		if (!mutex_is_locked(&blinkstopworklock)) {
@@ -1136,8 +1172,8 @@ static void led_set_multicolor(int onoff, int red, int green){
 	I(" %s , set display_flag = %d red %d green %d \n" , __func__, onoff, red, green);
 	if(onoff){
 		g_led_led_data_bln->Mode = 1;
-		g_led_led_data_bln->Red = red / (rgb_coeff_divider*smart_get_pulse_dimming());
-		g_led_led_data_bln->Green = green / (rgb_coeff_divider*smart_get_pulse_dimming());
+		g_led_led_data_bln->Red = red / (get_bln_rgb_blink_light_level()*smart_get_pulse_dimming());
+		g_led_led_data_bln->Green = green / (get_bln_rgb_blink_light_level()*smart_get_pulse_dimming());
 		g_led_led_data_bln->Blue = 0;
 		queue_work(g_led_work_queue, &g_led_led_data_bln->led_work_multicolor);
 	}else {
@@ -1157,7 +1193,7 @@ static int color_blink_step_by_color(struct i2c_client *client, uint8_t brightne
 	/* # === set pwm brightness === */
 	data = 0x40;
 	ret = i2c_write_block(client, (red?CMD_ENG_1_BASE:CMD_ENG_2_BASE) + reg_index++, &data, 1);
-	data = brightness / (rgb_coeff_divider*smart_get_pulse_dimming());
+	data = brightness / (get_bln_rgb_blink_light_level()*smart_get_pulse_dimming());
 	ret = i2c_write_block(client, (red?CMD_ENG_1_BASE:CMD_ENG_2_BASE) + reg_index++, &data, 1);
 	/* === wait time === */
 	data = time;
@@ -1232,7 +1268,7 @@ static void led_multi_color_charge_level(int level) {
 	int red_coeff = 255 - (us_level); // red be a bit more always, except on FULL charge ( 255 - 220 -> Min = 25, except on full where it is 1 )
 	int green_coeff = 235 - red_coeff; // green be a bit less always, except on FULL charge ( Green max is 220, min 1 - except on full where its 255)
 
-	if (!(colored_charge_level && supposedly_charging)) return;
+	if (!(get_bln_rgb_batt_colored() && supposedly_charging)) return;
 
 	// check if we're changing from no charge state to charge led and that last received battery level differs from current...
 	if (last_charge_state == supposedly_charging && last_level == level) return; // no change, return
@@ -1271,7 +1307,7 @@ static void led_multi_color_charge_level(int level) {
 void register_charge_level(int level)
 {
 	I("%s %d\n",__func__,level);
-	if (colored_charge_level && charging && supposedly_charging) {
+	if (get_bln_rgb_batt_colored() && charging && supposedly_charging) {
 		// TRIGGER COLOR CHANGE of led
 		I("%s triggering color change to multicolor led %d\n",__func__,level);
 		led_multi_color_charge_level(level);
@@ -1350,6 +1386,19 @@ void register_input_event(void) {
 }
 EXPORT_SYMBOL(register_input_event);
 
+// register sys uci listener
+void uci_sys_listener(void) {
+	pr_info("%s uci sys parse happened...\n",__func__);
+	{
+		int ringing = uci_get_sys_property_int_mm("ringing", 0, 0, 1);
+		pr_info("%s uci sys ringing %d\n",__func__,ringing);
+		if (ringing) {
+			register_input_event();
+			stop_kernel_ambient_display(true);
+		}
+	}
+}
+
 int register_haptic(int value)
 {
 	unsigned long stack_entries[STACK_LENGTH];
@@ -1402,7 +1451,7 @@ int register_haptic(int value)
 			} else {
 				short_vib_notif = 0;
 			}
-			if (!vk_led_blink && uci_get_user_property_int_mm("bln", bln_switch, 0, 1) && ((!charging && smart_get_button_dimming()==1) || charging) ) { // do not trigger blink if not on charger and lights down mode
+			if (!vk_led_blink && get_bln_switch() && ((!charging && smart_get_button_dimming()==1) || charging) ) { // do not trigger blink if not on charger and lights down mode
 				// store haptic blinking, so if ambient display blocks the bln, later in BLANK screen off, still it can be triggered
 				bln_on_screenoff = 1;
 				pr_info("%s kad bln_on_screenoff %d\n", __func__, bln_on_screenoff);
@@ -1535,7 +1584,7 @@ static int color_blink_step(struct i2c_client *client, uint8_t brightness, uint8
 	/* # === set pwm brightness === */
 	data = 0x40;
 	ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
-	data = brightness / (rgb_coeff_divider*smart_get_pulse_dimming());
+	data = brightness / (get_bln_rgb_blink_light_level()*smart_get_pulse_dimming());
 	ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
 	/* === wait time === */
 	data = time;
@@ -1551,7 +1600,7 @@ static void lp5562_color_blink(struct i2c_client *client, uint8_t red, uint8_t g
 {
 	uint8_t data = 0x00;
 	uint8_t ramp_data[2] = {0x00,0x00};
-	int dimming = (rgb_coeff_divider*smart_get_pulse_dimming());
+	int dimming = (get_bln_rgb_blink_light_level()*smart_get_pulse_dimming());
 
 	int ret, reg_index = 0;
 	uint8_t mode = 0x00;
@@ -1613,7 +1662,7 @@ static void lp5562_color_blink(struct i2c_client *client, uint8_t red, uint8_t g
 #ifdef CONFIG_LEDS_QPNP_BUTTON_BLINK
 		// BLN
 		// sysfs configuation bln_no_charger_switch == 1 -> always blink even if not on charger
-		if (uci_get_user_property_int_mm("bln", bln_switch, 0, 1) && smart_get_bln_no_charger_switch() && (smart_get_button_dimming()==1)) {
+		if (get_bln_switch() && smart_get_bln_no_charger_switch() && (smart_get_button_dimming()==1)) {
 			if (!wake_by_user || vk_screen_is_off()) {
 				bln_on_screenoff = 1;
 				pr_info("%s kad bln_on_screenoff %d\n", __func__, bln_on_screenoff);
@@ -1626,8 +1675,8 @@ static void lp5562_color_blink(struct i2c_client *client, uint8_t red, uint8_t g
 			flash_blink(false);
 		}
 		kernel_ambient_display();
-		if (!pulse_rgb_blink) {
-		green = green / (rgb_coeff_divider*smart_get_pulse_dimming());
+		if (!get_bln_pulse_rgb_blink()) {
+		green = green / (get_bln_rgb_blink_light_level()*smart_get_pulse_dimming());
 #endif
 		/* === set green pwm === */
 		data = 0x40;
@@ -1663,7 +1712,7 @@ static void lp5562_color_blink(struct i2c_client *client, uint8_t red, uint8_t g
 		} else {
 		I(" %s BLINK +++ red:%d, green:%d, blue:%d\n" , __func__, red, green, blue);
 		/* # === set green blink === */
-		if (pulse_rgb_pattern>RGB_PATTERN_ONEPLUS5) {
+		if (get_bln_pulse_rgb_pattern()>RGB_PATTERN_ONEPLUS5) {
 			reg_index = color_blink_step(client, pattern_brightness[pulse_rgb_pattern][0], pattern_time[pulse_rgb_pattern][0], reg_index);
 			reg_index = color_blink_step(client, pattern_brightness[pulse_rgb_pattern][1], pattern_time[pulse_rgb_pattern][1], reg_index);
 			reg_index = color_blink_step(client, pattern_brightness[pulse_rgb_pattern][2], pattern_time[pulse_rgb_pattern][2], reg_index);
@@ -1671,7 +1720,7 @@ static void lp5562_color_blink(struct i2c_client *client, uint8_t red, uint8_t g
 			reg_index = color_blink_step(client, pattern_brightness[pulse_rgb_pattern][4], pattern_time[pulse_rgb_pattern][4], reg_index);
 			reg_index = color_blink_step(client, pattern_brightness[pulse_rgb_pattern][5], pattern_time[pulse_rgb_pattern][5], reg_index);
 		} else {
-			int step_time = pulse_rgb_pattern == RGB_PATTERN_ONEPLUS5 ? 7:3;
+			int step_time = get_bln_pulse_rgb_pattern() == RGB_PATTERN_ONEPLUS5 ? 7:3;
 // set PWM start vaue to 5
 			data = 0x40;
 			ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
@@ -1711,7 +1760,7 @@ static void lp5562_color_blink(struct i2c_client *client, uint8_t red, uint8_t g
 		ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
 		data = 0x00;
 		ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
-		if (bln_speed == 0) {
+		if (get_bln_speed() == 0) {
 			/* === wait 0.999s === */
 			data = 0x7f;
 			ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
@@ -2818,7 +2867,7 @@ static DEVICE_ATTR(bln_speed_max, (S_IWUSR|S_IRUGO),
 static ssize_t bln_coeff_div_show(struct device *dev,
             struct device_attribute *attr, char *buf)
 {
-      return snprintf(buf, PAGE_SIZE, "%d\n", (rgb_coeff_divider<20?(rgb_coeff_divider-1):20));
+      return snprintf(buf, PAGE_SIZE, "%d\n", (get_bln_rgb_blink_light_level()<20?(get_bln_rgb_blink_light_level()-1):20));
 }
 
 static ssize_t bln_coeff_div_dump(struct device *dev,
@@ -2835,7 +2884,7 @@ static ssize_t bln_coeff_div_dump(struct device *dev,
             input = 0;
 
       if (input < 20) {
-	      rgb_coeff_divider = input + 1;
+	     rgb_coeff_divider = input + 1;
       } else rgb_coeff_divider = 500;
 
       return count;
@@ -3261,7 +3310,7 @@ static void lp5562_vk_led_set_brightness(struct led_classdev *led_cdev,
 {
 	struct lp5562_led *ldata;
 #ifdef CONFIG_LEDS_QPNP_BUTTON_BLINK
-	int uci_bln_light_level = uci_get_user_property_int_mm("bln_light_level", bln_coeff_divider, 0, 20)+1;
+	int uci_bln_light_level = get_bln_light_level();
 	int divider = (uci_bln_light_level)*smart_get_button_dimming()>8?4:(uci_bln_light_level<3?1:(uci_bln_light_level/2));
 #endif
 	ldata = container_of(led_cdev, struct lp5562_led, cdev);
@@ -3926,6 +3975,7 @@ static int lp5562_led_probe(struct i2c_client *client
 				vibrate_rtc_callback);
 			alarm_init(&double_double_vol_rtc, ALARM_REALTIME,
 				double_double_vol_rtc_callback);
+			uci_add_sys_listener(uci_sys_listener);
 #endif
 			wake_lock_init(&cdata->leds[i].led_wake_lock, WAKE_LOCK_SUSPEND, "lp5562");
 			INIT_WORK(&cdata->leds[i].led_work, led_work_func);
