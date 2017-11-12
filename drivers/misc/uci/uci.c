@@ -148,7 +148,7 @@ int parse_uci_cfg_file(const char *file_name, bool sys) {
 		buf[fsize]='\0';
 
 		while ((line = strsep(&buf, "\n")) != NULL) {
-			pr_info("%s uci %s | %d\n",__func__, line, line_num);
+			pr_info("%s uci %s | %d  |- ",__func__, line, line_num);
 			if (line[0] == '#' || line[0]=='\0') continue; // comments, empty lines
 			token_num = 0;
 			while ((side = strsep(&line, "=")) != NULL) {
@@ -157,10 +157,10 @@ int parse_uci_cfg_file(const char *file_name, bool sys) {
 				dupline = kstrdup(buf, GFP_KERNEL);
 				if (token_num==0) {
 					l_cfg_keys[prop_num] = (char*)dupline;
-					pr_info("%s uci param key = %s | prop num: %d\n",__func__, dupline, prop_num);
+					//pr_info("%s uci param key = %s | prop num: %d\n",__func__, dupline, prop_num);
 				} else {
 					l_cfg_values[prop_num] = (char*)dupline;
-					pr_info("%s uci param value = %s | prop num: %d\n",__func__, dupline, prop_num);
+					//pr_info("%s uci param value = %s | prop num: %d\n",__func__, dupline, prop_num);
 					prop_num++;
 				}
 				token_num++;
@@ -171,7 +171,7 @@ int parse_uci_cfg_file(const char *file_name, bool sys) {
 		l_cfg_keys[prop_num] = NULL;
 		l_cfg_values[prop_num] = NULL;
 
-		pr_info("%s [uci] closing file...  %s\n",__func__,file_name);
+		pr_info("\n%s [uci] closing file...  %s\n",__func__,file_name);
 
 		kfree(buf);
 
@@ -322,7 +322,7 @@ void parse_uci_sys_cfg_file(void) {
 
 const char* uci_get_user_property_str(const char* property, const char* default_value) {
 	const char* ret = NULL;
-	pr_info("%s uci get user str prop %s\n",__func__,property);
+	//pr_info("%s uci get user str prop %s\n",__func__,property);
 	if (user_cfg_parsed) {
 		int param_count = 0;
 		while(get_user_in_progress) { // mutex lock is not possible - ___might_sleep causes Ooops in the context
@@ -338,7 +338,7 @@ const char* uci_get_user_property_str(const char* property, const char* default_
 			if (key==NULL) break;
 			if (!strcmp(property,key)) {
 				ret = user_cfg_values[param_count];
-				pr_info("%s uci key %s -> value %s\n",__func__,key, ret);
+				//pr_info("%s uci key %s -> value %s\n",__func__,key, ret);
 				get_user_in_progress = 0;
 				return  ret;
 			}
@@ -346,6 +346,7 @@ const char* uci_get_user_property_str(const char* property, const char* default_
 		}
 	}
 	get_user_in_progress = 0;
+	pr_info("%s uci get user prop *failed* %s\n",__func__, property);
 	return default_value;
 }
 EXPORT_SYMBOL(uci_get_user_property_str);
@@ -363,14 +364,14 @@ EXPORT_SYMBOL(uci_get_user_property_int);
 int uci_get_user_property_int_mm(const char* property, int default_value, int min, int max) {
 	int ret = uci_get_user_property_int(property, default_value);
 	if (ret<min || ret>max) ret = default_value;
-	pr_info("%s uci get user prop %s = %d\n",__func__, property, ret);
+	//pr_info("%s uci get user prop %s = %d\n",__func__, property, ret);
 	return ret;
 }
 EXPORT_SYMBOL(uci_get_user_property_int_mm);
 
 const char* uci_get_sys_property_str(const char* property, const char* default_value) {
 	const char* ret = NULL;
-	pr_info("%s uci get sys str prop %s\n",__func__,property);
+	//pr_info("%s uci get sys str prop %s\n",__func__,property);
 	if (sys_cfg_parsed) {
 		int param_count = 0;
 		while(get_sys_in_progress) { // mutex lock is not possible - ___might_sleep causes Ooops in the context
@@ -386,7 +387,7 @@ const char* uci_get_sys_property_str(const char* property, const char* default_v
 			if (key==NULL) break;
 			if (!strcmp(property,key)) {
 				ret = sys_cfg_values[param_count];
-				pr_info("%s uci key %s -> value %s\n",__func__,key, ret);
+				//pr_info("%s uci key %s -> value %s\n",__func__,key, ret);
 				get_sys_in_progress = 0;
 				return  ret;
 			}
@@ -394,6 +395,7 @@ const char* uci_get_sys_property_str(const char* property, const char* default_v
 		}
 	}
 	get_sys_in_progress = 0;
+	pr_info("%s uci get sys prop *failed* %s\n",__func__, property);
 	return default_value;
 }
 EXPORT_SYMBOL(uci_get_sys_property_str);
