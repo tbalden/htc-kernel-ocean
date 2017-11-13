@@ -868,14 +868,17 @@ static void start_kad_running(int for_squeeze) {
 static int squeeze_power_kernel_max_threshold = 1;// 0 - 9
 // 112, 132, 152, 172, 192, 212, 232, 252, 272, 292
 // 100-120 - 121-130...- 280-300
+static int get_squeeze_power_kernel_max_threshold(void) {
+	return uci_get_user_property_int_mm("squeeze_power_kernel_max_threshold", squeeze_power_kernel_max_threshold, 0,9);
+}
 
 // int that signals if kernel should handle squeezes for squeeze to sleep/wake
 static int squeeze_kernel_handled = 0;
 
 void register_squeeze_power_threshold_change(int power) {
 	int new_level = (power - 101) / 20;
-	pr_info("%s squeeze call new_level power %d max level %d power %d \n",__func__,new_level,squeeze_power_kernel_max_threshold,power);
-	if (new_level <= squeeze_power_kernel_max_threshold && power>=100) {
+	pr_info("%s squeeze call new_level power %d max level %d power %d \n",__func__,new_level,get_squeeze_power_kernel_max_threshold(),power);
+	if (new_level <= get_squeeze_power_kernel_max_threshold() && power>=100) { // at least raw squeeze power -> 100 it should be, below that first notch is not registered...
 		squeeze_kernel_handled = 1;
 	} else {
 		squeeze_kernel_handled = 0;
