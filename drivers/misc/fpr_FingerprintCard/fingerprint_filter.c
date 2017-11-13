@@ -51,7 +51,16 @@ static struct work_struct ts_input_work;
 static struct input_dev *ts_device = NULL;
 
 static unsigned long last_screen_event_timestamp = 0;
-static unsigned long last_screen_off_timestamp = 0;
+static unsigned int last_screen_off_seconds = 0;
+
+unsigned int get_global_seconds(void) {
+	struct timespec ts;
+	unsigned int ret = 0;
+	getnstimeofday(&ts);
+	ret = (unsigned int)(ts.tv_sec);
+	pr_info("%s fpf %u sec \n",__func__,ret);
+	return ret;
+}
 
 static struct workqueue_struct *kcal_listener_wq;
 
@@ -275,10 +284,9 @@ int is_kad_on(void) {
 bool is_screen_locked(void) {
 	int lock_timeout_sec = uci_get_sys_property_int_mm("lock_timeout", 0, 0, 1900);
 	int locked = uci_get_sys_property_int_mm("locked", 1, 0, 1);
-	unsigned int time_passed_j = jiffies - last_screen_off_timestamp;
+	int time_passed = get_global_seconds() - last_screen_off_seconds;
 
-	int time_passed = ((time_passed_j) / (100*JIFFY_MUL));
-	pr_info("%s locked; %d lock timeout: %d time passed after blank: %d %ud \n",__func__,locked, lock_timeout_sec, time_passed, time_passed_j);
+	pr_info("%s fpf locked; %d lock timeout: %d time passed after blank: %d \n",__func__,locked, lock_timeout_sec, time_passed);
 
 	if (locked) return true;
 
@@ -3219,7 +3227,7 @@ static int fb_notifier_callback(struct notifier_block *self,
 		screen_on = 0;
 		screen_on_full = 0;
 		last_screen_event_timestamp = jiffies;
-		last_screen_off_timestamp = jiffies;
+		last_screen_off_seconds = get_global_seconds();
 		last_scroll_emulate_timestamp = 0;
 		pr_info("fpf kad screen off\n");
             break;
