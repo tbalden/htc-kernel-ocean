@@ -52,6 +52,7 @@ static struct input_dev *ts_device = NULL;
 
 static unsigned long last_screen_event_timestamp = 0;
 static unsigned int last_screen_off_seconds = 0;
+static unsigned int last_screen_on_seconds = 0;
 
 unsigned int get_global_seconds(void) {
 	struct timespec ts;
@@ -144,20 +145,61 @@ int uci_get_smart_silent_mode_hibernate(void) {
 int uci_get_smart_silent_mode_stop(void) {
 	return uci_get_user_property_int_mm("smart_silent_mode_stop", smart_silent_mode_stop, 0, 1);
 }
+
+int fpf_silent_mode = 0;
+int fpf_ringing = 0;
 int silent_mode_hibernate(void) {
-	int silent = uci_get_sys_property_int_mm("silent", 0, 0, 1);
 	if (uci_get_smart_silent_mode_hibernate()) {
-		return silent;
+		return fpf_silent_mode;
 	}
 	return 0;
 }
 int silent_mode_stop(void) {
-	int silent = uci_get_sys_property_int_mm("silent", 0, 0, 1);
 	if (uci_get_smart_silent_mode_stop()) {
-		return silent;
+		return fpf_silent_mode;
 	}
 	return 0;
 }
+
+static int phone_ring_in_silent_mode = 0;
+static int get_phone_ring_in_silent_mode(void) {
+	return uci_get_user_property_int_mm("phone_ring_in_silent_mode", phone_ring_in_silent_mode, 0, 1);
+}
+
+static struct alarm vibrate_rtc;
+static enum alarmtimer_restart vibrate_rtc_callback(struct alarm *al, ktime_t now)
+{
+	pr_info("%s kad\n",__func__);
+	set_vibrate(998);
+	return ALARMTIMER_NORESTART;
+}
+
+// register sys uci listener
+void fpf_uci_sys_listener(void) {
+	pr_info("%s uci sys parse happened...\n",__func__);
+	{
+		int silent = uci_get_sys_property_int_mm("silent", 0, 0, 1);
+		int ringing = uci_get_sys_property_int_mm("ringing", 0, 0, 1);
+		pr_info("%s uci sys silent %d\n",__func__,silent);
+		fpf_silent_mode = silent;
+		if (fpf_silent_mode && ringing && (ringing!=fpf_ringing) && get_phone_ring_in_silent_mode()) {
+			ktime_t wakeup_time;
+			ktime_t curr_time = { .tv64 = 0 };
+			wakeup_time = ktime_add_us(curr_time,
+			    (2 * 1000LL * 1000LL)); // msec to usec
+			alarm_cancel(&vibrate_rtc);
+			alarm_start_relative(&vibrate_rtc, wakeup_time); // start new...
+			set_vibrate(999);
+		} else {
+			if (!ringing) {
+				alarm_cancel(&vibrate_rtc);
+			}
+		}
+		fpf_ringing = ringing;
+	}
+}
+
+
 
 static unsigned long smart_last_user_activity_time = 0;
 void smart_set_last_user_activity_time(unsigned long time) {
@@ -208,7 +250,6 @@ int smart_get_notification_level(int notif_type) {
 EXPORT_SYMBOL(smart_get_notification_level);
 
 // /// smart notif ////
-
 
 // kad
 // -- KAD (Kernel Ambient Display --
@@ -281,6 +322,9 @@ int is_kad_on(void) {
 	return 0;
 }
 
+int last_screen_lock_check_was_false = 0;
+
+
 bool is_screen_locked(void) {
 	int lock_timeout_sec = uci_get_sys_property_int_mm("lock_timeout", 0, 0, 1900);
 	int locked = uci_get_sys_property_int_mm("locked", 1, 0, 1);
@@ -290,9 +334,12 @@ bool is_screen_locked(void) {
 
 	if (locked) return true;
 
-	if (time_passed>=lock_timeout_sec) {
+	if (!last_screen_lock_check_was_false && time_passed>=lock_timeout_sec) {
 		return true;
 	}
+	// screen was just turned but not enough time passed...
+	// ...till next screen off lock_timeout shouldn't be checked, as with screen on, lock timeout obviously won't happen
+	last_screen_lock_check_was_false = 1;
 	return false;
 }
 
@@ -406,16 +453,17 @@ static void kcal_set(struct work_struct * kcal_set_work)
 
 	if (kad_running) {
 		int local_kad_kcal = get_kad_kcal();
+		int local_squeeze_kcal = is_squeeze_peek_kcal(true);
 		pr_info("%s kad\n",__func__);
-		if (((is_kad_on() && local_kad_kcal) || is_squeeze_peek_kcal(true)) && !kad_kcal_overlay_on) // && !kad_kcal_backed_up ) 
+		if (((is_kad_on() && local_kad_kcal) || local_squeeze_kcal) && !kad_kcal_overlay_on) // && !kad_kcal_backed_up ) 
 		{
 			unsigned int time_since_screen_on = jiffies - last_screen_on_early_time;
 			int max_try = 1999;
-			while ((!screen_on || time_since_screen_on < 8*JIFFY_MUL) && max_try-->=0 ) {
+			while ((!screen_on || time_since_screen_on < 9*JIFFY_MUL) && max_try-->=0 ) {
 				usleep_range(650,700);
 				time_since_screen_on = jiffies - last_screen_on_early_time;
 			}
-			if ((local_kad_kcal || is_squeeze_peek_kcal(true)) && screen_on && !kad_kcal_overlay_on) {
+			if ((local_kad_kcal || local_squeeze_kcal) && screen_on && !kad_kcal_overlay_on) {
 				int retry_count = 2;
 				pr_info("%s kad backup... BBBBBBBBBBBB   screen %d kad %d overlay_on %d backed_up %d need_restore %d\n",__func__, screen_on, kad_running, kad_kcal_overlay_on, kad_kcal_backed_up, needs_kcal_restore_on_screen_on);
 				while (retry_count-->0) {
@@ -428,7 +476,7 @@ static void kcal_set(struct work_struct * kcal_set_work)
 				}
 			}
 		}
-		if (((is_kad_on() && local_kad_kcal) || is_squeeze_peek_kcal(true)) && kad_kcal_backed_up && !kad_kcal_overlay_on) {
+		if (((is_kad_on() && local_kad_kcal) || local_squeeze_kcal) && kad_kcal_backed_up && !kad_kcal_overlay_on) {
 			int retry_count = 2;
 			pr_info("%s kad override... SSSSSSSSSS   screen %d kad %d overlay_on %d backed_up %d need_restore %d\n",__func__, screen_on, kad_running, kad_kcal_overlay_on, kad_kcal_backed_up, needs_kcal_restore_on_screen_on);
 			while (retry_count-->0) {
@@ -2201,6 +2249,7 @@ skip_ts:
 			ts_poke();
 		}
 	}
+
 	if (filter_event) {
 		pr_info("%s ts_input filtering ts input while kad_control! %d %d %d\n",__func__,type,code,value);
 		return true;
@@ -3190,6 +3239,7 @@ static int fb_notifier_callback(struct notifier_block *self,
         case FB_BLANK_UNBLANK:
 		screen_on = 1;
 		screen_off_early = 0;
+		last_screen_on_seconds = get_global_seconds();
 		last_screen_on_early_time = jiffies;
 		pr_info("fpf kad screen on -early\n");
             break;
@@ -3228,6 +3278,7 @@ static int fb_notifier_callback(struct notifier_block *self,
 		screen_on_full = 0;
 		last_screen_event_timestamp = jiffies;
 		last_screen_off_seconds = get_global_seconds();
+		last_screen_lock_check_was_false = 0;
 		last_scroll_emulate_timestamp = 0;
 		pr_info("fpf kad screen off\n");
             break;
@@ -3436,6 +3487,9 @@ static int __init fpf_init(void)
 		check_single_fp_vib_rtc_callback);
 	alarm_init(&ts_poke_rtc, ALARM_REALTIME,
 		ts_poke_rtc_callback);
+	alarm_init(&vibrate_rtc, ALARM_REALTIME,
+		vibrate_rtc_callback);
+	uci_add_sys_listener(fpf_uci_sys_listener);
 	init_done = 1;
 err_input_dev:
 	input_free_device(fpf_pwrdev);
