@@ -1856,7 +1856,7 @@ reset:
 			int power_perc = uci_get_vibration_power_percentage();
 			int power_set = uci_get_vibration_power_set();
 			if (power_set) {
-				hap->vmax_mv = (QPNP_HAP_VMAX_MAX_MV * 100) / power_perc;
+				hap->vmax_mv = (QPNP_HAP_VMAX_MAX_MV * power_perc) / 100;
 			} else {
 				hap->vmax_mv = stored_vmax_mv;
 			}

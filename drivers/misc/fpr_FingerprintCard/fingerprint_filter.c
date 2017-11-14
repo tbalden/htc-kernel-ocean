@@ -472,9 +472,15 @@ static void kcal_set(struct work_struct * kcal_set_work)
 		pr_info("%s kad\n",__func__);
 		if (((is_kad_on() && local_kad_kcal) || local_squeeze_kcal) && !kad_kcal_overlay_on) // && !kad_kcal_backed_up ) 
 		{
-			unsigned int time_since_screen_on = jiffies - last_screen_on_early_time;
-			int max_try = 1999;
-			while ((!screen_on || time_since_screen_on < 9*JIFFY_MUL) && max_try-->=0 ) {
+			unsigned int time_since_screen_on = 0;
+			int max_try = 3999;
+			while ((!screen_on) && max_try-->=0 ) {
+				usleep_range(650,700);
+			}
+			usleep_range(750,800);
+			max_try = 3999;
+			time_since_screen_on = jiffies - last_screen_on_early_time;
+			while ((time_since_screen_on < 8*JIFFY_MUL) && max_try-->=0 ) {
 				usleep_range(650,700);
 				time_since_screen_on = jiffies - last_screen_on_early_time;
 			}
