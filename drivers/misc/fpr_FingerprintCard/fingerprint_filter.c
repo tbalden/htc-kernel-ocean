@@ -2066,9 +2066,13 @@ extern void register_double_volume_key_press(int long_press);
 
 static bool filtered_ts_event = false;
 static unsigned long filtering_ts_event_last_event = 0;
-
 static int kad_finger_counter = 0;
 
+static int block_power_key_in_pocket = 0;
+int get_block_power_key_in_pocket(void) {
+	int proximity = uci_get_sys_property_int_mm("proximity", 0, 0, 1);
+	return proximity && uci_get_user_property_int_mm("block_power_key_in_pocket", block_power_key_in_pocket, 0, 1);
+}
 
 static bool ts_input_filter(struct input_handle *handle,
                                     unsigned int type, unsigned int code,
@@ -2087,6 +2091,10 @@ static bool ts_input_filter(struct input_handle *handle,
 
 	if (type == EV_KEY) {
 		pr_info("%s ts_input key %d %d %d\n",__func__,type,code,value);
+		if (code == 116 && !screen_on && get_block_power_key_in_pocket()) {
+			pr_info("%s proximity ts_input power key filter\n",__func__);
+			return true;
+		}
 	}
 
 	if (type == EV_KEY && code == KEY_VOLUMEUP && value == 1) {
@@ -2350,6 +2358,32 @@ static struct input_handler ts_input_handler = {
 };
 
 // ------------------------------------------------------
+
+static ssize_t block_power_key_in_pocket_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", block_power_key_in_pocket);
+}
+
+static ssize_t block_power_key_in_pocket_dump(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int ret;
+	unsigned long input;
+
+	ret = kstrtoul(buf, 0, &input);
+	if (ret < 0)
+		return ret;
+
+	if (input < 0 || input > 1)
+		input = 0;
+
+	block_power_key_in_pocket = input;
+	return count;
+}
+
+static DEVICE_ATTR(block_power_key_in_pocket, (S_IWUSR|S_IRUGO),
+	block_power_key_in_pocket_show, block_power_key_in_pocket_dump);
 
 static ssize_t fpf_dt_wait_period_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
@@ -3556,6 +3590,10 @@ static int __init fpf_init(void)
 	rc = sysfs_create_file(fpf_kobj, &dev_attr_squeeze_max_power_level.attr);
 	if (rc)
 		pr_err("%s: sysfs_create_file failed for squeeze max pwr level\n", __func__);
+
+	rc = sysfs_create_file(fpf_kobj, &dev_attr_block_power_key_in_pocket.attr);
+	if (rc)
+		pr_err("%s: sysfs_create_file failed for block_power_key_in_pocket\n", __func__);
 
 	rc = sysfs_create_file(fpf_kobj, &dev_attr_fpf_dt_wait_period.attr);
 	if (rc)
