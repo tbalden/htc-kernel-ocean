@@ -1715,14 +1715,29 @@ static int qpnp_hap_set(struct qpnp_hap *hap, int on)
 #define MIN_TD_VALUE_NOTIFICATION_ALARM 500
 
 static int notification_booster = 2;
+static int vibration_power_set = 0;
+static int vibration_power_percentage = 40;
+
 static int suspend_booster = 0;
-static int vmax_needs_reset = 0;
+static int vmax_needs_reset = 1;
 static int alarm_value_counter = 0;
 static int last_value = 0;
 static unsigned long last_alarm_value_jiffies = 0;
 
 int uci_get_notification_booster(void) {
 	return uci_get_user_property_int_mm("notification_booster", notification_booster,0,100);
+}
+
+int uci_get_vibration_power_percentage(void) {
+	return uci_get_user_property_int_mm("vibration_power_percentage", vibration_power_percentage,0,100);
+}
+int uci_get_vibration_power_set(void) {
+	return uci_get_user_property_int_mm("vibration_power_set", vibration_power_set,0,1);
+}
+// register user uci listener
+void haptic_uci_user_listener(void) {
+	pr_info("%s uci user parse happened...\n",__func__);
+	vmax_needs_reset = 1;
 }
 
 void set_suspend_booster(int value) {
@@ -1838,7 +1853,13 @@ static void qpnp_hap_td_enable(struct timed_output_dev *dev, int value)
 		}
 reset:
 		if (vmax_needs_reset) {
-			hap->vmax_mv = stored_vmax_mv;
+			int power_perc = uci_get_vibration_power_percentage();
+			int power_set = uci_get_vibration_power_set();
+			if (power_set) {
+				hap->vmax_mv = (QPNP_HAP_VMAX_MAX_MV * 100) / power_perc;
+			} else {
+				hap->vmax_mv = stored_vmax_mv;
+			}
 			qpnp_hap_vmax_config(hap);
 			vmax_needs_reset = 0;
 		}
@@ -2839,6 +2860,9 @@ static int qpnp_haptic_probe(struct platform_device *pdev)
 
 	VIB_INFO_LOG("%s: --, play_mode=%d\n", __func__, hap->play_mode);
 
+#ifdef CONFIG_UCI
+	uci_add_user_listener(haptic_uci_user_listener);
+#endif
 	return 0;
 
 sysfs_fail:
