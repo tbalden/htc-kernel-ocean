@@ -394,7 +394,10 @@ static int kad_kcal_backed_up = 0;
 
 static bool kcal_sleep_before_restore = false;
 
+DEFINE_MUTEX(kcal_read_write_lock);
+
 static void kcal_restore_sync(void) {
+	mutex_lock(&kcal_read_write_lock);
 	if (!kad_running && needs_kcal_restore_on_screen_on && kad_kcal_backed_up && kad_kcal_overlay_on) {
 		pr_info("%s kad\n",__func__);
 		if (((is_kad_on() && kad_kcal) || is_squeeze_peek_kcal(false)) && screen_on) { 
@@ -411,6 +414,7 @@ static void kcal_restore_sync(void) {
 			}
 		}
 	}
+	mutex_unlock(&kcal_read_write_lock);
 }
 
 static void kcal_restore(struct work_struct * kcal_restore_work) 
@@ -450,7 +454,7 @@ static DECLARE_WORK(kcal_listener_work, kcal_listener);
 static void kcal_set(struct work_struct * kcal_set_work)
 {
 	pr_info("%s kad ## !!!!!!!!!!!!!!!!!! set    screen %d kad %d overlay_on %d backed_up %d need_restore %d\n",__func__, screen_on, kad_running, kad_kcal_overlay_on, kad_kcal_backed_up, needs_kcal_restore_on_screen_on);
-
+	mutex_lock(&kcal_read_write_lock);
 	if (kad_running) {
 		int local_kad_kcal = get_kad_kcal();
 		int local_squeeze_kcal = is_squeeze_peek_kcal(true);
@@ -488,6 +492,7 @@ static void kcal_set(struct work_struct * kcal_set_work)
 			}
 		}
 	}
+	mutex_unlock(&kcal_read_write_lock);
 }
 static DECLARE_WORK(kcal_set_work, kcal_set);
 
@@ -2458,6 +2463,34 @@ static ssize_t unlock_vib_strength_dump(struct device *dev,
 static DEVICE_ATTR(unlock_vib_strength, (S_IWUSR|S_IRUGO),
 	unlock_vib_strength_show, unlock_vib_strength_dump);
 
+
+static ssize_t phone_ring_in_silent_mode_show(struct device *dev,
+		 struct device_attribute *attr, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", phone_ring_in_silent_mode);
+}
+
+static ssize_t phone_ring_in_silent_mode_dump(struct device *dev,
+		 struct device_attribute *attr, const char *buf, size_t count)
+{
+	int ret;
+	unsigned long input;
+
+	ret = kstrtoul(buf, 0, &input);
+	if (ret < 0)
+		return ret;
+
+	if (input < 0 || input > 1) 
+		input = 0;
+
+	phone_ring_in_silent_mode = input;
+	
+	return count;
+}
+
+static DEVICE_ATTR(phone_ring_in_silent_mode, (S_IWUSR|S_IRUGO),
+	phone_ring_in_silent_mode_show, phone_ring_in_silent_mode_dump);
+
 // ------------------- squeeze
 static ssize_t squeeze_sleep_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
@@ -3458,6 +3491,10 @@ static int __init fpf_init(void)
 	rc = sysfs_create_file(fpf_kobj, &dev_attr_unlock_vib_strength.attr);
 	if (rc)
 		pr_err("%s: sysfs_create_file failed for unlock_vib_strength\n", __func__);
+
+	rc = sysfs_create_file(fpf_kobj, &dev_attr_phone_ring_in_silent_mode.attr);
+	if (rc)
+		pr_err("%s: sysfs_create_file failed for phone_ring_in_silent_mode\n", __func__);
 
 	rc = sysfs_create_file(fpf_kobj, &dev_attr_smart_trim_inactive_minutes.attr);
 	if (rc)
