@@ -265,6 +265,16 @@ static int kad_repeat_period_sec = 12; // period between each repeat
 static int squeeze_peek_kcal = 0;
 static int kad_three_finger_gesture = 1; // three finger gesture will wake KAD
 
+static int kad_kcal_val = 135;
+static int kad_kcal_cont = 255;
+
+static int get_kad_kcal_val(void) {
+	return uci_get_user_property_int_mm("kad_kcal_val", kad_kcal_val, 0, 255);
+}
+static int get_kad_kcal_cont(void) {
+	return uci_get_user_property_int_mm("kad_kcal_cont", kad_kcal_cont, 150, 255);
+}
+
 static int get_kad_kcal(void) {
 	return uci_get_user_property_int_mm("kad_kcal", kad_kcal, 0, 1);
 }
@@ -307,6 +317,7 @@ static int smart_get_kad_repeat_period_sec(void) {
 static int kad_kcal_r = 150;
 static int kad_kcal_g = 150;
 static int kad_kcal_b = 254;
+
 
 
 static int kad_on_override = 0;
@@ -484,7 +495,7 @@ static void kcal_set(struct work_struct * kcal_set_work)
 			int retry_count = 2;
 			pr_info("%s kad override... SSSSSSSSSS   screen %d kad %d overlay_on %d backed_up %d need_restore %d\n",__func__, screen_on, kad_running, kad_kcal_overlay_on, kad_kcal_backed_up, needs_kcal_restore_on_screen_on);
 			while (retry_count-->0) {
-				if (screen_on && kcal_internal_override(128,180,200, kad_kcal_r, kad_kcal_g, kad_kcal_b)) {
+				if (screen_on && kcal_internal_override(128,get_kad_kcal_val(),get_kad_kcal_cont(), kad_kcal_r, kad_kcal_g, kad_kcal_b)) {
 					kad_kcal_overlay_on = 1; 
 					break;
 				}
@@ -3024,6 +3035,62 @@ static DEVICE_ATTR(kad_disable_fp_input, (S_IWUSR|S_IRUGO),
 	kad_disable_fp_input_show, kad_disable_fp_input_dump);
 
 
+static ssize_t kad_kcal_val_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", kad_kcal_val);
+}
+
+static ssize_t kad_kcal_val_dump(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int ret;
+	unsigned long input;
+
+	ret = kstrtoul(buf, 0, &input);
+	if (ret < 0)
+		return ret;
+
+	if (input < 0 || input > 255)
+		input = 150;
+
+	kad_kcal_val = input;
+
+	return count;
+}
+
+static DEVICE_ATTR(kad_kcal_val, (S_IWUSR|S_IRUGO),
+	kad_kcal_val_show, kad_kcal_val_dump);
+
+
+static ssize_t kad_kcal_cont_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", kad_kcal_cont);
+}
+
+static ssize_t kad_kcal_cont_dump(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int ret;
+	unsigned long input;
+
+	ret = kstrtoul(buf, 0, &input);
+	if (ret < 0)
+		return ret;
+
+	if (input < 150 || input > 255)
+		input = 255;
+
+	kad_kcal_cont = input;
+
+	return count;
+}
+
+static DEVICE_ATTR(kad_kcal_cont, (S_IWUSR|S_IRUGO),
+	kad_kcal_cont_show, kad_kcal_cont_dump);
+
+
 static ssize_t kad_kcal_red_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
@@ -3455,6 +3522,14 @@ static int __init fpf_init(void)
 	rc = sysfs_create_file(fpf_kobj, &dev_attr_kad_disable_fp_input.attr);
 	if (rc)
 		pr_err("%s: sysfs_create_file failed for kad_disable_fp_input\n", __func__);
+
+	rc = sysfs_create_file(fpf_kobj, &dev_attr_kad_kcal_val.attr);
+	if (rc)
+		pr_err("%s: sysfs_create_file failed for kad_kcal_val\n", __func__);
+
+	rc = sysfs_create_file(fpf_kobj, &dev_attr_kad_kcal_cont.attr);
+	if (rc)
+		pr_err("%s: sysfs_create_file failed for kad_kcal_cont\n", __func__);
 
 	rc = sysfs_create_file(fpf_kobj, &dev_attr_kad_kcal_red.attr);
 	if (rc)
