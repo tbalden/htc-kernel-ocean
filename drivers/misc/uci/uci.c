@@ -4,6 +4,8 @@
 #include <linux/input.h>
 #include <linux/delay.h>
 #include <linux/slab.h>
+#include <linux/spinlock.h>
+
 
 //file operation+
 #include <linux/fs.h>
@@ -102,10 +104,7 @@ char *sys_cfg_values[MAX_PARAMS];
 
 static int should_not_parse_next_close = 0;
 
-DEFINE_MUTEX(cfg_rw_lock);
-
-static int get_user_in_progress = 0;
-static int get_sys_in_progress = 0;
+static DEFINE_SPINLOCK(cfg_rw_lock);
 
 // Parsing
 int parse_uci_cfg_file(const char *file_name, bool sys) {
@@ -120,6 +119,7 @@ int parse_uci_cfg_file(const char *file_name, bool sys) {
 	} else {
 		off_t fsize;
 		char *buf;
+		char *buf_o;
 		char *line;
 		char *side;
 		char *dupline;
@@ -144,6 +144,7 @@ int parse_uci_cfg_file(const char *file_name, bool sys) {
 		}
 
 		buf=(char *) kmalloc(fsize+1,GFP_KERNEL);
+		buf_o=buf;
 		uci_read(fp,0,buf,fsize);
 		buf[fsize]='\0';
 
@@ -173,20 +174,15 @@ int parse_uci_cfg_file(const char *file_name, bool sys) {
 
 		pr_info("\n%s [uci] closing file...  %s\n",__func__,file_name);
 
-		kfree(buf);
+		kfree(buf_o);
 
 		should_not_parse_next_close = 1;
 		uci_fclose(fp);
 		msleep(10);
 
 		should_not_parse_next_close = 0;
-		while(sys && get_sys_in_progress) {
-			msleep(1);
-		}
-		while(!sys && get_user_in_progress) {
-			msleep(1);
-		}
-		mutex_lock(&cfg_rw_lock);
+
+		spin_lock(&cfg_rw_lock);
 		if (sys) {
 			int count = 0;
 			while (sys_cfg_values[count]!=NULL) {
@@ -234,7 +230,7 @@ int parse_uci_cfg_file(const char *file_name, bool sys) {
 			}
 			for (;count<MAX_PARAMS;count++) user_cfg_keys[count] = NULL;
 		}
-		mutex_unlock(&cfg_rw_lock);
+		spin_unlock(&cfg_rw_lock);
 	}
 	return 0;
 #endif
@@ -325,27 +321,21 @@ const char* uci_get_user_property_str(const char* property, const char* default_
 	//pr_info("%s uci get user str prop %s\n",__func__,property);
 	if (user_cfg_parsed) {
 		int param_count = 0;
-		while(get_user_in_progress) { // mutex lock is not possible - ___might_sleep causes Ooops in the context
-			udelay(1);
-		}
-		get_user_in_progress = 1;
-		while (mutex_is_locked(&cfg_rw_lock)) {
-			udelay(1);
-		}
-		udelay(1);
+
+		spin_lock(&cfg_rw_lock);
 		while(1) {
 			const char *key = user_cfg_keys[param_count];
 			if (key==NULL) break;
 			if (!strcmp(property,key)) {
 				ret = user_cfg_values[param_count];
 				//pr_info("%s uci key %s -> value %s\n",__func__,key, ret);
-				get_user_in_progress = 0;
+				spin_unlock(&cfg_rw_lock);
 				return  ret;
 			}
 			param_count++;
 		}
+		spin_unlock(&cfg_rw_lock);
 	}
-	get_user_in_progress = 0;
 	pr_info("%s uci get user prop *failed* %s\n",__func__, property);
 	return default_value;
 }
@@ -374,27 +364,21 @@ const char* uci_get_sys_property_str(const char* property, const char* default_v
 	//pr_info("%s uci get sys str prop %s\n",__func__,property);
 	if (sys_cfg_parsed) {
 		int param_count = 0;
-		while(get_sys_in_progress) { // mutex lock is not possible - ___might_sleep causes Ooops in the context
-			udelay(1);
-		}
-		get_sys_in_progress = 1;
-		while (mutex_is_locked(&cfg_rw_lock)) {
-			udelay(1);
-		}
-		udelay(1);
+
+		spin_lock(&cfg_rw_lock);
 		while(1) {
 			const char *key = sys_cfg_keys[param_count];
 			if (key==NULL) break;
 			if (!strcmp(property,key)) {
 				ret = sys_cfg_values[param_count];
 				//pr_info("%s uci key %s -> value %s\n",__func__,key, ret);
-				get_sys_in_progress = 0;
+				spin_unlock(&cfg_rw_lock);
 				return  ret;
 			}
 			param_count++;
 		}
+		spin_unlock(&cfg_rw_lock);
 	}
-	get_sys_in_progress = 0;
 	pr_info("%s uci get sys prop *failed* %s\n",__func__, property);
 	return default_value;
 }
@@ -470,12 +454,25 @@ void notify_uci_file_closed(const char *file_name) {
 		pr_info("%s uci skipping for now %s\n",__func__, file_name);
 		return;
 	}
-	if (!strcmp(file_name, UCI_USER_FILE_END)) should_parse_user = true;
-	if (!strcmp(file_name, UCI_SYS_FILE_END)) should_parse_sys = true;
-	schedule_delayed_work(&parse_work_func_work,1);
+	if (!strcmp(file_name, UCI_USER_FILE_END) && should_parse_user) {
+		schedule_delayed_work(&parse_work_func_work,1);
+		return;
+	}
+	if (!strcmp(file_name, UCI_SYS_FILE_END) && should_parse_sys) {
+		schedule_delayed_work(&parse_work_func_work,1);
+		return;
+	}
 }
 EXPORT_SYMBOL(notify_uci_file_closed);
 
+void notify_uci_file_write_opened(const char *file_name) {
+	pr_info("%s uci write opened  %s\n",__func__, file_name);
+	if (!strcmp(file_name, UCI_USER_FILE)) { should_parse_user = true; return; }
+	if (!strcmp(file_name, UCI_SYS_FILE)) { should_parse_sys = true; return; }
+	if (!strcmp(file_name, UCI_USER_FILE_END)) { should_parse_user = true; return; }
+	if (!strcmp(file_name, UCI_SYS_FILE_END)) { should_parse_sys = true; return; }
+}
+EXPORT_SYMBOL(notify_uci_file_write_opened);
 
 #ifdef CONFIG_FB
 static int first_unblank = 1;

@@ -12,6 +12,7 @@ extern bool is_uci_path(const char *file_name);
 extern bool is_uci_file(const char *file_name);
 
 extern void notify_uci_file_closed(const char *file_name);
+extern void notify_uci_file_write_opened(const char *file_name);
 
 /** accesing kernel settings from UCI property configuration
 */
