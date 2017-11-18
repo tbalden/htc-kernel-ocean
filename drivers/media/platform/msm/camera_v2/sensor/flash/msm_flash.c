@@ -279,6 +279,27 @@ void get_flash_dim_period_hours(int *r) {
 }
 EXPORT_SYMBOL(get_flash_dim_period_hours);
 
+
+static int flash_only_face_down = 1;
+static int uci_get_flash_only_face_down(void) {
+	return uci_get_user_property_int_mm("flash_only_face_down", flash_only_face_down, 0, 1);
+}
+
+static bool face_down = false;
+static bool proximity = false;
+
+// register sys uci listener
+void flash_uci_sys_listener(void) {
+	pr_info("%s uci sys parse happened...\n",__func__);
+	{
+		face_down = !!uci_get_sys_property_int_mm("face_down", 0, 0, 1);
+		proximity = !!uci_get_sys_property_int_mm("proximity", 0, 0, 1);
+		pr_info("%s uci sys face_down %d\n",__func__,face_down);
+		pr_info("%s uci sys proximity %d\n",__func__,proximity);
+	}
+}
+
+
 static int smart_get_flash_blink_on(void) {
 	int ret = 0;
 	int level = smart_get_notification_level(NOTIF_FLASHLIGHT);
@@ -451,6 +472,8 @@ void do_flash_blink(void) {
 	int limit = 3;
 	int dim = 0;
 	int bright = 0;
+	int flash_next = 0;
+	int vib_slowness = smart_get_vib_notification_slowness();
 
 	pr_info("%s flash_blink\n",__func__);
 	alarm_cancel(&flash_blink_do_blink_rtc); // stop pending alarm... no need to unidle cpu in that alarm...
@@ -470,9 +493,6 @@ void do_flash_blink(void) {
 
 	htc_flash_main(0,0);
 
-// test...
-//	set_vibrate(5);
-
 	if (uci_get_flash_blink_wait_inc() && !dim) {
 		// while in the first fast paced periodicity, don't do that much of flashing in one blink...
 		if (current_blink_num < 16) limit = 3;
@@ -482,22 +502,28 @@ void do_flash_blink(void) {
 
 	limit -= dim * 2;
 
-	while (count++<limit) {
-	htc_torch_main(150*(bright+1),0);  // [o] [ ]
-	precise_delay(135 -(dim * DIM_USEC) +(bright * BRIGHT_USEC));
-	htc_torch_main(0,0);	// [ ] [ ]
-	udelay(15000);
 
-	//if (!dim) 
-	{
-		htc_torch_main(0,150*(bright+1));  // [ ] [o]
-		precise_delay(135 -(dim * DIM_USEC) +(bright * BRIGHT_USEC));
-		htc_torch_main(0,0);	// [ ] [ ]
-		udelay(15000);
-	}
+	if ((uci_get_flash_only_face_down() && face_down) || !uci_get_flash_only_face_down()) {
+		flash_next = 1; // should flash next time, alarm wait normal... if no flashing is being done, vibrating reminder wait period should be waited instead!
+		while (count++<limit) {
+			htc_torch_main(150*(bright+1),0);  // [o] [ ]
+			precise_delay(135 -(dim * DIM_USEC) +(bright * BRIGHT_USEC));
+			htc_torch_main(0,0);	// [ ] [ ]
+			udelay(15000);
+
+			//if (!dim) 
+			{
+				htc_torch_main(0,150*(bright+1));  // [ ] [o]
+				precise_delay(135 -(dim * DIM_USEC) +(bright * BRIGHT_USEC));
+				htc_torch_main(0,0);	// [ ] [ ]
+				udelay(15000);
+			}
+		}
+	} else {
+		pr_info("%s skipping flashing because of not face down\n",__func__);
 	}
 
-	if (smart_get_vib_notification_reminder() && current_blink_num % smart_get_vib_notification_slowness() == (smart_get_vib_notification_slowness() - 1)) {
+	if (smart_get_vib_notification_reminder() && current_blink_num % vib_slowness == (vib_slowness - 1)) {
 		{
 			ktime_t curr_time = { .tv64 = 0 };
 			wakeup_time_vib = ktime_add_us(curr_time,
@@ -520,16 +546,29 @@ void do_flash_blink(void) {
 	if (smart_get_flash_blink_on()) // only reschedule if still flashblink is on...
 	{
 		ktime_t curr_time = { .tv64 = 0 };
+		int multiplicator = 1;
+		int calc_with_blink_num = current_blink_num;
+		if (!flash_next) {
+			// won't need flashing next, skip a few blinks till next is a vibrating notifiaction, also count multiplicator, to multiply wait time...
+			while (current_blink_num % vib_slowness != (vib_slowness - 1)) {
+				current_blink_num++;
+				multiplicator++;
+			}
+		}
 		wakeup_time = ktime_add_us(curr_time,
-			( (smart_get_flash_blink_wait_sec() + min(max(((current_blink_num-6)/4),0),uci_get_flash_blink_wait_inc_max()) * uci_get_flash_blink_wait_inc()) * 1000LL * 1000LL)); // msec to usec 
-		pr_info("%s: Current Time tv_sec: %ld, Alarm set to tv_sec: %ld\n",
-			__func__,
+			( (smart_get_flash_blink_wait_sec() + min(max(((calc_with_blink_num-6)/4),0),uci_get_flash_blink_wait_inc_max()) * uci_get_flash_blink_wait_inc()) * 1000LL * 1000LL) * multiplicator); // msec to usec 
+		pr_info("%s: Flash_next %d -- Current Time tv_sec: %ld, Alarm set to tv_sec: %ld\n",
+			__func__, flash_next,
 			ktime_to_timeval(curr_time).tv_sec,
 			ktime_to_timeval(wakeup_time).tv_sec);
+
+			alarm_cancel(&flash_blink_rtc); // stop pending alarm...
+			alarm_start_relative(&flash_blink_rtc, wakeup_time); // start new...
+
+	} else {
+			alarm_cancel(&flash_blink_rtc); // stop pending alarm...
 	}
 
-	alarm_cancel(&flash_blink_rtc); // stop pending alarm...
-	alarm_start_relative(&flash_blink_rtc, wakeup_time); // start new...
 
 exit:
 	mutex_unlock(&flash_blink_lock);
@@ -2232,6 +2271,7 @@ static int __init msm_flash_init_module(void)
 	INIT_WORK(&flash_blink_work, flash_blink_work_func);
 	INIT_WORK(&flash_start_blink_work, flash_start_blink_work_func);
 	INIT_WORK(&flash_stop_blink_work, flash_stop_blink_work_func);
+	uci_add_sys_listener(flash_uci_sys_listener);
 	init_done = 1;
 #endif
 
