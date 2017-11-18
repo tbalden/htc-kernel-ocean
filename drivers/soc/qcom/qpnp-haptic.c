@@ -1740,6 +1740,23 @@ void haptic_uci_user_listener(void) {
 	vmax_needs_reset = 1;
 }
 
+static int boost_only_in_pocket = 1;
+static bool face_down = false;
+static bool proximity = false;
+static bool in_pocket = false;
+
+int uci_get_boost_only_in_pocket(void) {
+	return uci_get_user_property_int_mm("boost_only_in_pocket", boost_only_in_pocket, 0, 1);
+}
+
+// register sys uci listener
+void haptic_uci_sys_listener(void) {
+	pr_info("%s [VIB] uci sys parse happened...\n",__func__);
+	proximity = !!uci_get_sys_property_int_mm("proximity", 1,0,1);
+	face_down = !!uci_get_sys_property_int_mm("face_down", 0,0,1);
+	in_pocket = !face_down && proximity;
+}
+
 void set_suspend_booster(int value) {
 	suspend_booster = !!value;
 }
@@ -1758,8 +1775,10 @@ extern int register_haptic(int value);
 extern int input_is_screen_on(void);
 extern int input_is_wake_by_user(void);
 int should_not_boost(void) {
+	int l_boost_only_in_pocket = uci_get_boost_only_in_pocket();
 	if (input_is_screen_on() && input_is_wake_by_user()) return 1;
-	return 0;
+	if ((l_boost_only_in_pocket && in_pocket) || !l_boost_only_in_pocket) return 0;
+	return 1;
 }
 int skip_register_haptic = 0;
 
@@ -2862,6 +2881,7 @@ static int qpnp_haptic_probe(struct platform_device *pdev)
 
 #ifdef CONFIG_UCI
 	uci_add_user_listener(haptic_uci_user_listener);
+	uci_add_sys_listener(haptic_uci_sys_listener);
 #endif
 	return 0;
 
