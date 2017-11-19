@@ -2284,6 +2284,8 @@ static void led_fade_do_work(struct work_struct *work)
 // flash blink settings
 extern void set_flash_blink_on(int value);
 extern int get_flash_blink_on(void);
+extern void set_flash_only_face_down(int value);
+extern int get_flash_only_face_down(void);
 extern void set_flash_blink_number(int value);
 extern int get_flash_blink_number(void);
 
@@ -2480,6 +2482,33 @@ static ssize_t flash_blink_dump(struct device *dev,
 
 static DEVICE_ATTR(bln_flash_blink, (S_IWUSR|S_IRUGO),
       flash_blink_show, flash_blink_dump);
+
+static ssize_t flash_only_face_down_show(struct device *dev,
+            struct device_attribute *attr, char *buf)
+{
+      return snprintf(buf, PAGE_SIZE, "%d\n", get_flash_only_face_down());
+}
+
+static ssize_t flash_only_face_down_dump(struct device *dev,
+            struct device_attribute *attr, const char *buf, size_t count)
+{
+      int ret;
+      unsigned long input;
+
+      ret = kstrtoul(buf, 0, &input);
+      if (ret < 0)
+            return ret;
+
+      if (input < 0 || input > 1)
+            input = 1;
+
+	set_flash_only_face_down(input);
+
+      return count;
+}
+
+static DEVICE_ATTR(bln_flash_only_face_down, (S_IWUSR|S_IRUGO),
+      flash_only_face_down_show, flash_only_face_down_dump);
 
 static ssize_t flash_blink_bright_show(struct device *dev,
             struct device_attribute *attr, char *buf)
@@ -3955,6 +3984,7 @@ static int lp5562_led_probe(struct i2c_client *client
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_vib_notification_slowness);
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_vib_notification_length);
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_flash_blink);
+			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_flash_only_face_down);
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_flash_blink_number);
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_flash_blink_bright);
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_flash_blink_bright_number);

@@ -523,6 +523,8 @@ static int squeeze_peek_wait = 0;
 
 extern void set_notification_booster(int value);
 extern int get_notification_booster(void);
+extern void set_notification_boost_only_in_pocket(int value);
+extern int get_notification_boost_only_in_pocket(void);
 
 // value used to signal that HOME button release event should be synced as well in home button func work if it was not interrupted.
 static int do_home_button_off_too_in_work_func = 0;
@@ -2789,6 +2791,33 @@ static ssize_t notification_booster_dump(struct device *dev,
 
 static DEVICE_ATTR(notification_booster, (S_IWUSR|S_IRUGO),
 	notification_booster_show, notification_booster_dump);
+
+static ssize_t notification_boost_only_in_pocket_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", get_notification_boost_only_in_pocket());
+}
+
+static ssize_t notification_boost_only_in_pocket_dump(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int ret;
+	unsigned long input;
+
+	ret = kstrtoul(buf, 0, &input);
+	if (ret < 0)
+		return ret;
+
+	if (input < 0 || input > 100)
+		input = 0;
+
+	set_notification_boost_only_in_pocket(input);
+
+	return count;
+}
+
+static DEVICE_ATTR(notification_boost_only_in_pocket, (S_IWUSR|S_IRUGO),
+	notification_boost_only_in_pocket_show, notification_boost_only_in_pocket_dump);
 // --------------------------------------------------
 //kad
 //static int kad_on = 1; // is kad enabled?
@@ -3586,6 +3615,10 @@ static int __init fpf_init(void)
 	rc = sysfs_create_file(fpf_kobj, &dev_attr_notification_booster.attr);
 	if (rc)
 		pr_err("%s: sysfs_create_file failed for notif booster\n", __func__);
+
+	rc = sysfs_create_file(fpf_kobj, &dev_attr_notification_boost_only_in_pocket.attr);
+	if (rc)
+		pr_err("%s: sysfs_create_file failed for notif boost only in pocket\n", __func__);
 
 	rc = sysfs_create_file(fpf_kobj, &dev_attr_squeeze_max_power_level.attr);
 	if (rc)

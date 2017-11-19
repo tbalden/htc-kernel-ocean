@@ -133,6 +133,7 @@ static int flash_blink_wait_sec = DEFAULT_BLINK_WAIT_SEC;
 static int flash_blink_wait_inc = DEFAULT_WAIT_INC;
 static int flash_blink_wait_inc_max = DEFAULT_WAIT_INC_MAX;
 static int haptic_mode = 1; // 0 - always blink, 1 - only blink with haptic vibration notifications
+static int flash_only_face_down = 1;
 
 static int uci_get_flash_haptic_mode(void) {
 	return uci_get_user_property_int_mm("flash_haptic_mode", haptic_mode, 0, 1);
@@ -184,6 +185,15 @@ int get_flash_blink_on(void) {
 	return flash_blink_on;
 }
 EXPORT_SYMBOL(get_flash_blink_on);
+
+void set_flash_only_face_down(int value) {
+	flash_only_face_down = !!value;
+}
+EXPORT_SYMBOL(set_flash_only_face_down);
+int get_flash_only_face_down(void) {
+	return flash_only_face_down;
+}
+EXPORT_SYMBOL(get_flash_only_face_down);
 
 void set_flash_blink_number(int value) {
 	flash_blink_number = value%51; // max 50
@@ -280,7 +290,6 @@ void get_flash_dim_period_hours(int *r) {
 EXPORT_SYMBOL(get_flash_dim_period_hours);
 
 
-static int flash_only_face_down = 1;
 static int uci_get_flash_only_face_down(void) {
 	return uci_get_user_property_int_mm("flash_only_face_down", flash_only_face_down, 0, 1);
 }

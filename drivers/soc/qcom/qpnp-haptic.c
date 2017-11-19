@@ -1770,6 +1770,14 @@ int get_notification_booster(void) {
 	return notification_booster;
 }
 EXPORT_SYMBOL(get_notification_booster);
+void set_notification_boost_only_in_pocket(int value) {
+	boost_only_in_pocket = value;
+}
+EXPORT_SYMBOL(set_notification_boost_only_in_pocket);
+int get_notification_boost_only_in_pocket(void) {
+	return boost_only_in_pocket;
+}
+EXPORT_SYMBOL(get_notification_boost_only_in_pocket);
 
 extern int register_haptic(int value);
 extern int input_is_screen_on(void);
