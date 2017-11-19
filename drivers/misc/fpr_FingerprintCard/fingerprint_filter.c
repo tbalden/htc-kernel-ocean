@@ -127,6 +127,12 @@ static int smart_hibernate_bln_light = NOTIF_DIM;
 static int smart_hibernate_pulse_light = NOTIF_DIM;
 
 
+/**
+* this variable is 1 if KAD was blocked only by Proximity or not being yet Locked. On sys uci listener check this, and start kad if blocking is over.
+*/
+static int kad_should_start_on_uci_sys_change = 0;
+void kernel_ambient_display(void);
+
 static int smart_silent_mode_stop = 1;
 static int smart_silent_mode_hibernate = 1;
 
@@ -197,6 +203,9 @@ void fpf_uci_sys_listener(void) {
 		}
 		fpf_ringing = ringing;
 	}
+	if (kad_should_start_on_uci_sys_change) {
+		kernel_ambient_display();
+	}
 }
 
 
@@ -264,10 +273,14 @@ static int kad_repeat_multiply_period = 1; // make periods between each longer?
 static int kad_repeat_period_sec = 12; // period between each repeat
 static int squeeze_peek_kcal = 0;
 static int kad_three_finger_gesture = 1; // three finger gesture will wake KAD
+static int kad_start_after_proximity_left = 1; // start pending kad if leaving proximity
 
 static int kad_kcal_val = 135;
 static int kad_kcal_cont = 255;
 
+static int get_kad_start_after_proximity_left(void) {
+	return uci_get_user_property_int_mm("kad_start_after_proximity_left", kad_start_after_proximity_left, 0, 1);
+}
 static int get_kad_kcal_val(void) {
 	return uci_get_user_property_int_mm("kad_kcal_val", kad_kcal_val, 0, 255);
 }
@@ -354,6 +367,10 @@ bool is_screen_locked(void) {
 	return false;
 }
 
+/**
+* determines if kad should start in current stage
+* Will store kad_should_start_on_uci_sys_change = 1 if it's blocked by proximity/lock screen not on yet...
+*/
 int should_kad_start(void) {
 	if (uci_get_user_property_int_mm("kad_on", kad_on, 0, 1) || kad_on_override) {
 		int level = smart_get_notification_level(NOTIF_KAD);
@@ -362,7 +379,13 @@ int should_kad_start(void) {
 			int locked = is_screen_locked()?1:0;
 			pr_info("%s kadproximity %d locked %d\n",__func__,proximity, locked);
 				// TODO in companion app when screen is off, timeout and locking is not possible to detect... uci_get_sys_property_int_mm("locked", 1, 0, 1);
-			return !proximity&&locked?1:0;
+			if (proximity || !locked) {
+				if (get_kad_start_after_proximity_left()) kad_should_start_on_uci_sys_change = 1;
+				return 0;
+			} else {
+				kad_should_start_on_uci_sys_change = 0;
+				return 1;
+			}
 		}
 	}
 	return 0;
@@ -738,6 +761,7 @@ static void stop_kad_running(bool instant_sat_restore)
 		return;
 	}
 	pr_info("%s ----------- stop kad running ---------\n",__func__);
+	kad_should_start_on_uci_sys_change = 0;
 	if (kad_running) {
 		kad_running = 0;
 		if (instant_sat_restore) {
@@ -2361,6 +2385,7 @@ static struct input_handler ts_input_handler = {
 
 // ------------------------------------------------------
 
+
 static ssize_t block_power_key_in_pocket_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
@@ -2855,6 +2880,34 @@ static ssize_t kad_on_dump(struct device *dev,
 
 static DEVICE_ATTR(kad_on, (S_IWUSR|S_IRUGO),
 	kad_on_show, kad_on_dump);
+
+
+static ssize_t kad_start_after_proximity_left_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", kad_start_after_proximity_left);
+}
+
+static ssize_t kad_start_after_proximity_left_dump(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int ret;
+	unsigned long input;
+
+	ret = kstrtoul(buf, 0, &input);
+	if (ret < 0)
+		return ret;
+
+	if (input < 0 || input > 1)
+		input = 0;
+
+	kad_start_after_proximity_left = input;
+	return count;
+}
+
+static DEVICE_ATTR(kad_start_after_proximity_left, (S_IWUSR|S_IRUGO),
+	kad_start_after_proximity_left_show, kad_start_after_proximity_left_dump);
+
 
 
 static ssize_t kad_three_finger_gesture_show(struct device *dev,
@@ -3627,6 +3680,10 @@ static int __init fpf_init(void)
 	rc = sysfs_create_file(fpf_kobj, &dev_attr_block_power_key_in_pocket.attr);
 	if (rc)
 		pr_err("%s: sysfs_create_file failed for block_power_key_in_pocket\n", __func__);
+
+	rc = sysfs_create_file(fpf_kobj, &dev_attr_kad_start_after_proximity_left.attr);
+	if (rc)
+		pr_err("%s: sysfs_create_file failed for kad_start_after_proximity_left\n", __func__);
 
 	rc = sysfs_create_file(fpf_kobj, &dev_attr_fpf_dt_wait_period.attr);
 	if (rc)
