@@ -17,6 +17,6 @@ enum notif_smart_level_type {
         NOTIF_STOP // stop overall
 };
 
-extern void smart_set_last_user_activity_time(unsigned long time);
+extern void smart_set_last_user_activity_time(void);
 extern int smart_get_notification_level(int notif_type);
 #endif /* __NOTIFICATION_H__ */

@@ -1360,7 +1360,7 @@ void register_input_event_early(void) {
 		// user is inputing phone, no haptic blinking should trigger BLN when screen off
 		bln_on_screenoff = 0;
 	}
-	smart_set_last_user_activity_time(last_input_event);
+	smart_set_last_user_activity_time();
 }
 void register_input_event(void) {
 //	pr_info("%s kad self wake: blocking event\n",__func__);
@@ -1382,7 +1382,7 @@ void register_input_event(void) {
 		bln_on_screenoff = 0;
 //		pr_info("%s kad bln_on_screenoff %d\n", __func__, bln_on_screenoff);
 	}
-	smart_set_last_user_activity_time(last_input_event);
+	smart_set_last_user_activity_time();
 }
 EXPORT_SYMBOL(register_input_event);
 

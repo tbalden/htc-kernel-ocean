@@ -180,13 +180,26 @@ static enum alarmtimer_restart vibrate_rtc_callback(struct alarm *al, ktime_t no
 	return ALARMTIMER_NORESTART;
 }
 
+
+static int face_down_screen_off = 1;
+static int get_face_down_screen_off(void) {
+	return uci_get_user_property_int_mm("face_down_screen_off", face_down_screen_off, 0, 1);
+}
+
+bool should_screen_off_face_down(int screen_timeout_sec, int face_down);
+static void fpf_pwrtrigger(int vibration, const char caller[]);
+
 // register sys uci listener
 void fpf_uci_sys_listener(void) {
 	pr_info("%s uci sys parse happened...\n",__func__);
 	{
 		int silent = uci_get_sys_property_int_mm("silent", 0, 0, 1);
 		int ringing = uci_get_sys_property_int_mm("ringing", 0, 0, 1);
-		pr_info("%s uci sys silent %d\n",__func__,silent);
+
+		int face_down = uci_get_sys_property_int_mm("face_down", 0, 0, 1);
+		int screen_timeout_sec = uci_get_sys_property_int_mm("screen_timeout", 15, 0, 600);
+
+		pr_info("%s uci sys silent %d ringing %d face_down %d timeout %d \n",__func__,silent, ringing, face_down, screen_timeout_sec);
 		fpf_silent_mode = silent;
 		if (fpf_silent_mode && ringing && (ringing!=fpf_ringing) && get_phone_ring_in_silent_mode()) {
 			ktime_t wakeup_time;
@@ -202,27 +215,33 @@ void fpf_uci_sys_listener(void) {
 			}
 		}
 		fpf_ringing = ringing;
+		if (screen_on && !ringing) {
+			if (should_screen_off_face_down(screen_timeout_sec, face_down)) {
+				fpf_pwrtrigger(0,__func__);
+			}
+		}
 	}
-	if (kad_should_start_on_uci_sys_change) {
+	if (!screen_on && kad_should_start_on_uci_sys_change) {
 		kernel_ambient_display();
 	}
 }
 
 
 
-static unsigned long smart_last_user_activity_time = 0;
-void smart_set_last_user_activity_time(unsigned long time) {
-	smart_last_user_activity_time = time;
-	pr_info("%s smart_notif - set activity sys time sec %lu\n",__func__, time / (100*JIFFY_MUL));
+static unsigned int smart_last_user_activity_time = 0;
+void smart_set_last_user_activity_time(void) {
+	smart_last_user_activity_time = get_global_seconds();
+	pr_info("%s smart_notif - set activity sys time sec %d \n",__func__, smart_last_user_activity_time);
 }
 EXPORT_SYMBOL(smart_set_last_user_activity_time);
 
 int smart_get_inactivity_time(void) {
-	unsigned int diff = jiffies - smart_last_user_activity_time;
-	int diff_in_sec = (diff / (100 * JIFFY_MUL));
+	unsigned int diff = get_global_seconds() - smart_last_user_activity_time;
+	int diff_in_sec = diff / 1;
 	pr_info("%s smart_notif - inactivity in sec: %d\n",__func__, diff_in_sec);
 	return diff_in_sec;
 }
+
 
 int smart_get_notification_level(int notif_type) {
 	int diff_in_sec = smart_get_inactivity_time();
@@ -409,6 +428,19 @@ static int init_done = 0;
 static struct alarm kad_repeat_rtc;
 
 
+/**
+* tells if currently a facedown event from companion app UCI sys triggering, should at the same time do a screen off as well
+*/
+bool should_screen_off_face_down(int screen_timeout_sec, int face_down) {
+	if (get_face_down_screen_off() && !kad_running && screen_on) {
+		if (smart_get_inactivity_time()<(screen_timeout_sec-3) && face_down) {
+			pr_info("%s face down screen off! \n",__func__);
+			return true;
+		}
+	}
+	return false;
+}
+
 // register input event alarm timer
 extern void register_input_event(void);
 static struct alarm register_input_rtc;
@@ -426,6 +458,9 @@ extern void kcal_internal_backup(void);
 static int kad_kcal_overlay_on = 0;
 static int kad_kcal_backed_up = 0;
 
+/**
+global variable that tells if a sleep should be done in kcal push listener before restoring colors or its immediate
+*/
 static bool kcal_sleep_before_restore = false;
 
 DEFINE_MUTEX(kcal_read_write_lock);

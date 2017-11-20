@@ -1741,7 +1741,7 @@ void haptic_uci_user_listener(void) {
 }
 
 static int boost_only_in_pocket = 1;
-static bool face_down = false;
+static bool face_down_hr = false;
 static bool proximity = false;
 static bool in_pocket = false;
 
@@ -1753,8 +1753,10 @@ int uci_get_boost_only_in_pocket(void) {
 void haptic_uci_sys_listener(void) {
 	pr_info("%s [VIB] uci sys parse happened...\n",__func__);
 	proximity = !!uci_get_sys_property_int_mm("proximity", 1,0,1);
-	face_down = !!uci_get_sys_property_int_mm("face_down", 0,0,1);
-	in_pocket = !face_down && proximity;
+	face_down_hr = !!uci_get_sys_property_int_mm("face_down_hr", 0,0,1);
+	// check if perfectly horizontal facedown is not true, and in proximity 
+	// ...(so it's supposedly not on table, but in pocket) then in_pocket = true
+	in_pocket = !face_down_hr && proximity;
 }
 
 void set_suspend_booster(int value) {
