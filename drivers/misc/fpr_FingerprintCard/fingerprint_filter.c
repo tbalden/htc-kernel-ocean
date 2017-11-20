@@ -2421,6 +2421,32 @@ static struct input_handler ts_input_handler = {
 // ------------------------------------------------------
 
 
+static ssize_t face_down_screen_off_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", face_down_screen_off);
+}
+
+static ssize_t face_down_screen_off_dump(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int ret;
+	unsigned long input;
+
+	ret = kstrtoul(buf, 0, &input);
+	if (ret < 0)
+		return ret;
+
+	if (input < 0 || input > 1)
+		input = 0;
+
+	face_down_screen_off = input;
+	return count;
+}
+
+static DEVICE_ATTR(face_down_screen_off, (S_IWUSR|S_IRUGO),
+	face_down_screen_off_show, face_down_screen_off_dump);
+
 static ssize_t block_power_key_in_pocket_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
@@ -3715,6 +3741,10 @@ static int __init fpf_init(void)
 	rc = sysfs_create_file(fpf_kobj, &dev_attr_block_power_key_in_pocket.attr);
 	if (rc)
 		pr_err("%s: sysfs_create_file failed for block_power_key_in_pocket\n", __func__);
+
+	rc = sysfs_create_file(fpf_kobj, &dev_attr_face_down_screen_off.attr);
+	if (rc)
+		pr_err("%s: sysfs_create_file failed for face_down_screen_off\n", __func__);
 
 	rc = sysfs_create_file(fpf_kobj, &dev_attr_kad_start_after_proximity_left.attr);
 	if (rc)
