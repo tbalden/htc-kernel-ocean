@@ -1386,6 +1386,7 @@ void register_input_event(void) {
 }
 EXPORT_SYMBOL(register_input_event);
 
+static int last_notification_number = 0;
 // register sys uci listener
 void uci_sys_listener(void) {
 	pr_info("%s uci sys parse happened...\n",__func__);
@@ -1397,6 +1398,23 @@ void uci_sys_listener(void) {
 			stop_kernel_ambient_display(true);
 		}
 	}
+        {
+                int notifications = uci_get_sys_property_int("notifications",0);
+                if (notifications>last_notification_number) {
+			if (!vk_led_blink && get_bln_switch() && ((!charging && smart_get_button_dimming()==1) || charging) ) { // do not trigger blink if not on charger and lights down mode
+				// store haptic blinking, so if ambient display blocks the bln, later in BLANK screen off, still it can be triggered
+				bln_on_screenoff = 1;
+				pr_info("%s kad bln_on_screenoff %d\n", __func__, bln_on_screenoff);
+				if (!is_kernel_ambient_display() && !screen_on) queue_work(g_vk_work_queue, &vk_blink_work);
+			}
+			// call flash blink for flashlight notif if lights_down mode (>1) is not active...
+			if (lights_down_divider==1) {
+				flash_blink(false);
+			}
+			kernel_ambient_display();
+                }
+                last_notification_number = notifications;
+        }
 }
 
 int register_haptic(int value)
