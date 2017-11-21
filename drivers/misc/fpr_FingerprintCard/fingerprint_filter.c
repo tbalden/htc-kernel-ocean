@@ -291,6 +291,7 @@ static int kad_repeat_times = 4; // how many times...
 static int kad_repeat_multiply_period = 1; // make periods between each longer?
 static int kad_repeat_period_sec = 12; // period between each repeat
 static int squeeze_peek_kcal = 0;
+static int kad_two_finger_gesture = 0; // two finger gesture will wake KAD
 static int kad_three_finger_gesture = 1; // three finger gesture will wake KAD
 static int kad_start_after_proximity_left = 1; // start pending kad if leaving proximity
 
@@ -321,6 +322,9 @@ static int get_kad_disable_touch_input(void) {
 }
 static int get_kad_three_finger_gesture(void) {
 	return uci_get_user_property_int_mm("kad_three_finger_gesture", kad_three_finger_gesture, 0, 1);
+}
+static int get_kad_two_finger_gesture(void) {
+	return uci_get_user_property_int_mm("kad_two_finger_gesture", kad_two_finger_gesture, 0, 1);
 }
 
 
@@ -2280,6 +2284,9 @@ skip_ts:
 			}
 
 			if (code == 57 && value>0) {
+				unsigned int time_diff = jiffies - kad_first_one_finger_touch_time;
+				if (time_diff > 50*JIFFY_MUL) kad_first_one_finger_done = 0; // reset here if other touches already happened, 
+						// ...but screen left untouched for a second touch for a longer time already...
 				kad_finger_counter++;
 				if (kad_finger_counter>1) {
 					// over one finger, reset kad_first_one_finger_done...
@@ -2300,7 +2307,7 @@ skip_ts:
 						pr_info("%s kad first_one done == 1 check time_diff %u \n",__func__,time_diff);
 						kad_first_one_finger_touch_time = 0;
 						kad_first_one_finger_done = 0;
-						if (time_diff < 30*JIFFY_MUL) { // double tap single finger happened, stop kad without waking...
+						if (time_diff < 50*JIFFY_MUL) { // double tap single finger happened, stop kad without waking...
 							// make timeout for kad
 							pr_info("%s kad first_one done == 1 DOUBLE TAP, interrupt kad and vibrate \n",__func__);
 							interrupt_kad_peekmode_wait = 1; // signal interruption for kad squeeze_peekmode work...
@@ -2316,9 +2323,16 @@ skip_ts:
 				kad_finger_counter--;
 			}
 
+			if (get_kad_two_finger_gesture() && kad_finger_counter==2) {
+				squeeze_peek_wait = 0; // interrupt peek wait, touchscreen was interacted, don't turn screen off after peek time over...
+				if (kad_running) {
+					pr_info("%s ##### two finger -- stop kad running #######\n",__func__);
+					stop_kad_running(true);
+				}
+			}
 			if (get_kad_three_finger_gesture() && kad_finger_counter==3) {
 				squeeze_peek_wait = 0; // interrupt peek wait, touchscreen was interacted, don't turn screen off after peek time over...
-				if (kad_running) { 
+				if (kad_running) {
 					pr_info("%s ##### three finger -- stop kad running #######\n",__func__);
 					stop_kad_running(true);
 				}
@@ -2998,6 +3012,33 @@ static ssize_t kad_three_finger_gesture_dump(struct device *dev,
 static DEVICE_ATTR(kad_three_finger_gesture, (S_IWUSR|S_IRUGO),
 	kad_three_finger_gesture_show, kad_three_finger_gesture_dump);
 
+static ssize_t kad_two_finger_gesture_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", kad_two_finger_gesture);
+}
+
+static ssize_t kad_two_finger_gesture_dump(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int ret;
+	unsigned long input;
+
+	ret = kstrtoul(buf, 0, &input);
+	if (ret < 0)
+		return ret;
+
+	if (input < 0 || input > 1)
+		input = 0;
+
+	kad_two_finger_gesture = input;
+
+	return count;
+}
+
+static DEVICE_ATTR(kad_two_finger_gesture, (S_IWUSR|S_IRUGO),
+	kad_two_finger_gesture_show, kad_two_finger_gesture_dump);
+
 static ssize_t kad_repeat_period_sec_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
@@ -3673,6 +3714,10 @@ static int __init fpf_init(void)
 	rc = sysfs_create_file(fpf_kobj, &dev_attr_kad_three_finger_gesture.attr);
 	if (rc)
 		pr_err("%s: sysfs_create_file failed for kad_three_finger_gesture\n", __func__);
+
+	rc = sysfs_create_file(fpf_kobj, &dev_attr_kad_two_finger_gesture.attr);
+	if (rc)
+		pr_err("%s: sysfs_create_file failed for kad_two_finger_gesture\n", __func__);
 
 	rc = sysfs_create_file(fpf_kobj, &dev_attr_kad_repeat_period_sec.attr);
 	if (rc)
