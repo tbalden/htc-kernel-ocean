@@ -153,7 +153,15 @@ int uci_get_smart_silent_mode_stop(void) {
 }
 
 int fpf_silent_mode = 0;
+// KAD should run if in ringing mode... companion app channels the info
 int fpf_ringing = 0;
+/**
+* If an app that is waking screen from sleep like Alarm or Phone, this should be set higher than 0
+* If that happens, KAD should STOP running and no new KAD screen should start till value is back to 0,
+* meaning apps were closed/dismissed. Companion app channels this number.
+*/
+int fpf_screen_waking_app = 0;
+
 int silent_mode_hibernate(void) {
 	if (uci_get_smart_silent_mode_hibernate()) {
 		return fpf_silent_mode;
@@ -189,6 +197,11 @@ static int get_face_down_screen_off(void) {
 bool should_screen_off_face_down(int screen_timeout_sec, int face_down);
 static void fpf_pwrtrigger(int vibration, const char caller[]);
 
+
+// register input event alarm timer
+extern void register_input_event(void);
+void stop_kernel_ambient_display(bool interrupt_ongoing);
+
 // register sys uci listener
 void fpf_uci_sys_listener(void) {
 	pr_info("%s uci sys parse happened...\n",__func__);
@@ -198,6 +211,8 @@ void fpf_uci_sys_listener(void) {
 
 		int face_down = uci_get_sys_property_int_mm("face_down", 0, 0, 1);
 		int screen_timeout_sec = uci_get_sys_property_int_mm("screen_timeout", 15, 0, 600);
+
+		fpf_screen_waking_app = uci_get_sys_property_int("screen_waking_apps", 0);
 
 		pr_info("%s uci sys silent %d ringing %d face_down %d timeout %d \n",__func__,silent, ringing, face_down, screen_timeout_sec);
 		fpf_silent_mode = silent;
@@ -220,6 +235,10 @@ void fpf_uci_sys_listener(void) {
 				fpf_pwrtrigger(0,__func__);
 			}
 		}
+	}
+	if (fpf_ringing || fpf_screen_waking_app) {
+		register_input_event();
+		stop_kernel_ambient_display(true);
 	}
 	if (!screen_on && kad_should_start_on_uci_sys_change) {
 		kernel_ambient_display();
@@ -395,6 +414,7 @@ bool is_screen_locked(void) {
 * Will store kad_should_start_on_uci_sys_change = 1 if it's blocked by proximity/lock screen not on yet...
 */
 int should_kad_start(void) {
+	if (fpf_ringing || fpf_screen_waking_app) return 0;
 	if (uci_get_user_property_int_mm("kad_on", kad_on, 0, 1) || kad_on_override) {
 		int level = smart_get_notification_level(NOTIF_KAD);
 		if (level != NOTIF_STOP) {
@@ -445,8 +465,6 @@ bool should_screen_off_face_down(int screen_timeout_sec, int face_down) {
 	return false;
 }
 
-// register input event alarm timer
-extern void register_input_event(void);
 static struct alarm register_input_rtc;
 static enum alarmtimer_restart register_input_rtc_callback(struct alarm *al, ktime_t now)
 {
