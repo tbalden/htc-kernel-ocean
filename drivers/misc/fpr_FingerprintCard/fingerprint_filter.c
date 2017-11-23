@@ -59,7 +59,6 @@ unsigned int get_global_seconds(void) {
 	unsigned int ret = 0;
 	getnstimeofday(&ts);
 	ret = (unsigned int)(ts.tv_sec);
-	pr_info("%s fpf %u sec \n",__func__,ret);
 	return ret;
 }
 
@@ -250,13 +249,15 @@ void fpf_uci_sys_listener(void) {
 static unsigned int smart_last_user_activity_time = 0;
 void smart_set_last_user_activity_time(void) {
 	smart_last_user_activity_time = get_global_seconds();
-	pr_info("%s smart_notif - set activity sys time sec %d \n",__func__, smart_last_user_activity_time);
 }
 EXPORT_SYMBOL(smart_set_last_user_activity_time);
 
 int smart_get_inactivity_time(void) {
-	unsigned int diff = get_global_seconds() - smart_last_user_activity_time;
-	int diff_in_sec = diff / 1;
+	unsigned int diff = 0;
+	int diff_in_sec = 0;
+	if (smart_last_user_activity_time==0) smart_last_user_activity_time = get_global_seconds();
+	diff = get_global_seconds() - smart_last_user_activity_time;
+	diff_in_sec = diff / 1;
 	pr_info("%s smart_notif - inactivity in sec: %d\n",__func__, diff_in_sec);
 	return diff_in_sec;
 }
@@ -3865,6 +3866,7 @@ static int __init fpf_init(void)
 		vibrate_rtc_callback);
 	uci_add_sys_listener(fpf_uci_sys_listener);
 	init_done = 1;
+	smart_last_user_activity_time = get_global_seconds();
 err_input_dev:
 	input_free_device(fpf_pwrdev);
 
