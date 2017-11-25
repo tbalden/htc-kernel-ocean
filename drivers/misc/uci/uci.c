@@ -147,6 +147,10 @@ int parse_uci_cfg_file(const char *file_name, bool sys) {
 		buf_o=buf;
 		uci_read(fp,0,buf,fsize);
 		buf[fsize]='\0';
+		if (sys && buf[fsize-1]!='#') {
+			pr_err("%s uci sys file incomplete\n",__func__);
+			return -2;
+		}
 
 		while ((line = strsep(&buf, "\n")) != NULL) {
 			pr_info("%s uci %s | %d  |- ",__func__, line, line_num);

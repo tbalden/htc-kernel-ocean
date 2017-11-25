@@ -1398,9 +1398,10 @@ void uci_sys_listener(void) {
 			stop_kernel_ambient_display(true);
 		}
 	}
-        {
-                int notifications = uci_get_sys_property_int("notifications",0);
-                if (notifications>last_notification_number) {
+	{
+		int notifications = uci_get_sys_property_int("notifications",0);
+		if (notifications != -EINVAL) {
+		if (notifications>last_notification_number) {
 			if (!vk_led_blink && get_bln_switch() && ((!charging && smart_get_button_dimming()==1) || charging) ) { // do not trigger blink if not on charger and lights down mode
 				// store haptic blinking, so if ambient display blocks the bln, later in BLANK screen off, still it can be triggered
 				bln_on_screenoff = 1;
@@ -1412,8 +1413,9 @@ void uci_sys_listener(void) {
 				flash_blink(false);
 			}
 			kernel_ambient_display();
-                }
-                last_notification_number = notifications;
+		}
+		last_notification_number = notifications;
+		}
         }
 }
 

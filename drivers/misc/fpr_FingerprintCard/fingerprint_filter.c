@@ -211,7 +211,8 @@ void fpf_uci_sys_listener(void) {
 		int face_down = uci_get_sys_property_int_mm("face_down", 0, 0, 1);
 		int screen_timeout_sec = uci_get_sys_property_int_mm("screen_timeout", 15, 0, 600);
 
-		fpf_screen_waking_app = uci_get_sys_property_int("screen_waking_apps", 0);
+		int screen_waking_app = uci_get_sys_property_int("screen_waking_apps", 0);
+		if (screen_waking_app != -EINVAL) fpf_screen_waking_app = screen_waking_app;
 
 		pr_info("%s uci sys silent %d ringing %d face_down %d timeout %d \n",__func__,silent, ringing, face_down, screen_timeout_sec);
 		fpf_silent_mode = silent;
