@@ -1409,7 +1409,7 @@ void uci_sys_listener(void) {
 				if (!is_kernel_ambient_display() && !screen_on) queue_work(g_vk_work_queue, &vk_blink_work);
 			}
 			// call flash blink for flashlight notif if lights_down mode (>1) is not active...
-			if (lights_down_divider==1) {
+			if ((vk_screen_is_off() || !wake_by_user) && (lights_down_divider==1)) { // only flash if lights_down mode is not active...screen is off or ambient wake
 				flash_blink(false);
 			}
 			kernel_ambient_display();
