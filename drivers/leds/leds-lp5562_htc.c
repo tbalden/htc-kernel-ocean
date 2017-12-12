@@ -1386,6 +1386,13 @@ void register_input_event(void) {
 }
 EXPORT_SYMBOL(register_input_event);
 
+/**
+* is bln to be started, based on switches like BLN, bln no charger, smart button dimming and charge state
+*/
+static bool should_start_bln(void) {
+    return !vk_led_blink && get_bln_switch() && ((smart_get_bln_no_charger_switch() && !charging && smart_get_button_dimming()==1) || charging);
+}
+
 static int last_notification_number = 0;
 // register sys uci listener
 void uci_sys_listener(void) {
@@ -1402,7 +1409,7 @@ void uci_sys_listener(void) {
 		int notifications = uci_get_sys_property_int("notifications",0);
 		if (notifications != -EINVAL) {
 		if (notifications>last_notification_number) {
-			if (!vk_led_blink && get_bln_switch() && ((!charging && smart_get_button_dimming()==1) || charging) ) { // do not trigger blink if not on charger and lights down mode
+			if (should_start_bln()) {
 				// store haptic blinking, so if ambient display blocks the bln, later in BLANK screen off, still it can be triggered
 				bln_on_screenoff = 1;
 				pr_info("%s kad bln_on_screenoff %d\n", __func__, bln_on_screenoff);
@@ -1471,7 +1478,7 @@ int register_haptic(int value)
 			} else {
 				short_vib_notif = 0;
 			}
-			if (!vk_led_blink && get_bln_switch() && ((!charging && smart_get_button_dimming()==1) || charging) ) { // do not trigger blink if not on charger and lights down mode
+			if (should_start_bln()) {
 				// store haptic blinking, so if ambient display blocks the bln, later in BLANK screen off, still it can be triggered
 				bln_on_screenoff = 1;
 				pr_info("%s kad bln_on_screenoff %d\n", __func__, bln_on_screenoff);
@@ -1682,12 +1689,13 @@ static void lp5562_color_blink(struct i2c_client *client, uint8_t red, uint8_t g
 #ifdef CONFIG_LEDS_QPNP_BUTTON_BLINK
 		// BLN
 		// sysfs configuation bln_no_charger_switch == 1 -> always blink even if not on charger
-		if (get_bln_switch() && smart_get_bln_no_charger_switch() && (smart_get_button_dimming()==1)) {
+		if (get_bln_switch() && ((smart_get_bln_no_charger_switch() && smart_get_button_dimming()==1)||charging)) {
 			if (!wake_by_user || vk_screen_is_off()) {
+				// store haptic blinking, so if ambient display blocks the bln, later in BLANK screen off, still it can be triggered
 				bln_on_screenoff = 1;
 				pr_info("%s kad bln_on_screenoff %d\n", __func__, bln_on_screenoff);
 			}
-			if (vk_screen_is_off()) {
+			if (vk_screen_is_off() && should_start_bln()) {
 				if (!is_kernel_ambient_display()) queue_work(g_vk_work_queue, &vk_blink_work);
 			}
 		}
@@ -3822,7 +3830,9 @@ static int fb_notifier_led_callback(struct notifier_block *self,
 		if (bln_on_screenoff) {
 			blink_running = 0;
 			pr_info("%s kad bln_on_screenoff %d\n", __func__, bln_on_screenoff);
-			queue_work(g_vk_work_queue, &vk_blink_work);
+			if (should_start_bln()) {
+				queue_work(g_vk_work_queue, &vk_blink_work);
+			}
 		} 
             break;
         }
