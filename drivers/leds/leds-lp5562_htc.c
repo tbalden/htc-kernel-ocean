@@ -129,7 +129,7 @@ static int get_bln_switch(void) {
 	return uci_get_user_property_int_mm("bln", bln_switch, 0, 1);
 }
 static int get_bln_no_charger_switch(void) {
-	return uci_get_user_property_int_mm("bln_no_charger_witch", bln_no_charger_switch, 0, 1);
+	return uci_get_user_property_int_mm("bln_no_charger_switch", bln_no_charger_switch, 0, 1);
 }
 static int get_bln_number(void) {
 	return uci_get_user_property_int_mm("bln_number", bln_number, 0, 50);
