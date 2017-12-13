@@ -28,6 +28,7 @@
 #include <linux/platform_device.h>
 #include <linux/of.h>
 #include <trace/events/power.h>
+#include <linux/htc_lmh_debug.h>
 
 #if defined(CONFIG_HTC_DEBUG_FOOTPRINT)
 #include <htc_mnemosyne/htc_footprint.h>
@@ -142,6 +143,7 @@ static unsigned int msm_cpufreq_get_freq(unsigned int cpu)
 	return clk_get_rate(cpu_clk[cpu]) / 1000;
 }
 
+struct cpu_freq_table cpu_freq_table_info;
 static int msm_cpufreq_init(struct cpufreq_policy *policy)
 {
 	int cur_freq;
@@ -149,7 +151,8 @@ static int msm_cpufreq_init(struct cpufreq_policy *policy)
 	int ret = 0;
 	struct cpufreq_frequency_table *table =
 			per_cpu(freq_table, policy->cpu);
-	int cpu;
+	struct cpufreq_frequency_table *pos;
+	int cpu, freq_steps_num = 0;
 
 	/*
 	 * In some SoC, some cores are clocked by same source, and their
@@ -157,6 +160,18 @@ static int msm_cpufreq_init(struct cpufreq_policy *policy)
 	 * CPUs that share same clock, and mark them as controlled by
 	 * same policy.
 	 */
+	cpufreq_for_each_valid_entry(pos, table) {
+		cpu_freq_table_info.cpu_freq_table[policy->cpu][freq_steps_num] = pos->frequency;
+		freq_steps_num++;
+	}
+	cpu_freq_table_info.cpu_freq_steps_num[policy->cpu] = freq_steps_num;
+	cpu_freq_table_info.max_cpu_freq[policy->cpu] = cpu_freq_table_info.cpu_freq_table[policy->cpu][freq_steps_num-1];
+	pr_info("%s: CPU%d: cpufreq steps number:%d, Max cpufreq:%d\n",
+					__func__,
+					policy->cpu,
+					cpu_freq_table_info.cpu_freq_steps_num[policy->cpu],
+					cpu_freq_table_info.max_cpu_freq[policy->cpu]);
+
 	for_each_possible_cpu(cpu)
 		if (cpu_clk[cpu] == cpu_clk[policy->cpu])
 			cpumask_set_cpu(cpu, policy->cpus);

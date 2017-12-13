@@ -25,18 +25,22 @@
 #include <linux/input.h>
 #include <linux/time.h>
 
-#define NUM_CLUSTER 2
 struct cpu_sync {
 	int cpu;
 	unsigned int input_boost_min;
 	unsigned int input_boost_freq;
 };
 
+#ifdef CONFIG_HTC_POWER_DEBUG
+extern int get_kernel_cluster_info(int *cluster_id, cpumask_t *cluster_cpus);
+#else
+static int get_kernel_cluster_info(int *cluster_id, cpumask_t *cluster_cpus) { return -1; }
+#endif
+
 static DEFINE_PER_CPU(struct cpu_sync, sync_info);
-static struct task_struct * up_task[NUM_CLUSTER];
+static struct task_struct * up_task[NR_CPUS];
 static struct workqueue_struct *cpu_boost_wq;
 
-static int wake_bc, wake_lc;
 static bool input_boost_enabled;
 
 static unsigned int input_boost_ms = 200;
@@ -46,15 +50,18 @@ static bool sched_boost_on_input;
 module_param(sched_boost_on_input, bool, 0644);
 
 static bool sched_boost_active;
-static const unsigned long big_cluster_mask = CONFIG_PERFORMANCE_CLUSTER_CPU_MASK;
-static const unsigned long little_cluster_mask = CONFIG_POWER_CLUSTER_CPU_MASK;
+
+static int cluster_id[NR_CPUS] = {[0 ... NR_CPUS-1] = -1};
+static cpumask_t cluster_cpus[NR_CPUS];
+static int cluster_cnt;
+static int wake_cluster[NR_CPUS];
 
 static struct delayed_work input_boost_rem;
 static u64 last_input_time;
 
 static int set_input_boost_freq(const char *buf, const struct kernel_param *kp)
 {
-	int i, ntokens = 0;
+	int i, j, ntokens = 0;
 	unsigned int val, cpu;
 	const char *cp = buf;
 	bool enabled = false;
@@ -69,10 +76,9 @@ static int set_input_boost_freq(const char *buf, const struct kernel_param *kp)
 			return -EINVAL;
 		for_each_possible_cpu(i)
 			per_cpu(sync_info, i).input_boost_freq = val;
-		if (val)
-			wake_bc = wake_lc = 1;
-		else
-			wake_bc = wake_lc = 0;
+		for (i = 0; i < cluster_cnt; i++) {
+			wake_cluster[i] = val?1:0;
+		}
 		goto check_enable;
 	}
 
@@ -93,36 +99,23 @@ static int set_input_boost_freq(const char *buf, const struct kernel_param *kp)
 	}
 
 	//assign input boost freq to all cpus in the same cluster
-	boost_freq = 0;
-	for_each_cpu(i, (struct cpumask *) (&big_cluster_mask)) {
-		if (!boost_freq && per_cpu(sync_info, i).input_boost_freq != 0) {
-			boost_freq = per_cpu(sync_info, i).input_boost_freq;
-		}
-		else {
-			per_cpu(sync_info, i).input_boost_freq = boost_freq;
-		}
-	}
-	//check if need to do boost for big cluster
-	if (boost_freq)
-		wake_bc = 1;
-	else
-		wake_bc = 0;
+	for (i = 0; i < cluster_cnt; i++) {
+		boost_freq = 0;
 
-	//assign input boost freq to all cpus in the same cluster
-	boost_freq = 0;
-	for_each_cpu(i, (struct cpumask *) (&little_cluster_mask)) {
-		if (!boost_freq && per_cpu(sync_info, i).input_boost_freq != 0) {
-			boost_freq = per_cpu(sync_info, i).input_boost_freq;
+		for_each_cpu(j, &cluster_cpus[i]) {
+			if (!boost_freq && per_cpu(sync_info, j).input_boost_freq != 0) {
+				boost_freq = per_cpu(sync_info, j).input_boost_freq;
+			}
+			else {
+				per_cpu(sync_info, j).input_boost_freq = boost_freq;
+			}
 		}
-		else {
-			per_cpu(sync_info, i).input_boost_freq = boost_freq;
-		}
+
+		if (boost_freq)
+			wake_cluster[i] = 1;
+		else
+			wake_cluster[i] = 0;
 	}
-	//check if need to do boost for little cluster
-	if (boost_freq)
-		wake_lc = 1;
-	else
-		wake_lc = 0;
 
 check_enable:
 	for_each_possible_cpu(i) {
@@ -200,21 +193,17 @@ static struct notifier_block boost_adjust_nb = {
 
 static void update_policy_online(void)
 {
-	unsigned int i;
+	unsigned int i, j;
 
 	/* Re-evaluate policy to trigger adjust notifier for online CPUs */
 	get_online_cpus();
-	for_each_online_cpu(i) {
-		if (cpumask_test_cpu(i,  (struct cpumask *)&big_cluster_mask)) {
-			cpufreq_update_policy(i);
-			break;
-		}
-	}
 
-	for_each_online_cpu(i) {
-		if (cpumask_test_cpu(i,  (struct cpumask *)&little_cluster_mask)) {
-			cpufreq_update_policy(i);
-			break;
+	for (i = 0; i < cluster_cnt; i++) {
+		for_each_online_cpu(j) {
+			if (cpumask_test_cpu(j, &cluster_cpus[i])) {
+				cpufreq_update_policy(j);
+				break;
+			}
 		}
 	}
 	put_online_cpus();
@@ -300,7 +289,7 @@ static void cpuboost_input_event(struct input_handle *handle,
 		unsigned int type, unsigned int code, int value)
 {
 	u64 now;
-	int need_boost = 0;
+	int need_boost = 0, i;
 
 	if (!input_boost_enabled)
 		return;
@@ -324,12 +313,10 @@ static void cpuboost_input_event(struct input_handle *handle,
 
 	cancel_delayed_work(&input_boost_rem);
 
-	// up_task[0] for big cluster, up_task[1] for little cluster
-	if (wake_bc)
-		wake_up_process(up_task[0]);
-
-	if (wake_lc)
-		wake_up_process(up_task[1]);
+	for (i = 0; i < cluster_cnt; i++) {
+		if (wake_cluster[i])
+			wake_up_process(up_task[i]);
+	}
 
 	queue_delayed_work(cpu_boost_wq, &input_boost_rem, msecs_to_jiffies(input_boost_ms));
 
@@ -414,7 +401,13 @@ static int cpu_boost_init(void)
 	struct cpu_sync *s;
 	struct sched_param param = { .sched_priority = MAX_RT_PRIO-1 };
 	struct task_struct *pthread;
-	void *data[NUM_CLUSTER] = {(void*)&big_cluster_mask,  (void*)&little_cluster_mask};
+
+	cluster_cnt = get_kernel_cluster_info(cluster_id, cluster_cpus);
+
+	if (cluster_cnt <= 0) {
+		pr_err("Invalid number of cluster number : 0\n");
+		return -EINVAL;
+	}
 
 	cpu_boost_wq = alloc_workqueue("cpuboost_wq", WQ_HIGHPRI, 0);
 	if (!cpu_boost_wq)
@@ -427,8 +420,8 @@ static int cpu_boost_init(void)
 		s->cpu = cpu;
 	}
 
-	for (i = 0; i < NUM_CLUSTER; i++) {
-		pthread = kthread_create(do_input_boost, data[i], "input_boost_task%d",i);
+	for (i = 0; i < cluster_cnt; i++) {
+		pthread = kthread_create(do_input_boost, (void*)&cluster_cpus[i], "input_boost_task%d",i);
 		if (likely(!IS_ERR(pthread))) {
 			sched_setscheduler_nocheck(pthread, SCHED_FIFO, &param);
 			get_task_struct(pthread);
