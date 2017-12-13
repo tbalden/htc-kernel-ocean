@@ -124,8 +124,15 @@
         override-gpio    = <&tlmm 8 0x00>;            //V
         sel-gpio         = <&pmi8998_gpios 1 0x00>; //V
         pwren-gpio       = <&pm8998_gpios 19 0x00>; //V
+        edge_gadc        = <60>;
         check_sensor_profile = <1>;
-
+        project_id       = <0>;
+        /*
+           project {
+            {Ocean, 0},
+            {OceanLife, 1}
+           }
+        */
         pinctrl-names = "edge_mux_active", "edge_mux_suspend";
         pinctrl-0 = <&edge_rst_active &edge_int_active &edge_override_active>;
         pinctrl-1 = <&edge_rst_suspend &edge_int_suspend &edge_override_suspend>;

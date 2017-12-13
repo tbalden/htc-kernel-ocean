@@ -164,6 +164,8 @@ static void *__dma_alloc_coherent(struct device *dev, size_t size,
 				  dma_addr_t *dma_handle, gfp_t flags,
 				  struct dma_attrs *attrs)
 {
+	void *addr;
+
 	if (dev == NULL) {
 		WARN_ONCE(1, "Use an actual device structure for DMA allocation\n");
 		return NULL;
@@ -174,7 +176,6 @@ static void *__dma_alloc_coherent(struct device *dev, size_t size,
 		flags |= GFP_DMA;
 	if (dev_get_cma_area(dev) && gfpflags_allow_blocking(flags)) {
 		struct page *page;
-		void *addr;
 
 		page = dma_alloc_from_contiguous(dev, size >> PAGE_SHIFT,
 							get_order(size));
@@ -186,19 +187,20 @@ static void *__dma_alloc_coherent(struct device *dev, size_t size,
 		if (!dma_get_attr(DMA_ATTR_SKIP_ZEROING, attrs))
 			memset(addr, 0, size);
 
-		if (dma_get_attr(DMA_ATTR_NO_KERNEL_MAPPING, attrs) ||
-		    dma_get_attr(DMA_ATTR_STRONGLY_ORDERED, attrs)) {
-			/*
-			 * flush the caches here because we can't later
-			 */
-			__dma_flush_range(addr, addr + size);
-			__dma_remap(page, size, 0, true);
-		}
-
-		return addr;
 	} else {
-		return swiotlb_alloc_coherent(dev, size, dma_handle, flags);
+		addr = swiotlb_alloc_coherent(dev, size, dma_handle, flags);
 	}
+
+	if (addr && (dma_get_attr(DMA_ATTR_NO_KERNEL_MAPPING, attrs) ||
+		dma_get_attr(DMA_ATTR_STRONGLY_ORDERED, attrs))) {
+		/*
+		 * flush the caches here because we can't later
+		 */
+		__dma_flush_range(addr, addr + size);
+		__dma_remap(virt_to_page(addr), size, 0, true);
+	}
+
+	return addr;
 }
 
 static void __dma_free_coherent(struct device *dev, size_t size,
@@ -1822,10 +1824,8 @@ static void arm_iommu_unmap_page(struct device *dev, dma_addr_t handle,
 						mapping->domain, iova));
 	int offset = handle & ~PAGE_MASK;
 	int len = PAGE_ALIGN(size + offset);
-	bool iova_coherent = iommu_is_iova_coherent(mapping->domain,
-							handle);
 
-	if (!(iova_coherent ||
+	if (!(is_dma_coherent(dev, attrs) ||
 	      dma_get_attr(DMA_ATTR_SKIP_CPU_SYNC, attrs)))
 		__dma_page_dev_to_cpu(page, offset, size, dir);
 

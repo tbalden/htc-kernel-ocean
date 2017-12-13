@@ -206,6 +206,7 @@
 		htc,miclr_dgnd_sw_en = <&pm8998_gpios 20 0>;
 		htc,hsmic_2v85_en = <&pm8998_gpios 15 0>;
 		htc,aud_remote_sensor = <&pm8998_gpios 9 0>;
+		htc,typec-hs-pre-condition = <1>;
 
 		htc,adapter_35mm_threshold = <330 800>;
 		htc,adapter_25mm_threshold = <1250 2850>;
@@ -235,6 +236,7 @@
 			ti,echo-ref = <1>;   /* 0, left channel; 1, right channel; 2, both */
 			ti,i2s-bits = <16>;   /* support 16, 24, 32 */
 			ti,load = <0>;   /* 0, 8Ohm; 1, 6Ohm; 2, 4Ohm */
+			ti,bypass-tmax = <1>;   /* 0, not bypass; 1, bypass */
 			status = "ok";
 		};
 	};

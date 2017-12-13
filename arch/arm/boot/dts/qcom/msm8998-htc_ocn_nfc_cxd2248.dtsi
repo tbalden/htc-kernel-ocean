@@ -9,6 +9,7 @@
 		sony,wake_gpio = <&tlmm 12 0x00>;
 		sony,irq_gpio = <&tlmm 92 0x00>;
 		sony,rst_gpio = <&tlmm 11 0x00>;
+		nfc_regulator = "pm8998_lvs1";
 	};
 
 };

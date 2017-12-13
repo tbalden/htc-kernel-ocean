@@ -159,8 +159,8 @@
 			               116>; /* KEY_POWER */
 			cy,btn_keys-tag = <0>;
 			cy,mt {
-				cy,name = "cyttsp5_mt";
-				cy,inp_dev_name = "cyttsp5_mt";
+				cy,name = "cyttsp5_touchscreen";
+				cy,inp_dev_name = "cyttsp5_touchscreen";
 				cy,flags = <0>;
 				cy,abs =
 					/* ABS_MT_POSITION_X, CY_ABS_MIN_X, CY_ABS_MAX_X, 0, 0 */

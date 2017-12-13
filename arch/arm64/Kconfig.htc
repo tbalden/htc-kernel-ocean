@@ -84,3 +84,12 @@ config HTC_FEATURES_SSR_WCNSS_ENABLE
 config HTC_FD_MONITOR
 	bool "fd operation monitor mechanism"
 	default n
+
+config ENABLE_VENDOR_IMAGE
+	bool "enable vendor image or not"
+	default n
+
+config LMK_ZYGOTE_PROTECT
+	bool "LMK zygote protect"
+	default n
+	help

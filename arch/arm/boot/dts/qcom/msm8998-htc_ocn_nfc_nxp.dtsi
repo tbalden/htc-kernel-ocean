@@ -19,6 +19,7 @@
 	qcom,nq-firm = <&pmi8998_gpios 5 0x00>;
 	qcom,nq-clkreq = <&pm8998_gpios 21 0x00>;
 	qcom,nq-esepwr = <&tlmm 116 0x00>;
+	regulator_name = "pm8998_lvs1";
 	pinctrl-names = "nfc_active", "nfc_suspend";
 	pinctrl-0 = <&nfc_int_active &nfc_enable_active>;
 	pinctrl-1 = <&nfc_int_suspend &nfc_enable_suspend>;

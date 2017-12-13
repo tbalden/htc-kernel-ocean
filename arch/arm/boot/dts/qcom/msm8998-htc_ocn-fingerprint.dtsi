@@ -75,6 +75,23 @@
             pinctrl-0         = <&fpc1020_irq_active>;
             pinctrl-1         = <&fpc1020_reset_reset>;
             pinctrl-2         = <&fpc1020_reset_active>;
+            status = "okay";
+    };
+
+    goodix_fp {
+            compatible = "goodix,fingerprint";
+            interrupt-parent  = <&tlmm>;
+            interrupts        = <86 0x0>;
+            fp-gpio-reset = <&tlmm 75 0>;
+            fp-gpio-irq = <&tlmm 86 0>;
+            pinctrl-names     = "fpc1020_irq_active",
+                                "fpc1020_reset_reset",
+                                "fpc1020_reset_active";
+
+            pinctrl-0         = <&fpc1020_irq_active>;
+            pinctrl-1         = <&fpc1020_reset_reset>;
+            pinctrl-2         = <&fpc1020_reset_active>;
+            status = "okay";
     };
 };
 

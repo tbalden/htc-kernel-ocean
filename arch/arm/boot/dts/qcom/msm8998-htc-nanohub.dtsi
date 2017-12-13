@@ -19,6 +19,20 @@
 };
 
 &tlmm {
+	spi_6 {
+		spi_6_active: spi_6_active {
+			config {
+				bias-pull-down;
+			};
+		};
+
+		spi_6_sleep: spi_6_sleep {
+			config {
+				bias-pull-down;
+			};
+		};
+	};
+
 	sensorhub_ctrl {
 	/* NRST, BOOT0, AP2SH, SH2AP, SH2APNW */
 		sensorhub_ctrl_active: sensorhub_ctrl_active {
@@ -62,7 +76,7 @@
 };
 
 &spi_6 {
-	sensorhub@0 {
+	nanohub: sensorhub@0 {
 		compatible = "nanohub";
 		reg = <0>;
 		spi-max-frequency = <50000000>;

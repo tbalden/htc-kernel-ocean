@@ -22,8 +22,12 @@
 			interrupts = <120 0x0>;
 			himax,irq-gpio          = <&tlmm 120 0x0>;
 			himax,rst-gpio          = <&pmi8998_gpios 14 0x0>;
+			himax,wake-up-reset     = <1>;
+			himax,glove-mode        = <1>;
+			himax,always-K-WA       = <1>;
 			update_feature          = <0>;
 			report_type             = <1>;
+			irq-on-state 		= <0>;
 
 		config0 {
 			fw_ver		= <0x12>;

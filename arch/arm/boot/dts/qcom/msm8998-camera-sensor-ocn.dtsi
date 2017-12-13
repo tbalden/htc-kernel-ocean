@@ -152,6 +152,7 @@
 		reg = <0x0>;
 		compatible = "qcom,actuator";
 		qcom,cci-master = <0>;
+		af-update = <1>;
 	};
 
 	ois0: qcom,ois@0 {

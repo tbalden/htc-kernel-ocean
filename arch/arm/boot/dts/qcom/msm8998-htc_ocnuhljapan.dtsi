@@ -31,6 +31,26 @@
         compatible = "qcom,msm8998-mtp", "qcom,msm8998", "qcom,mtp";
 };
 
+/ {
+	firmware: firmware {
+		android {
+			compatible = "android,firmware";
+			fstab {
+				compatible = "android,fstab";
+				system {
+					compatible = "android,system";
+					dev = "/dev/block/platform/soc/1da4000.ufshc/by-name/system";
+					type = "ext4";
+					mnt_flags = "ro,barrier=1,discard";
+					fsmgr_flags = "wait,verify";
+					status = "ok";
+				};
+
+			};
+		};
+	};
+};
+
 &tlmm {
 		pcie0 {
 			pcie0_perst_default: pcie0_perst_default {
@@ -169,6 +189,7 @@
 		pinctrl-names = "lp5562_init";
 		pinctrl-0 = <&lp5521_init>;
 		lp5562,current_param = <150>;
+		lp5562,vk_use;
 		lp5562,vk_current_param = <200>;
 		vk-pwm-array = [00 20 70 70 B0 B0 FF FF FF FF FF];
 		vk-black-cg-id-def = "DEF00", "GRY00", "LOB00", "BLK00";
@@ -214,7 +235,7 @@
 	};
 };
 
-/{
+&vendor {
 	ocn_batterydata: qcom,battery-data {
 		/delete-node/ qcom,itech_3000mah;
 		/delete-node/ qcom,ascent_3450mah;
@@ -230,13 +251,51 @@
 	qcom,battery-data = <&ocn_batterydata>;
 	htc,qc3-vol-limit = <14>;
 	htc,qc3-curr-limit-ma = <2000>;
+	qcom,auto-recharge-soc;
 };
 
 &pmi8998_fg {
+	qcom,fg-jeita-thresholds = <2 15 47 55>;
+	qcom,fg-jeita-hyst-temp = <2>;
 	qcom,fg-recharge-soc-thr = <97>;
 	qcom,fg-chg-term-current = <50>;
 	qcom,fg-cutoff-voltage = <3400>;
 	qcom,fg-rsense-sel = <0>;
+};
+
+/ {
+	htc_battery_dt {
+		compatible = "htc,htc_battery_dt";
+		htc,fastchg-current-ma = <3000>;
+		htc,health-level = <6>;
+		htc,batt-health-good = <2>;
+		htc,chg-vbatt-thresholds = <4250 4250 4250 4250 4250 4250>;	/* htc,health-level * 1 */
+		htc,chg-vbatt-recover-thresholds = <4000 4000 4000 4000 4000 4000>;
+		htc,chg-temp-thresholds = <(-10000) 170>,			/* htc,health-level * 2 */
+					  <     150 220>,
+					  <     420 200>,			/* GOOD */
+					  <     450 400>,
+					  <     470 430>,
+					  <   10000 450>;
+		htc,chg-fcc-limits = <						/* 4 * htc,health-level */
+			1500 3000 3000 3000 1500 1500
+			1500 3000 3000 1000 1000 1000
+			 900 3000 3000 3000 1500    0
+			 900 3000 3000 1000 1000    0
+		>;
+		htc,qc2-chg-fcc-limits = <					/* 4 * htc,health-level */
+			1500 3000 3000 2000 1500 1500
+			1500 3000 3000 1000 1000 1000
+			 900 1500 2100 2000 1500    0
+			 900 1500 2100 1000 1000    0
+		>;
+		htc,qc3-chg-fcc-limits = <					/* 4 * htc,health-level */
+			1500 3000 3000 2100 1500 1500
+			1500 3000 3000 2100 1500 1500
+			 900 1500 2100 2100 1500    0
+			 900 1500 2100 2100 1500    0
+		>;
+	};
 };
 
 &i2c_5 {

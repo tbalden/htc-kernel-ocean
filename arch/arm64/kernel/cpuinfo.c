@@ -106,7 +106,11 @@ static const char *const compat_hwcap2_str[] = {
 };
 #endif /* CONFIG_COMPAT */
 
+#if defined(CONFIG_ARCH_SDM660) || defined(CONFIG_ARCH_SDM630)
+extern volatile u64 htc_target_quot[2][5];
+#elif defined(CONFIG_ARCH_MSM8998)
 extern volatile u64 htc_target_quot[2][4];
+#endif
 extern volatile int htc_target_quot_len;
 static int c_show(struct seq_file *m, void *v)
 {
