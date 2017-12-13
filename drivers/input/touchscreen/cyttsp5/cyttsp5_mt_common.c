@@ -28,7 +28,7 @@
 
 #include "cyttsp5_regs.h"
 
-#define CYTTSP5_MT_NAME "cyttsp5_mt"
+#define CYTTSP5_MT_NAME "cyttsp5_touchscreen"
 
 static const int16_t cyttsp5_abs[] = {
 	ABS_MT_POSITION_X, CY_ABS_MIN_X, CY_ABS_MAX_X, 0, 0,

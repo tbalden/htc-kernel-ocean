@@ -35,7 +35,9 @@
 #include <linux/mutex.h>
 #include <linux/platform_device.h>
 #include <linux/time.h>
+#ifdef CONFIG_NANOHUB_EDGE
 #include <linux/nanohub_htc.h>
+#endif
 
 #define CONFIG_EDGE_SENSOR_FW_UPDATE
 #if defined(CONFIG_EDGE_SENSOR_FW_UPDATE)
@@ -85,7 +87,7 @@ struct input_dev *input_dev;
 #define XR15510_DATA_BUFFER     0x7f
 
 // project id
-#define Project_OCE     0
+#define Project_OCN     0
 
 // hw version
 #define OCE_P1P2_SENSOR 0
@@ -135,7 +137,7 @@ struct delayed_work edge_polling_work;
 /* Default setting is profile#3 and it's gadc is 60 */
 uint8_t p2_sensor_module = 0;
 uint32_t edge_gadc = 60;
-static uint8_t project_id = Project_OCE;
+static uint32_t project_id = Project_OCN;
 static uint8_t hw_id = OCE_P3_SENSOR;
 static uint32_t switch_reset = 0;
 struct mutex polling_lock;
@@ -911,6 +913,20 @@ static void xr15510_parse_dt(struct device *dev)
     } else
         EDGE_INFO_LOG("%s: default switch_reset = %u\n", __func__, switch_reset);
 
+    /* project id */
+    if (of_find_property(node, "project_id", NULL)) {
+        of_property_read_u32(node, "project_id", &project_id);
+        EDGE_INFO_LOG("%s: project_id: %d\n", __func__, project_id);
+    } else
+        EDGE_INFO_LOG("%s: Unable to parse project_id\n", __func__);
+
+    /* edge golden adc */
+    if (of_find_property(node, "edge_gadc", NULL)) {
+        of_property_read_u32(node, "edge_gadc", &edge_gadc);
+        EDGE_INFO_LOG("%s: edge_gadc: %d\n", __func__, edge_gadc);
+    } else
+        EDGE_INFO_LOG("%s: Unable to parse edge_gadc\n", __func__);
+
     /* check sensor profile */
     if (of_find_property(node, "check_sensor_profile", NULL)) {
         of_property_read_u32(node, "check_sensor_profile", &check_sensor_profile);
@@ -918,6 +934,7 @@ static void xr15510_parse_dt(struct device *dev)
     } else
         EDGE_INFO_LOG("%s: Unable to parse check_sensor_profile\n", __func__);
 
+    /* check sensor profile to dynamic select the gadc */
     if(check_sensor_profile) {
         mfgnode = of_find_node_by_path("/chosen/mfg");
         if (mfgnode) {
@@ -2001,6 +2018,7 @@ static void edge_fw_update_work(struct work_struct *work)
         EDGE_INFO_LOG("%s: gpio_select(%d) value is %d\n",
                 __func__, gpio_sel, gpio_get_value(gpio_sel));
 
+#ifdef CONFIG_NANOHUB_EDGE
         /* Inform i2c bus has switched over to hub*/
         nanohub_edge_i2c_switch(I2C_TO_SHUB);
 
@@ -2009,6 +2027,7 @@ static void edge_fw_update_work(struct work_struct *work)
             msleep(40);
             gpio_direction_input(gpio_reset);
         }
+#endif
     }
 
     EDGE_INFO_LOG("%s: --\n", __func__);

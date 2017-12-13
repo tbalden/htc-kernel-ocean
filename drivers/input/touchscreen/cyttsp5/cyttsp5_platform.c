@@ -327,11 +327,25 @@ int cyttsp5_init(struct cyttsp5_core_platform_data *pdata,
 			}
 		}
 	} else {
+		if(TP_3V3_EN_gpio > 0) {
+			gpio_free(TP_3V3_EN_gpio);
+			pr_info("%s: gpio free TP_3V3_EN_gpio\n",__func__);
+		}
+		if(TP_1V8_EN_gpio > 0) {
+			gpio_free(TP_1V8_EN_gpio);
+			pr_info("%s: gpio free TP_1V8_EN_gpio\n",__func__);
+		}
+		if(TP_I2C_SEL_CPU_gpio > 0) {
+			gpio_free(TP_I2C_SEL_CPU_gpio);
+			pr_info("%s: gpio free TP_I2C_SEL_CPU_gpio\n",__func__);
+		}
 		if(rst_gpio > 0) {
 			gpio_free(rst_gpio);
+			pr_info("%s: gpio free rst_gpio\n",__func__);
 		}
 		if(irq_gpio > 0) {
 			gpio_free(irq_gpio);
+			pr_info("%s: gpio free irq_gpio\n",__func__);
 		}
 	}
 

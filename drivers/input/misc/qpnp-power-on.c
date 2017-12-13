@@ -210,7 +210,7 @@ struct qpnp_pon {
 	int			pon_power_off_reason;
 	int			num_pon_reg;
 	int			num_pon_config;
-	u32			dbc;
+	u32			dbc_time_us;
 	u32			uvlo;
 	int			warm_reset_poff_type;
 	int			hard_reset_poff_type;
@@ -222,6 +222,8 @@ struct qpnp_pon {
 	u8			warm_reset_reason2;
 	bool			is_spon;
 	bool			store_hard_reset_reason;
+	bool			kpdpwr_dbc_enable;
+	ktime_t			kpdpwr_last_release_time;
 };
 
 static int pon_ship_mode_en;
@@ -384,7 +386,7 @@ static int qpnp_pon_set_dbc(struct qpnp_pon *pon, u32 delay)
 	int rc = 0;
 	u32 val;
 
-	if (delay == pon->dbc)
+	if (delay == pon->dbc_time_us)
 		goto out;
 
 	if (pon->pon_input)
@@ -412,7 +414,7 @@ static int qpnp_pon_set_dbc(struct qpnp_pon *pon, u32 delay)
 		goto unlock;
 	}
 
-	pon->dbc = delay;
+	pon->dbc_time_us = delay;
 
 unlock:
 	if (pon->pon_input)
@@ -421,12 +423,34 @@ out:
 	return rc;
 }
 
+static int qpnp_pon_get_dbc(struct qpnp_pon *pon, u32 *delay)
+{
+	int rc;
+	unsigned int val;
+
+	rc = regmap_read(pon->regmap, QPNP_PON_DBC_CTL(pon), &val);
+	if (rc) {
+		pr_err("Unable to read pon_dbc_ctl rc=%d\n", rc);
+		return rc;
+	}
+	val &= QPNP_PON_DBC_DELAY_MASK(pon);
+
+	if (is_pon_gen2(pon))
+		*delay = USEC_PER_SEC /
+			(1 << (QPNP_PON_GEN2_DELAY_BIT_SHIFT - val));
+	else
+		*delay = USEC_PER_SEC /
+			(1 << (QPNP_PON_DELAY_BIT_SHIFT - val));
+
+	return rc;
+}
+
 static ssize_t qpnp_pon_dbc_show(struct device *dev,
 				struct device_attribute *attr, char *buf)
 {
 	struct qpnp_pon *pon = dev_get_drvdata(dev);
 
-	return snprintf(buf, QPNP_PON_BUFFER_SIZE, "%d\n", pon->dbc);
+	return snprintf(buf, QPNP_PON_BUFFER_SIZE, "%d\n", pon->dbc_time_us);
 }
 
 static ssize_t qpnp_pon_dbc_store(struct device *dev,
@@ -780,6 +804,7 @@ qpnp_pon_input_dispatch(struct qpnp_pon *pon, u32 pon_type)
 	u8  pon_rt_bit = 0;
 	u32 key_status;
 	uint pon_rt_sts;
+	u64 elapsed_us;
 
 	cfg = qpnp_get_cfg(pon, pon_type);
 	if (!cfg)
@@ -788,6 +813,15 @@ qpnp_pon_input_dispatch(struct qpnp_pon *pon, u32 pon_type)
 	/* Check if key reporting is supported */
 	if (!cfg->key_code)
 		return 0;
+
+	if (pon->kpdpwr_dbc_enable && cfg->pon_type == PON_KPDPWR) {
+		elapsed_us = ktime_us_delta(ktime_get(),
+				pon->kpdpwr_last_release_time);
+		if (elapsed_us < pon->dbc_time_us) {
+			pr_debug("Ignoring kpdpwr event - within debounce time\n");
+			return 0;
+		}
+	}
 
 	/* check the RT status to get the current status of the line */
 	rc = regmap_read(pon->regmap, QPNP_PON_RT_STS(pon), &pon_rt_sts);
@@ -816,6 +850,11 @@ qpnp_pon_input_dispatch(struct qpnp_pon *pon, u32 pon_type)
 	pr_debug("PMIC input: code=%d, sts=0x%hhx\n",
 					cfg->key_code, pon_rt_sts);
 	key_status = pon_rt_sts & pon_rt_bit;
+
+	if (pon->kpdpwr_dbc_enable && cfg->pon_type == PON_KPDPWR) {
+		if (!key_status)
+			pon->kpdpwr_last_release_time = ktime_get();
+	}
 
 #ifdef CONFIG_QPNP_KEY_INPUT
 	/*
@@ -2153,23 +2192,45 @@ int htc_pon_trigger_reason = -1;
 int htc_pon_power_off_reason = -1;
 int htc_warm_reset_reason1 = -1;
 
+/*Maximum PMIC nums are three*/
+#define HTC_MSM_PMIC_NUMS 3
+#define HTC_DUMP_PMIC_REG_NUMS 12
+#define PM_STATUS_MSG_LEN 300
+static int pmic_init_seq = 0;
+static char reg_dump_str[PM_STATUS_MSG_LEN] = {0};
+
 void htc_print_pon_boot_reason(void)
 {
 	/* PON_PON_REASON */
+#if defined(CONFIG_ARCH_SDM660) || defined(CONFIG_ARCH_SDM630)
+	printk(KERN_INFO "SDM630 PON_PON_REASON:\n");
+#else
 	printk(KERN_INFO "PM8998 PON_PON_REASON:\n");
+#endif
 	printk(KERN_INFO "%s\n",qpnp_pon_reason[htc_pon_trigger_reason]);
 
 	/* PON_WARM_RESET_REASON */
 	if(htc_warm_reset_reason1 >= 0){
+#if defined(CONFIG_ARCH_SDM660) || defined(CONFIG_ARCH_SDM630)
+		printk(KERN_INFO "SDM630 PON_WARM_RESET_REASON:\n");
+#else
 		printk(KERN_INFO "PM8998 PON_WARM_RESET_REASON:\n");
+#endif
 		printk(KERN_INFO "%s\n",qpnp_poff_reason[htc_warm_reset_reason1]);
 	}
 
 	/* PON_POFF_REASON1 */
 	if(htc_pon_power_off_reason >= 0){
+#if defined(CONFIG_ARCH_SDM660) || defined(CONFIG_ARCH_SDM630)
+		printk(KERN_INFO "SDM630 PON_POFF_REASON:\n");
+#else
 		printk(KERN_INFO "PM8998 PON_POFF_REASON:\n");
+#endif
 		printk(KERN_INFO "%s\n",qpnp_poff_reason[htc_pon_power_off_reason]);
 	}
+
+	/* Register dump from 0x8C0 to 0x8CB */
+	printk(KERN_INFO "PON_POFF register dump: %s\n", reg_dump_str);
 }
 EXPORT_SYMBOL_GPL(htc_print_pon_boot_reason);
 #endif
@@ -2189,6 +2250,12 @@ static int qpnp_pon_probe(struct platform_device *pdev)
 	u8 s3_src_reg;
 	unsigned long flags;
 	uint temp = 0;
+#ifdef CONFIG_HTC_POWER_DEBUG
+	int idx = 0;
+	static int msg_len = 0;
+	static u8 reg_buf[HTC_MSM_PMIC_NUMS][HTC_DUMP_PMIC_REG_NUMS];
+	static bool is_first = true;
+#endif
 
 	pon = devm_kzalloc(&pdev->dev, sizeof(struct qpnp_pon), GFP_KERNEL);
 	if (!pon)
@@ -2460,7 +2527,21 @@ static int qpnp_pon_probe(struct platform_device *pdev)
 		}
 	} else {
 		rc = qpnp_pon_set_dbc(pon, delay);
+		if (rc) {
+			dev_err(&pdev->dev,
+				"Unable to set PON debounce delay rc=%d\n", rc);
+			return rc;
+		}
 	}
+	rc = qpnp_pon_get_dbc(pon, &pon->dbc_time_us);
+	if (rc) {
+		dev_err(&pdev->dev,
+			"Unable to get PON debounce delay rc=%d\n", rc);
+		return rc;
+	}
+
+	pon->kpdpwr_dbc_enable = of_property_read_bool(pon->pdev->dev.of_node,
+					"qcom,kpdpwr-sw-debounce");
 
 	rc = of_property_read_u32(pon->pdev->dev.of_node,
 				"qcom,warm-reset-poweroff-type",
@@ -2540,6 +2621,33 @@ static int qpnp_pon_probe(struct platform_device *pdev)
 		htc_pon_trigger_reason = pon->pon_trigger_reason;
 		htc_pon_power_off_reason = pon->pon_power_off_reason;
 		htc_warm_reset_reason1 = ffs((int)pon->warm_reset_reason1) -1;
+	}
+
+	/*Maximum PMIC nums are three*/
+	if(pmic_init_seq < HTC_MSM_PMIC_NUMS) {
+		regmap_bulk_read(pon->regmap, QPNP_PON_REASON1(pon),
+				reg_buf[pmic_init_seq], HTC_DUMP_PMIC_REG_NUMS);
+
+		if (is_first) {
+			msg_len = snprintf(reg_dump_str + msg_len,
+				sizeof(reg_dump_str), "PM%d:", pmic_init_seq);
+			is_first = false;
+		} else
+			msg_len += snprintf(reg_dump_str + msg_len,
+				sizeof(reg_dump_str) - msg_len, "PM%d:", pmic_init_seq);
+
+		for (idx = 0; idx < HTC_DUMP_PMIC_REG_NUMS; idx++) {
+			if (msg_len > ARRAY_SIZE(reg_dump_str) - 1)
+				printk(KERN_INFO "debug msg_len:%d over size\n", msg_len);
+			else
+				msg_len += snprintf(reg_dump_str + msg_len,
+					sizeof(reg_dump_str) - msg_len, " %X",
+					reg_buf[pmic_init_seq][idx]);
+		}
+
+		msg_len += snprintf(reg_dump_str + msg_len,sizeof(reg_dump_str) - msg_len, ";");
+
+		pmic_init_seq++;
 	}
 #endif
 	return 0;

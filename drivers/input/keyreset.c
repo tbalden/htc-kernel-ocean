@@ -38,10 +38,9 @@ static void do_restart(struct work_struct *unused)
 #if defined(CONFIG_POWER_KEY_CLR_RESET)
 	clear_hw_reset();
 #endif
-	sys_sync();
 	KEY_LOGI("[PWR] Show Blocked State -- long press power key\n");
 	show_state_filter(TASK_UNINTERRUPTIBLE);
-	machine_restart("power-key-force-hard");
+	orderly_cmd_reboot("power-key-force-hard");
 }
 
 static void do_reset_fn(void *priv)

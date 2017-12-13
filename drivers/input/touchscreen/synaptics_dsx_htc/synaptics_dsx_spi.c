@@ -1,7 +1,7 @@
 /*
  * Synaptics DSX touchscreen driver
  *
- * Copyright (C) 2012-2015 Synaptics Incorporated. All rights reserved.
+ * Copyright (C) 2012-2016 Synaptics Incorporated. All rights reserved.
  *
  * Copyright (C) 2012 Alexandra Chin <alexandra.chin@tw.synaptics.com>
  * Copyright (C) 2012 Scott Lin <scott.lin@tw.synaptics.com>
@@ -40,11 +40,15 @@
 #include <linux/types.h>
 #include <linux/of_gpio.h>
 #include <linux/platform_device.h>
-#include <linux/input/synaptics_dsx_v2_6.h>
+#include <linux/input/synaptics_dsx_htc.h>
 #include "synaptics_dsx_core.h"
 
 #define SPI_READ 0x80
 #define SPI_WRITE 0x00
+
+static unsigned char *buf;
+
+static struct spi_transfer *xfer;
 
 #ifdef CONFIG_OF
 static int parse_dt(struct device *dev, struct synaptics_dsx_board_data *bdata)
@@ -181,6 +185,21 @@ static int parse_dt(struct device *dev, struct synaptics_dsx_board_data *bdata)
 		bdata->block_delay_us = 0;
 	}
 
+	prop = of_find_property(np, "synaptics,address-delay-us", NULL);
+	if (prop && prop->length) {
+		retval = of_property_read_u32(np, "synaptics,address-delay-us",
+				&value);
+		if (retval < 0) {
+			dev_err(dev, "%s: Unable to read synaptics,address-delay-us property\n",
+					__func__);
+			return retval;
+		} else {
+			bdata->addr_delay_us = value;
+		}
+	} else {
+		bdata->addr_delay_us = 0;
+	}
+
 	prop = of_find_property(np, "synaptics,max-y-for-2d", NULL);
 	if (prop && prop->length) {
 		retval = of_property_read_u32(np, "synaptics,max-y-for-2d",
@@ -267,117 +286,171 @@ static int parse_dt(struct device *dev, struct synaptics_dsx_board_data *bdata)
 }
 #endif
 
+static int synaptics_rmi4_spi_alloc_buf(struct synaptics_rmi4_data *rmi4_data,
+		unsigned int size, unsigned int count)
+{
+	static unsigned int buf_size;
+	static unsigned int xfer_count;
+
+	if (size > buf_size) {
+		if (buf_size)
+			kfree(buf);
+		buf = kmalloc(size, GFP_KERNEL);
+		if (!buf) {
+			dev_err(rmi4_data->pdev->dev.parent,
+					"%s: Failed to alloc mem for buf\n",
+					__func__);
+			buf_size = 0;
+			return -ENOMEM;
+		}
+		buf_size = size;
+	}
+
+	if (count > xfer_count) {
+		if (xfer_count)
+			kfree(xfer);
+		xfer = kcalloc(count, sizeof(struct spi_transfer), GFP_KERNEL);
+		if (!xfer) {
+			dev_err(rmi4_data->pdev->dev.parent,
+					"%s: Failed to alloc mem for xfer\n",
+					__func__);
+			xfer_count = 0;
+			return -ENOMEM;
+		}
+		xfer_count = count;
+	} else {
+		memset(xfer, 0, count * sizeof(struct spi_transfer));
+	}
+
+	return 0;
+}
+
 static int synaptics_rmi4_spi_set_page(struct synaptics_rmi4_data *rmi4_data,
 		unsigned short addr)
 {
 	int retval;
 	unsigned int index;
-	unsigned int xfer_count = PAGE_SELECT_LEN + 1;
-	unsigned char txbuf[xfer_count];
+	unsigned int byte_count = PAGE_SELECT_LEN + 1;
 	unsigned char page;
 	struct spi_message msg;
-	struct spi_transfer xfers[xfer_count];
 	struct spi_device *spi = to_spi_device(rmi4_data->pdev->dev.parent);
 	const struct synaptics_dsx_board_data *bdata =
 			rmi4_data->hw_if->board_data;
 
-	page = ((addr >> 8) & ~MASK_7BIT);
-	if (page != rmi4_data->current_page) {
-		spi_message_init(&msg);
+	page = ((addr >> 8) & MASK_8BIT);
+	if ((page >> 7) == (rmi4_data->current_page >> 7))
+		return PAGE_SELECT_LEN;
 
-		txbuf[0] = SPI_WRITE;
-		txbuf[1] = MASK_8BIT;
-		txbuf[2] = page;
+	spi_message_init(&msg);
 
-		for (index = 0; index < xfer_count; index++) {
-			memset(&xfers[index], 0, sizeof(struct spi_transfer));
-			xfers[index].len = 1;
-			xfers[index].delay_usecs = bdata->byte_delay_us;
-			xfers[index].tx_buf = &txbuf[index];
-			spi_message_add_tail(&xfers[index], &msg);
-		}
+	retval = synaptics_rmi4_spi_alloc_buf(rmi4_data, byte_count,
+			byte_count);
+	if (retval < 0)
+		return retval;
 
+	buf[0] = SPI_WRITE;
+	buf[1] = MASK_8BIT;
+	buf[2] = page;
+
+	if (bdata->byte_delay_us == 0) {
+		xfer[0].len = byte_count;
+		xfer[0].tx_buf = &buf[0];
 		if (bdata->block_delay_us)
-			xfers[index - 1].delay_usecs = bdata->block_delay_us;
-
-		retval = spi_sync(spi, &msg);
-		if (retval == 0) {
-			rmi4_data->current_page = page;
-			retval = PAGE_SELECT_LEN;
-		} else {
-			dev_err(rmi4_data->pdev->dev.parent,
-					"%s: Failed to complete SPI transfer, error = %d\n",
-					__func__, retval);
-		}
+			xfer[0].delay_usecs = bdata->block_delay_us;
+		spi_message_add_tail(&xfer[0], &msg);
 	} else {
+		for (index = 0; index < byte_count; index++) {
+			xfer[index].len = 1;
+			xfer[index].tx_buf = &buf[index];
+			if (index == 1)
+				xfer[index].delay_usecs = bdata->addr_delay_us;
+			else
+				xfer[index].delay_usecs = bdata->byte_delay_us;
+			spi_message_add_tail(&xfer[index], &msg);
+		}
+		if (bdata->block_delay_us)
+			xfer[index - 1].delay_usecs = bdata->block_delay_us;
+	}
+
+	retval = spi_sync(spi, &msg);
+	if (retval == 0) {
+		rmi4_data->current_page = page;
 		retval = PAGE_SELECT_LEN;
+	} else {
+		dev_err(rmi4_data->pdev->dev.parent,
+				"%s: Failed to complete SPI transfer, error = %d\n",
+				__func__, retval);
 	}
 
 	return retval;
 }
 
 static int synaptics_rmi4_spi_read(struct synaptics_rmi4_data *rmi4_data,
-		unsigned short addr, unsigned char *data, unsigned short length)
+		unsigned short addr, unsigned char *data, unsigned int length)
 {
 	int retval;
 	unsigned int index;
-	unsigned int xfer_count = length + ADDRESS_WORD_LEN;
-	unsigned char txbuf[ADDRESS_WORD_LEN];
-	unsigned char *rxbuf = NULL;
+	unsigned int byte_count = length + ADDRESS_LEN;
+	unsigned char txbuf[ADDRESS_LEN];
 	struct spi_message msg;
-	struct spi_transfer *xfers = NULL;
 	struct spi_device *spi = to_spi_device(rmi4_data->pdev->dev.parent);
 	const struct synaptics_dsx_board_data *bdata =
 			rmi4_data->hw_if->board_data;
 
 	spi_message_init(&msg);
 
-	xfers = kcalloc(xfer_count, sizeof(struct spi_transfer), GFP_KERNEL);
-	if (!xfers) {
-		dev_err(rmi4_data->pdev->dev.parent,
-				"%s: Failed to allocate memory for xfers\n",
-				__func__);
-		retval = -ENOMEM;
-		goto exit;
-	}
-
 	txbuf[0] = (addr >> 8) | SPI_READ;
 	txbuf[1] = addr & MASK_8BIT;
-
-	rxbuf = kmalloc(length, GFP_KERNEL);
-	if (!rxbuf) {
-		dev_err(rmi4_data->pdev->dev.parent,
-				"%s: Failed to allocate memory for rxbuf\n",
-				__func__);
-		retval = -ENOMEM;
-		goto exit;
-	}
 
 	mutex_lock(&rmi4_data->rmi4_io_ctrl_mutex);
 
 	retval = synaptics_rmi4_spi_set_page(rmi4_data, addr);
 	if (retval != PAGE_SELECT_LEN) {
 		mutex_unlock(&rmi4_data->rmi4_io_ctrl_mutex);
-		retval = -EIO;
-		goto exit;
+		return -EIO;
 	}
 
-	for (index = 0; index < xfer_count; index++) {
-		xfers[index].len = 1;
-		xfers[index].delay_usecs = bdata->byte_delay_us;
-		if (index < ADDRESS_WORD_LEN)
-			xfers[index].tx_buf = &txbuf[index];
-		else
-			xfers[index].rx_buf = &rxbuf[index - ADDRESS_WORD_LEN];
-		spi_message_add_tail(&xfers[index], &msg);
+	if (bdata->byte_delay_us == 0) {
+		retval = synaptics_rmi4_spi_alloc_buf(rmi4_data, length,
+				2);
+	} else {
+		retval = synaptics_rmi4_spi_alloc_buf(rmi4_data, length,
+				byte_count);
+	}
+	if (retval < 0) {
+		mutex_unlock(&rmi4_data->rmi4_io_ctrl_mutex);
+		return retval;
 	}
 
-	if (bdata->block_delay_us)
-		xfers[index - 1].delay_usecs = bdata->block_delay_us;
+	if (bdata->byte_delay_us == 0) {
+		xfer[0].len = ADDRESS_LEN;
+		xfer[0].tx_buf = &txbuf[0];
+		spi_message_add_tail(&xfer[0], &msg);
+		xfer[1].len = length;
+		xfer[1].rx_buf = &buf[0];
+		if (bdata->block_delay_us)
+			xfer[1].delay_usecs = bdata->block_delay_us;
+		spi_message_add_tail(&xfer[1], &msg);
+	} else {
+		for (index = 0; index < byte_count; index++) {
+			xfer[index].len = 1;
+			if (index < ADDRESS_LEN)
+				xfer[index].tx_buf = &txbuf[index];
+			else
+				xfer[index].rx_buf = &buf[index - ADDRESS_LEN];
+			if (index == 1)
+				xfer[index].delay_usecs = bdata->addr_delay_us;
+			else
+				xfer[index].delay_usecs = bdata->byte_delay_us;
+			spi_message_add_tail(&xfer[index], &msg);
+		}
+		if (bdata->block_delay_us)
+			xfer[index - 1].delay_usecs = bdata->block_delay_us;
+	}
 
 	retval = spi_sync(spi, &msg);
 	if (retval == 0) {
-		retval = secure_memcpy(data, length, rxbuf, length, length);
+		retval = secure_memcpy(data, length, buf, length, length);
 		if (retval < 0) {
 			dev_err(rmi4_data->pdev->dev.parent,
 					"%s: Failed to copy data\n",
@@ -393,75 +466,73 @@ static int synaptics_rmi4_spi_read(struct synaptics_rmi4_data *rmi4_data,
 
 	mutex_unlock(&rmi4_data->rmi4_io_ctrl_mutex);
 
-exit:
-	kfree(rxbuf);
-	kfree(xfers);
-
 	return retval;
 }
 
 static int synaptics_rmi4_spi_write(struct synaptics_rmi4_data *rmi4_data,
-		unsigned short addr, unsigned char *data, unsigned short length)
+		unsigned short addr, unsigned char *data, unsigned int length)
 {
 	int retval;
 	unsigned int index;
-	unsigned int xfer_count = length + ADDRESS_WORD_LEN;
-	unsigned char *txbuf = NULL;
+	unsigned int byte_count = length + ADDRESS_LEN;
 	struct spi_message msg;
-	struct spi_transfer *xfers = NULL;
 	struct spi_device *spi = to_spi_device(rmi4_data->pdev->dev.parent);
 	const struct synaptics_dsx_board_data *bdata =
 			rmi4_data->hw_if->board_data;
 
 	spi_message_init(&msg);
 
-	xfers = kcalloc(xfer_count, sizeof(struct spi_transfer), GFP_KERNEL);
-	if (!xfers) {
-		dev_err(rmi4_data->pdev->dev.parent,
-				"%s: Failed to allocate memory for xfers\n",
-				__func__);
-		retval = -ENOMEM;
-		goto exit;
-	}
-
-	txbuf = kmalloc(xfer_count, GFP_KERNEL);
-	if (!txbuf) {
-		dev_err(rmi4_data->pdev->dev.parent,
-				"%s: Failed to allocate memory for txbuf\n",
-				__func__);
-		retval = -ENOMEM;
-		goto exit;
-	}
-
-	txbuf[0] = (addr >> 8) & ~SPI_READ;
-	txbuf[1] = addr & MASK_8BIT;
-	retval = secure_memcpy(&txbuf[ADDRESS_WORD_LEN],
-			xfer_count - ADDRESS_WORD_LEN, data, length, length);
-	if (retval < 0) {
-		dev_err(rmi4_data->pdev->dev.parent,
-				"%s: Failed to copy data\n",
-				__func__);
-		goto exit;
-	}
-
 	mutex_lock(&rmi4_data->rmi4_io_ctrl_mutex);
 
 	retval = synaptics_rmi4_spi_set_page(rmi4_data, addr);
 	if (retval != PAGE_SELECT_LEN) {
 		mutex_unlock(&rmi4_data->rmi4_io_ctrl_mutex);
-		retval = -EIO;
-		goto exit;
+		return -EIO;
 	}
 
-	for (index = 0; index < xfer_count; index++) {
-		xfers[index].len = 1;
-		xfers[index].delay_usecs = bdata->byte_delay_us;
-		xfers[index].tx_buf = &txbuf[index];
-		spi_message_add_tail(&xfers[index], &msg);
+	if (bdata->byte_delay_us == 0) {
+		retval = synaptics_rmi4_spi_alloc_buf(rmi4_data, byte_count,
+				1);
+	} else {
+		retval = synaptics_rmi4_spi_alloc_buf(rmi4_data, byte_count,
+				byte_count);
+	}
+	if (retval < 0) {
+		mutex_unlock(&rmi4_data->rmi4_io_ctrl_mutex);
+		return retval;
 	}
 
-	if (bdata->block_delay_us)
-		xfers[index - 1].delay_usecs = bdata->block_delay_us;
+	buf[0] = (addr >> 8) & ~SPI_READ;
+	buf[1] = addr & MASK_8BIT;
+	retval = secure_memcpy(&buf[ADDRESS_LEN],
+			byte_count - ADDRESS_LEN, data, length, length);
+	if (retval < 0) {
+		dev_err(rmi4_data->pdev->dev.parent,
+				"%s: Failed to copy data\n",
+				__func__);
+		mutex_unlock(&rmi4_data->rmi4_io_ctrl_mutex);
+		return retval;
+	}
+
+	if (bdata->byte_delay_us == 0) {
+		xfer[0].len = byte_count;
+		xfer[0].tx_buf = &buf[0];
+		if (bdata->block_delay_us)
+			xfer[0].delay_usecs = bdata->block_delay_us;
+		spi_message_add_tail(xfer, &msg);
+	} else {
+		for (index = 0; index < byte_count; index++) {
+			xfer[index].len = 1;
+			xfer[index].tx_buf = &buf[index];
+			if (index == 1)
+				xfer[index].delay_usecs = bdata->addr_delay_us;
+			else
+				xfer[index].delay_usecs = bdata->byte_delay_us;
+			spi_message_add_tail(&xfer[index], &msg);
+		}
+		if (bdata->block_delay_us)
+			xfer[index - 1].delay_usecs = bdata->block_delay_us;
+	}
 
 	retval = spi_sync(spi, &msg);
 	if (retval == 0) {
@@ -473,10 +544,6 @@ static int synaptics_rmi4_spi_write(struct synaptics_rmi4_data *rmi4_data,
 	}
 
 	mutex_unlock(&rmi4_data->rmi4_io_ctrl_mutex);
-
-exit:
-	kfree(txbuf);
-	kfree(xfers);
 
 	return retval;
 }
@@ -592,6 +659,12 @@ static int synaptics_rmi4_spi_remove(struct spi_device *spi)
 	return 0;
 }
 
+static const struct spi_device_id synaptics_rmi4_id_table[] = {
+	{SPI_DRIVER_NAME, 0},
+	{},
+};
+MODULE_DEVICE_TABLE(spi, synaptics_rmi4_id_table);
+
 #ifdef CONFIG_OF
 static struct of_device_id synaptics_rmi4_of_match_table[] = {
 	{
@@ -612,22 +685,27 @@ static struct spi_driver synaptics_rmi4_spi_driver = {
 	},
 	.probe = synaptics_rmi4_spi_probe,
 	.remove = synaptics_rmi4_spi_remove,
+	.id_table = synaptics_rmi4_id_table,
 };
 
 
-int synaptics_rmi4_bus_init_v26(void)
+int synaptics_rmi4_bus_init(void)
 {
 	return spi_register_driver(&synaptics_rmi4_spi_driver);
 }
-EXPORT_SYMBOL(synaptics_rmi4_bus_init_v26);
+EXPORT_SYMBOL(synaptics_rmi4_bus_init);
 
-void synaptics_rmi4_bus_exit_v26(void)
+void synaptics_rmi4_bus_exit(void)
 {
+	kfree(buf);
+
+	kfree(xfer);
+
 	spi_unregister_driver(&synaptics_rmi4_spi_driver);
 
 	return;
 }
-EXPORT_SYMBOL(synaptics_rmi4_bus_exit_v26);
+EXPORT_SYMBOL(synaptics_rmi4_bus_exit);
 
 MODULE_AUTHOR("Synaptics, Inc.");
 MODULE_DESCRIPTION("Synaptics DSX SPI Bus Support Module");

@@ -582,17 +582,13 @@ static struct cyttsp5_core_platform_data *create_and_get_core_pdata(
 	pdata->TP_3V3_EN_gpio = of_get_named_gpio(core_node, "cy,TP_3V3_EN_gpio", 0);
 	if (pdata->TP_3V3_EN_gpio < 0) {
 		pdata->TP_3V3_EN_gpio = -1;
-		rc = -EIO;
 		pr_err("%s: no TP_3V3_EN_gpio", __func__);
-		goto fail;
 	}
 
 	pdata->TP_1V8_EN_gpio = of_get_named_gpio(core_node, "cy,TP_1V8_EN_gpio", 0);
 	if (pdata->TP_1V8_EN_gpio < 0) {
 		pdata->TP_1V8_EN_gpio = -1;
-		rc = -EIO;
 		pr_err("%s: no TP_1V8_EN_gpio", __func__);
-		goto fail;
 	}
 	/*pdata->TP_1V8_EN_gpio = -1;
 	rc = of_property_read_u32(core_node, "cy,TP_1V8_EN_gpio", &value);
@@ -603,9 +599,7 @@ static struct cyttsp5_core_platform_data *create_and_get_core_pdata(
 	pdata->TP_I2C_SEL_CPU_gpio = of_get_named_gpio(core_node, "cy,TP_I2C_SEL_CPU_gpio", 0);
 	if (pdata->TP_I2C_SEL_CPU_gpio < 0) {
 		pdata->TP_I2C_SEL_CPU_gpio = -1;
-		rc = -EIO;
 		pr_err("%s: no TP_I2C_SEL_CPU_gpio", __func__);
-		goto fail;
 	}
 	/*pdata->TP_I2C_SEL_CPU_gpio = -1;
 	rc = of_property_read_u32(core_node, "cy,TP_I2C_SEL_CPU_gpio", &value);

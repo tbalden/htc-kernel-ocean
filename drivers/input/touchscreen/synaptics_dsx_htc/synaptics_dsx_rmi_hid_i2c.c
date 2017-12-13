@@ -1,7 +1,7 @@
 /*
  * Synaptics DSX touchscreen driver
  *
- * Copyright (C) 2012-2015 Synaptics Incorporated. All rights reserved.
+ * Copyright (C) 2012-2016 Synaptics Incorporated. All rights reserved.
  *
  * Copyright (C) 2012 Alexandra Chin <alexandra.chin@tw.synaptics.com>
  * Copyright (C) 2012 Scott Lin <scott.lin@tw.synaptics.com>
@@ -42,7 +42,7 @@
 #include <linux/types.h>
 #include <linux/of_gpio.h>
 #include <linux/platform_device.h>
-#include <linux/input/synaptics_dsx_v2_6.h>
+#include <linux/input/synaptics_dsx_htc.h>
 #include "synaptics_dsx_core.h"
 
 #define SYN_I2C_RETRY_TIMES 10
@@ -113,8 +113,8 @@ static struct hid_device_descriptor hid_dd;
 struct i2c_rw_buffer {
 	unsigned char *read;
 	unsigned char *write;
-	unsigned short read_size;
-	unsigned short write_size;
+	unsigned int read_size;
+	unsigned int write_size;
 };
 
 static struct i2c_rw_buffer buffer;
@@ -348,8 +348,8 @@ static int do_i2c_transfer(struct i2c_client *client, struct i2c_msg *msg)
 	return 0;
 }
 
-static int check_buffer(unsigned char **buffer, unsigned short *buffer_size,
-		unsigned short length)
+static int check_buffer(unsigned char **buffer, unsigned int *buffer_size,
+		unsigned int length)
 {
 	if (*buffer_size < length) {
 		if (*buffer_size)
@@ -696,7 +696,7 @@ exit:
 }
 
 static int synaptics_rmi4_i2c_read(struct synaptics_rmi4_data *rmi4_data,
-		unsigned short addr, unsigned char *data, unsigned short length)
+		unsigned short addr, unsigned char *data, unsigned int length)
 {
 	int retval;
 	unsigned char retry;
@@ -712,7 +712,7 @@ static int synaptics_rmi4_i2c_read(struct synaptics_rmi4_data *rmi4_data,
 		{
 			.addr = i2c->addr,
 			.flags = I2C_M_RD,
-			.len = length + 4,
+			.len = (unsigned short)(length + 4),
 		},
 	};
 
@@ -730,8 +730,8 @@ recover:
 	buffer.write[5] = 0x00;
 	buffer.write[6] = addr & MASK_8BIT;
 	buffer.write[7] = addr >> 8;
-	buffer.write[8] = length & MASK_8BIT;
-	buffer.write[9] = length >> 8;
+	buffer.write[8] = (unsigned char)length;
+	buffer.write[9] = (unsigned char)(length >> 8);
 
 	check_buffer(&buffer.read, &buffer.read_size, length + 4);
 	msg[1].buf = buffer.read;
@@ -788,11 +788,11 @@ exit:
 }
 
 static int synaptics_rmi4_i2c_write(struct synaptics_rmi4_data *rmi4_data,
-		unsigned short addr, unsigned char *data, unsigned short length)
+		unsigned short addr, unsigned char *data, unsigned int length)
 {
 	int retval;
 	unsigned char recover = 1;
-	unsigned char msg_length;
+	unsigned int msg_length;
 	struct i2c_client *i2c = to_i2c_client(rmi4_data->pdev->dev.parent);
 	struct i2c_msg msg[] = {
 		{
@@ -810,7 +810,7 @@ recover:
 	mutex_lock(&rmi4_data->rmi4_io_ctrl_mutex);
 
 	check_buffer(&buffer.write, &buffer.write_size, msg_length);
-	msg[0].len = msg_length;
+	msg[0].len = (unsigned short)msg_length;
 	msg[0].buf = buffer.write;
 	buffer.write[0] = hid_dd.output_register_index & MASK_8BIT;
 	buffer.write[1] = hid_dd.output_register_index >> 8;
@@ -820,8 +820,8 @@ recover:
 	buffer.write[5] = 0x00;
 	buffer.write[6] = addr & MASK_8BIT;
 	buffer.write[7] = addr >> 8;
-	buffer.write[8] = length & MASK_8BIT;
-	buffer.write[9] = length >> 8;
+	buffer.write[8] = (unsigned char)length;
+	buffer.write[9] = (unsigned char)(length >> 8);
 	retval = secure_memcpy(&buffer.write[10], buffer.write_size - 10,
 			&data[0], length, length);
 	if (retval < 0) {
@@ -987,19 +987,19 @@ static struct i2c_driver synaptics_rmi4_i2c_driver = {
 	.id_table = synaptics_rmi4_id_table,
 };
 
-int synaptics_rmi4_bus_init_v26(void)
+int synaptics_rmi4_bus_init(void)
 {
 	return i2c_add_driver(&synaptics_rmi4_i2c_driver);
 }
-EXPORT_SYMBOL(synaptics_rmi4_bus_init_v26);
+EXPORT_SYMBOL(synaptics_rmi4_bus_init);
 
-void synaptics_rmi4_bus_exit_v26(void)
+void synaptics_rmi4_bus_exit(void)
 {
 	i2c_del_driver(&synaptics_rmi4_i2c_driver);
 
 	return;
 }
-EXPORT_SYMBOL(synaptics_rmi4_bus_exit_v26);
+EXPORT_SYMBOL(synaptics_rmi4_bus_exit);
 
 MODULE_AUTHOR("Synaptics, Inc.");
 MODULE_DESCRIPTION("Synaptics DSX I2C Bus Support Module");

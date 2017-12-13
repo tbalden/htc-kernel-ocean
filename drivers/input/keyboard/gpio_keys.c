@@ -3,8 +3,8 @@
  *
  * Copyright 2005 Phil Blundell
  * Copyright 2010, 2011 David Jander <david@protonic.nl>
- * Copyright (c) 2015, The Linux Foundation. All rights reserved.
  * Copyright (C) 2014-2017 HTC Corporation. All rights reserved.
+ * Copyright (c) 2015, 2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -63,11 +63,6 @@ struct gpio_button_data {
 	bool prev_gpio_level;
 };
 
-static struct device *global_dev;
-static struct syscore_ops gpio_keys_syscore_pm_ops;
-
-static void gpio_keys_syscore_resume(void);
-
 struct gpio_keys_drvdata {
 	const struct gpio_keys_platform_data *pdata;
 	struct pinctrl *key_pinctrl;
@@ -78,6 +73,11 @@ struct gpio_keys_drvdata {
 	unsigned char set_wakeup;
 	struct gpio_button_data data[0];
 };
+
+static struct device *global_dev;
+static struct syscore_ops gpio_keys_syscore_pm_ops;
+
+static void gpio_keys_syscore_resume(void);
 
 static unsigned int vol_up_irq;
 static unsigned int vol_down_irq;
@@ -436,14 +436,13 @@ static void gpio_keys_gpio_report_event(struct gpio_button_data *bdata, bool deb
 	const struct gpio_keys_button *button = bdata->button;
 	struct input_dev *input = bdata->input;
 	unsigned int type = button->type ?: EV_KEY;
-	int state = gpio_get_value_cansleep(button->gpio);
+	int state;
 
+	state = (__gpio_get_value(button->gpio) ? 1 : 0) ^ button->active_low;
 	if (state < 0) {
 		dev_err(input->dev.parent, "failed to get gpio state\n");
 		return;
 	}
-
-	state = (state ? 1 : 0) ^ button->active_low;
 
 	if (type == EV_ABS) {
 		if (state) {
@@ -695,6 +694,8 @@ static int gpio_keys_setup_key(struct platform_device *pdev,
 
 		isr = gpio_keys_gpio_isr;
 		irqflags = IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING;
+		if (button->wakeup)
+			irqflags |= IRQF_NO_SUSPEND;
 
 	} else {
 		if (!button->irq) {

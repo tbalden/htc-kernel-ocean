@@ -96,6 +96,7 @@ static void himax_int_enable_cap(int irqnum, int enable, int logprint);
 static void himax_rst_gpio_set_cap(int pinnum, uint8_t value);
 static int8_t himax_int_gpio_read_cap(int pinnum);
 static int hx_sensitivity_setup(struct himax_ts_data *cs, uint8_t level);
+static void hx_sensor_on(bool enable);
 
 #ifdef CONFIG_OF
 MODULE_DEVICE_TABLE(of, himax_match_table);
@@ -1143,12 +1144,17 @@ doFirmwareUpdate_Retry:
 	wake_unlock(&flash_wake_lock);
 	wake_lock_destroy(&flash_wake_lock);
 	atomic_set(&ts->in_flash, 0);
+
+	hx_sensor_on(false);
+	I("%s: himax read CAP info\n", __func__);
+	himax_read_TP_info(private_ts->client);
+	hx_sensor_on(true);
+
 	if(ts->use_irq)
 		himax_int_enable_cap(private_ts->client->irq, 1, true);
 	else
 		hrtimer_start(&ts->timer, ktime_set(1, 0), HRTIMER_MODE_REL);
 
-	himax_read_TP_info(private_ts->client);
 	I("[FW] firmware flash process complete!\n");
 #ifdef CONFIG_TOUCHSCREEN_HIMAX_CAPSENSOR_FW_UPDATE
 	touch_fw_update_progress(100);
@@ -1164,8 +1170,12 @@ WAKE_LOCK_ACQUIRE_FAILED:
 	atomic_set(&ts->in_flash, 0);
 HMX_FW_SAME_VER_IGNORE:
 HMX_FW_TAG_FORMAT_WRONG:
+	I("%s: HMX_FW_SAME_VER_IGNORE/HMX_FW_TAG_FORMAT_WRONG, do himax sesnor on\n", __func__);
+	hx_sensor_on(true);
 	return 1;	/* Bypass */
 HMX_FW_REQUEST_FAILURE:
+	I("%s: HMX_FW_REQUEST_FAILURE, do himax sesnor on\n", __func__);
+	hx_sensor_on(true);
 	return -1;	/* Fail */
 }
 
@@ -1192,8 +1202,12 @@ static void updateFirmware(struct work_struct *work)
 		}
 	}
 
-	if (ret == 0)
-		ret = himax_touch_fw_update_cap((struct firmware *)ts->fw);
+	if (ret == 0) {
+		himax_touch_fw_update_cap((struct firmware *)ts->fw);
+	} else {
+		I("%s: NO enter update FW,  himax sesnor on\n", __func__);
+		hx_sensor_on(true);
+	}
 }
 
 #ifdef CONFIG_TOUCHSCREEN_HIMAX_CAPSENSOR_FW_UPDATE
@@ -1484,22 +1498,13 @@ static int himax_power_on_initCMD(struct i2c_client *client)
 	I("%s:\n", __func__);
 retry_power_init:
 	//Sense on to update the information
-	i2c_himax_write_command(client, 0x83, DEFAULT_RETRY_CNT);
-	msleep(30);
-	i2c_himax_write_command(client, 0x81, DEFAULT_RETRY_CNT);
-	msleep(50);
-	i2c_himax_write_command(client, 0x82, DEFAULT_RETRY_CNT);
-	msleep(50);
-	i2c_himax_write_command(client, 0x80, DEFAULT_RETRY_CNT);
-	msleep(50);
+	hx_sensor_on(true);
+	hx_sensor_on(false);
 	himax_touch_information_cap();
-	i2c_himax_write_command(client, 0x83, DEFAULT_RETRY_CNT);
-	msleep(30);
-	i2c_himax_write_command(client, 0x81, DEFAULT_RETRY_CNT);
-	msleep(50);
-
 	//Check R36 to check IC Status
 	i2c_himax_read(client, 0x36, data, 2, 10);
+
+	//Check R36 to check IC Status
 	if(data[0] != 0x0F || data[1] != 0x53) {
 		//IC is abnormal
 		E("[HimaxError] %s R36 Fail : R36[0]=%d, R36[1]=%d\n", __func__, data[0], data[1]);
@@ -1905,14 +1910,11 @@ do_reset_again:
 	}
 
 	I("%s: Now reset the Touch chip.\n", __func__);
+
 	himax_rst_gpio_set_cap(cs->rst_gpio, 0);
 	msleep(20);
 	himax_rst_gpio_set_cap(cs->rst_gpio, 1);
 	msleep(20);
-	if (cs->cap_glove_mode_status)
-		hx_sensitivity_setup(cs, CS_SENS_HIGH);
-	else if (cs->cap_glove_mode_status == 0)
-		hx_sensitivity_setup(cs, CS_SENS_DEFAULT);
 
 	if (doPowerInit && (himax_power_on_initCMD(cs->client) < 0)) {
 		I("%s: \n", __func__);
@@ -1966,6 +1968,8 @@ static u8 himax_read_FW_ver(bool hw_reset)
 
 #ifdef HX_RST_PIN_FUNC
 	himax_HW_reset_cap(true, false);
+	hx_sensor_on(false);
+	hx_sensor_on(true);
 #else
 	if (ts->use_irq)
 		himax_int_enable_cap(private_ts->client->irq, 1);
@@ -2114,6 +2118,12 @@ void ESD_HW_REST_cap(void)
 		else
 			break;
 	}
+
+	i2c_himax_write_command(private_ts->client, 0x83, DEFAULT_RETRY_CNT);
+	mdelay(30);
+	i2c_himax_write_command(private_ts->client, 0x81, DEFAULT_RETRY_CNT);
+	mdelay(50);
+	himax_int_enable_cap(private_ts->client->irq, 1, true);
 	I("END_Himax TP: ESD - Reset\n");
 }
 #endif
@@ -2497,12 +2507,12 @@ else/*tp_key_index =0x00*/
 static void recal_work_func(struct work_struct *work)
 {
 	himax_int_enable_cap(private_ts->client->irq,0,true);
-	himax_HW_reset_cap(false, true);
+	himax_HW_reset_cap(true, true);
 	private_ts->K_counter = 0;
 	//set chip to active mode
-	i2c_himax_write_command(private_ts->client, HX_CMD_TSSON, DEFAULT_RETRY_CNT);
+	i2c_himax_write_command(private_ts->client, 0x83, DEFAULT_RETRY_CNT);
 	mdelay(30);
-	i2c_himax_write_command(private_ts->client, HX_CMD_TSSLPOUT, DEFAULT_RETRY_CNT);
+	i2c_himax_write_command(private_ts->client, 0x81, DEFAULT_RETRY_CNT);
 	mdelay(50);
 	himax_int_enable_cap(private_ts->client->irq, 1, true);
 }
@@ -2569,11 +2579,13 @@ inline void himax_ts_work_cap(struct himax_ts_data *ts)
 	int j = 0;
 #endif
 	unsigned long irqflags = 0;
+	uint16_t mutual_num, width;
+	//initial alwayls K WA 's parameters
 	struct timespec now;
+	memset(&now, 0x00, sizeof(now));
 
 	memset(buf, 0x00, sizeof(buf));
 	memset(hw_reset_check, 0x00, sizeof(hw_reset_check));
-	memset(&now, 0x00, sizeof(now));
 
 #ifdef HX_CHIP_STATUS_MONITOR
 	HX_CHIP_POLLING_COUNT = 0;
@@ -2660,15 +2672,39 @@ inline void himax_ts_work_cap(struct himax_ts_data *ts)
 				goto err_workqueue_out;
 			}
 
+			if (ts->suspended) {
+				I("In suspend mode, ESD event checked - ALL Zero no need to do reset\n");
+				return;
+			}
+			getnstimeofday(&now);
 			if ((ret == 1) && (check_sum_cal == 1)) {
-				I("[HIMAX TP MSG]: ESD event checked - ALL Zero.\n");
-				ESD_HW_REST_cap();
+				if ((now.tv_sec - ts->ESD_time_start.tv_sec) > 2 ) {
+					ts->ESD_counter = 0;
+					ts->ESD_time_start.tv_sec = now.tv_sec;
+				} else
+					ts->ESD_counter++;
+
+				I("[HIMAX TP MSG]: ESD event checked - ALL Zero. %u\n", ts->ESD_counter);
+				if (ts->ESD_counter >= 4) {
+					himax_int_enable_cap(ts->client->irq, 0, true);
+					ESD_HW_REST_cap();
+					ts->ESD_counter = 0;
+				}
 			} else if (check_sum_cal == 2) {
-				I("[HIMAX TP MSG]: ESD event checked - ALL 0xED.\n");
-				ESD_HW_REST_cap();
+				if ((now.tv_sec - ts->ESD_time_start.tv_sec) > 2 ) {
+					ts->ESD_counter = 0;
+					ts->ESD_time_start.tv_sec = now.tv_sec;
+				} else
+					ts->ESD_counter++;
+
+				I("[HIMAX TP MSG]: ESD event checked - ALL 0xED. %u\n", ts->ESD_counter);
+				if (ts->ESD_counter >= 4) {
+					himax_int_enable_cap(ts->client->irq, 0, true);
+					ESD_HW_REST_cap();
+					ts->ESD_counter = 0;
+				}
 			}
 
-			//himax_int_enable(ts->client->irq,1);
 			return;
 		} else if (ESD_RESET_ACTIVATE) {
 			ESD_RESET_ACTIVATE = 0;/*drop 1st interrupts after chip reset*/
@@ -2819,15 +2855,18 @@ bypass_checksum_failed_packet:
 		/* Check which key status has been changed, then report this change event */
 		if ((!((vkey_previous[0] ^ vkey_status) & BIT(0)) && !((vkey_previous[1] ^ vkey_status) & BIT(1)))) {
 			/* get system time, WA for cap always K issue */
-			getnstimeofday(&now);
-			if((now.tv_sec - ts->time_start.tv_sec) > 2 ) {
-				ts->K_counter = 0;
-				ts->time_start.tv_sec = now.tv_sec;
-			} else
-				ts->K_counter++;
-			if (ts->K_counter >= 4) {
-				I("All Finger leave, K counter %u\n", ts->K_counter);
-				queue_work(private_ts->recal_work_wq, &private_ts->recal_work);
+			if (ts->pdata->always_K_WA) {
+				getnstimeofday(&now);
+				if((now.tv_sec - ts->time_start.tv_sec) > 2 ) {
+					ts->K_counter = 0;
+					ts->time_start.tv_sec = now.tv_sec;
+				} else
+					ts->K_counter++;
+				if (ts->K_counter >= 4) {
+					I("All Finger leave, K counter %u\n", ts->K_counter);
+					queue_work(private_ts->recal_work_wq, &private_ts->recal_work);
+				} else
+					I("All Finger leave, K counter %u\n", ts->K_counter);
 			} else
 				I("All Finger leave, K counter %u\n", ts->K_counter);
 			return;
@@ -2885,6 +2924,18 @@ bypass_checksum_failed_packet:
 				I_TIME("KEY_APPSELECT queue work");
 			} else {
 				I_TIME("KEY_APPSELECT Pressed");
+
+				// start to show out the raw data in adb shell
+				if (diag_command >= 1 && diag_command <= 6) {
+					if (diag_command <= 3) {
+						mutual_num	= x_channel * y_channel;
+						self_num	= x_channel + y_channel; //don't add KEY_COUNT
+						width		= x_channel;
+						I("ChannelStart: %4d, %4d\n", x_channel, y_channel);
+						I(" %4d %4d %3d\n", diag_mutual[0], diag_mutual[1], diag_self[width + 1/width]);
+						I(" %4d %4d\n", diag_self[0], diag_self[1]);
+					}
+				}
 				input_report_key(ts->input_dev,	vkey_code[1], 1);
 				input_sync(ts->input_dev);
 			}
@@ -2899,6 +2950,18 @@ bypass_checksum_failed_packet:
 				I_TIME("KEY_BACK queue work");
 			} else {
 				I_TIME("KEY_BACK Pressed");
+
+				// start to show out the raw data in adb shell
+				if (diag_command >= 1 && diag_command <= 6) {
+					if (diag_command <= 3) {
+						mutual_num	= x_channel * y_channel;
+						self_num	= x_channel + y_channel; //don't add KEY_COUNT
+						width		= x_channel;
+						I("ChannelStart: %4d, %4d\n", x_channel, y_channel);
+						I(" %4d %4d %3d\n", diag_mutual[0], diag_mutual[1], diag_self[width + 1/width]);
+						I(" %4d %4d\n", diag_self[0], diag_self[1]);
+					}
+				}
 				input_report_key(ts->input_dev,	vkey_code[0], 1);
 				input_sync(ts->input_dev);
 			}
@@ -3245,6 +3308,11 @@ err_workqueue_out:
 
 #ifdef HX_RST_PIN_FUNC
 	himax_HW_reset_cap(true, false);
+	I("%s: himax sesnor on\n", __func__);
+	i2c_himax_write_command(private_ts->client, 0x83, DEFAULT_RETRY_CNT);
+	msleep(30);
+	i2c_himax_write_command(private_ts->client, 0x81, DEFAULT_RETRY_CNT);
+	msleep(50);
 #endif
 
 	goto workqueue_out;
@@ -3470,17 +3538,44 @@ EXPORT_SYMBOL_GPL(proximity_enable_from_ps);
 //=============================================================================================================
 #if defined(CONFIG_TOUCHSCREEN_HIMAX_DEBUG_CAP)
 #if defined(HTC_FEATURE)
+static void hx_sensor_on(bool enable) {
+	if(enable && !(atomic_read(&private_ts->sensing_status))) {
+		I("%s: ON\n", __func__);
+		i2c_himax_write_command(private_ts->client, HX_CMD_TSSON, DEFAULT_RETRY_CNT);
+		msleep(30);
+		i2c_himax_write_command(private_ts->client, HX_CMD_TSSLPOUT, DEFAULT_RETRY_CNT);
+		msleep(50);
+		atomic_set(&private_ts->sensing_status, 1);
+	} else if((enable == false) && atomic_read(&private_ts->sensing_status)) {
+		I("%s: OFF\n", __func__);
+		i2c_himax_write_command(private_ts->client, HX_CMD_TSSOFF, DEFAULT_RETRY_CNT);
+		msleep(50);
+		i2c_himax_write_command(private_ts->client, HX_CMD_TSSLPIN, DEFAULT_RETRY_CNT);
+		msleep(50);
+		atomic_set(&private_ts->sensing_status, 0);
+	} else
+		I("%s: set sensing status fault! sesnor status %d\n", __func__, atomic_read(&private_ts->sensing_status));
+}
 
 static int hx_sensitivity_setup(struct himax_ts_data *cs, uint8_t level)
 {
 	uint8_t i;
+	bool tmpStatus = false;
 	int err = 0;
 
 	D("%s: %x\n", __func__, level);
+	if (atomic_read(&private_ts->sensing_status)) {
+		I("%s: sensor already on, switch to off\n", __func__);
+		hx_sensor_on(false);
+		tmpStatus = true;
+	}
 
 	err = i2c_himax_write(cs->client, CS_SENSITIVITY_START_REG, &level, 1, DEFAULT_RETRY_CNT);
 	if (err < 0)
 		E("%s: I2C write fail. err %d, addr: 0x%02X.\n", __func__, err, i);
+
+	if (tmpStatus)
+		hx_sensor_on(true);
 
 	return err;
 }
@@ -3563,15 +3658,12 @@ static ssize_t hx_glove_setting_store(struct device *dev, struct device_attribut
 	}
 
 	if (input == 1) {
-		hx_sensitivity_setup(cs, CS_SENS_HIGH);
 		cs->cap_glove_mode_status = 1;
 	} else if (input == 0) {
-		if (cs->cap_hall_s_pole_status == HALL_FAR)
-			hx_sensitivity_setup(cs, CS_SENS_DEFAULT);
 		cs->cap_glove_mode_status = 0;
 	}
 
-	I("%s: glove_setting change to %d\n", __func__, cs->cap_glove_mode_status);
+	I("%s: glove_setting status change to %d\n", __func__, cs->cap_glove_mode_status);
 
 	return count;
 }
@@ -4208,11 +4300,8 @@ static ssize_t himax_reset_set(struct device *dev, struct device_attribute *attr
 {
 	if (buf[0] == '1') {
 		himax_int_enable_cap(private_ts->client->irq, 0, true);
-		himax_HW_reset_cap(false, true);
-		i2c_himax_write_command(private_ts->client, HX_CMD_TSSON, DEFAULT_RETRY_CNT);
-		msleep(30);
-		i2c_himax_write_command(private_ts->client, HX_CMD_TSSLPOUT, DEFAULT_RETRY_CNT);
-		msleep(50);
+		himax_HW_reset_cap(true, true);
+		hx_sensor_on(true);
 		himax_int_enable_cap(private_ts->client->irq, 1, true);
 	}
 
@@ -4390,7 +4479,10 @@ firmware_upgrade_done:
 #ifdef HX_RST_PIN_FUNC
 	himax_HW_reset_cap(true, false);
 #endif
+	hx_sensor_on(false);
+	I("%s: himax read CAP info\n", __func__);
 	himax_read_TP_info(private_ts->client);
+	hx_sensor_on(true);
 
 	himax_int_enable_cap(private_ts->client->irq, 1, true);
 #ifdef HX_CHIP_STATUS_MONITOR
@@ -7322,10 +7414,12 @@ static int himax_touch_sysfs_init(void)
 		return ret;
 	}
 
-	ret = sysfs_create_file(android_touch_kobj, &dev_attr_glove_setting.attr);
-	if (ret) {
-		E("%s: sysfs_create_file dev_attr_glove_setting failed\n", __func__);
-		return ret;
+	if (private_ts->pdata->glove_mode_en)  {
+		ret = sysfs_create_file(android_touch_kobj, &dev_attr_glove_setting.attr);
+		if (ret) {
+			E("%s: sysfs_create_file dev_attr_glove_setting failed\n", __func__);
+			return ret;
+		}
 	}
 
 	return 0 ;
@@ -7682,37 +7776,58 @@ static int himax_parse_dt(struct himax_ts_data *ts,
 	rc = of_property_read_u32_array(dt, "himax,display-coords", coords, coords_size);
 	if (rc && (rc != -EINVAL)) {
 		D(" %s:Fail to read display-coords %d\n", __func__, rc);
-		return rc;
 	}
 	pdata->screenWidth  = coords[1];
 	pdata->screenHeight = coords[3];
 	I(" DT-%s:display-coords = (%d, %d)\n", __func__, pdata->screenWidth,
 		pdata->screenHeight);
 
+	if (of_property_read_bool(dt, "himax,en-gpio")) {
+		pdata->gpio_en = of_get_named_gpio_flags(dt, "himax,en-gpio", 0, NULL);
+		rc = gpio_request_one(pdata->gpio_en, GPIOF_OUT_INIT_HIGH, "himax-en_cap");
+		if (rc < 0) {
+			I("%s: request en pin failed, pin status: %d\n", __func__, gpio_get_value(pdata->gpio_en));
+			pdata->gpio_en = 0;
+		} else {
+			gpio_set_value(pdata->gpio_en, 1);
+			I("%s: en gpio direction output %d\n", __func__, gpio_get_value(pdata->gpio_en));
+		}
+	} else {
+		pdata->gpio_en = 0;
+		I("%s: no gpio_en value\n", __func__);
+	}
+
 	if (of_property_read_bool(dt, "himax,irq-gpio")) {
 		pdata->gpio_irq = of_get_named_gpio_flags(dt, "himax,irq-gpio", 0, NULL);
+		rc = gpio_request(pdata->gpio_irq, "himax_gpio_irq_cap");
+		if (rc < 0) {
+			E("unable to request gpio [%d]\n", pdata->gpio_irq);
+		} else {
+			I("%s: request himax,irq-gpio success\n", __func__);
+		}
 	} else {
 		I(" DT:gpio_irq value is not valid\n");
-		pdata->gpio_irq = -1;
+		pdata->gpio_irq = 0;
 	}
 
 	if (of_property_read_bool(dt, "himax,rst-gpio")) {
 		pdata->gpio_reset = of_get_named_gpio_flags(dt, "himax,rst-gpio", 0, NULL);
+		rc = gpio_request_one(pdata->gpio_reset, GPIOF_OUT_INIT_HIGH, "himax-reset_cap");
+		if (rc < 0) {
+			E("%s: request reset pin failed\n", __func__);
+		} else {
+			gpio_set_value(pdata->gpio_reset, 1);
+			I("%s: reset gpio direction output %d\n", __func__, gpio_get_value(pdata->gpio_reset));
+			// HW Reset, vendor said it needs low 20ms,then high 20ms
+			himax_rst_gpio_set_cap(pdata->gpio_reset, 0);
+			msleep(20);
+			himax_rst_gpio_set_cap(pdata->gpio_reset, 1);
+			msleep(20);
+			I("himax reset over\n");
+		}
 	} else {
 		I(" DT:gpio_reset value is not valid\n");
-		pdata->gpio_reset = -1;
-	}
-
-	if (of_property_read_u32(dt, "himax,1v8-gpio", &data) == 0) {
-		pdata->gpio_1v8_en = (data);
-		if (!gpio_is_valid(pdata->gpio_1v8_en))
-			I(" DT:gpio_1v8_en value is not valid\n");
-	}
-
-	if (of_property_read_u32(dt, "himax,3v3-gpio", &data) == 0) {
-		pdata->gpio_3v3_en = (data);
-		if (!gpio_is_valid(pdata->gpio_3v3_en))
-			I(" DT:gpio_3v3_en value is not valid\n");
+		pdata->gpio_reset = 0;
 	}
 
 	if (of_property_read_u32(dt, "himax,SW_timer_debounce", &data) == 0) {
@@ -7722,12 +7837,41 @@ static int himax_parse_dt(struct himax_ts_data *ts,
 	} else
 		pdata->SW_timer_debounce = 0;
 
-	I(" DT:gpio_irq=%d, gpio_rst=%d, gpio_3v3_en=%d, gpio_1v8_en=%d, SW_timer_debounce=%d\n",
-		pdata->gpio_irq, pdata->gpio_reset, pdata->gpio_3v3_en, pdata->gpio_1v8_en, pdata->SW_timer_debounce);
+	if (of_property_read_u32(dt, "himax,wake-up-reset", &data) == 0) {
+		pdata->wake_up_reset = data;
+		if (!gpio_is_valid(pdata->wake_up_reset))
+			I(" DT:wake_up_reset value is not valid\n");
+	} else
+		pdata->wake_up_reset = 0;
+
+	if (of_property_read_u32(dt, "himax,glove-mode", &data) == 0) {
+		pdata->glove_mode_en = data;
+		if (!gpio_is_valid(pdata->glove_mode_en))
+			I(" DT:glove_mode_en value is not valid\n");
+	} else
+		pdata->glove_mode_en = 0;
+
+	if (of_property_read_u32(dt, "himax,always-K-WA", &data) == 0) {
+		pdata->always_K_WA = data;
+		if (!gpio_is_valid(pdata->always_K_WA))
+			I(" DT:glove_mode_en value is not valid\n");
+	} else
+		pdata->always_K_WA = 0;
+
+	I(" DT:gpio_irq=%d, gpio_rst=%d, gpio_en=%d, SW_timer_debounce=%d,  wake_up_reset=%d, glove_mode_en=%d\n",
+		pdata->gpio_irq, pdata->gpio_reset, pdata->gpio_en, pdata->SW_timer_debounce, pdata->wake_up_reset, pdata->glove_mode_en);
 
 	if (of_property_read_u32(dt, "report_type", &data) == 0) {
 		pdata->protocol_type = data;
 		I(" DT:protocol_type=%d\n", pdata->protocol_type);
+	}
+
+	if (of_property_read_u32(dt, "irq-on-state", &data) == 0) {
+		pdata->irq_on_state = data;
+		I(" DT:irq-on-state=%d\n", pdata->irq_on_state);
+	} else {
+		pdata->irq_on_state = 0;
+		I("No DT:irq-on-state=%d\n", pdata->irq_on_state);
 	}
 
 #if defined(CONFIG_TOUCHSCREEN_PROXIMITY_CAP)
@@ -7765,68 +7909,52 @@ static int8_t himax_int_gpio_read_cap(int pinnum)
 	return gpio_get_value(pinnum);
 }
 
-static int himax_gpio_config_cap(struct i2c_client *client, struct himax_i2c_platform_data *pdata)
+static int himax_pinctrl_init(struct himax_ts_data *cs)
 {
-	int error = 0;
-	// TODO Interrupt / Reset Pin Setup
-	if (gpio_is_valid(pdata->gpio_irq)) {
-		// configure touchscreen irq gpio
-		error = gpio_request(pdata->gpio_irq, "himax_gpio_irq_cap");
-		if (error) {
-			E("unable to request gpio [%d]\n", pdata->gpio_irq);
-			return error;
-		}
-		//Himax: SET Interrupt GPIO, no setting PULL LOW or PULL HIGH
-	} else {
-		E("irq gpio not provided\n");
-		return error;
+	int retval;
+
+	/* Get pinctrl if target uses pinctrl */
+	cs->pinctrl = devm_pinctrl_get(cs->dev);
+	if (IS_ERR_OR_NULL(cs->pinctrl)) {
+		retval = PTR_ERR(cs->pinctrl);
+		D("Target does not use pinctrl %d\n", retval);
+		goto err_pinctrl_get;
 	}
 
-	if (gpio_is_valid(pdata->gpio_reset)) {
-		error = gpio_request(pdata->gpio_reset, "himax-reset_cap");
-		if (error < 0) {
-			E("%s: request reset pin failed\n", __func__);
-			return error;
-		}
+	cs->pinctrl_state_active
+		= pinctrl_lookup_state(cs->pinctrl, "pmx_cs_active");
+	if (IS_ERR_OR_NULL(cs->pinctrl_state_active)) {
+		retval = PTR_ERR(cs->pinctrl_state_active);
+		D("Can not lookup %s pinstate %d\n",
+			PINCTRL_STATE_ACTIVE, retval);
+		goto err_pinctrl_lookup;
 	}
-	// HW Reset, vendor said it needs low 20ms,then high 20ms
-	himax_rst_gpio_set_cap(pdata->gpio_reset, 0);
-	msleep(20);
-	himax_rst_gpio_set_cap(pdata->gpio_reset, 1);
-	msleep(20);
 
-	I("himax reset over\n");
+	cs->pinctrl_state_suspend
+		= pinctrl_lookup_state(cs->pinctrl, "pmx_cs_suspend");
+	if (IS_ERR_OR_NULL(cs->pinctrl_state_suspend)) {
+		retval = PTR_ERR(cs->pinctrl_state_suspend);
+		D("Can not lookup %s pinstate %d\n",
+			PINCTRL_STATE_SUSPEND, retval);
+		goto err_pinctrl_lookup;
+	}
 
-	return error;
+	cs->pinctrl_state_release
+		= pinctrl_lookup_state(cs->pinctrl, "pmx_cs_release");
+	if (IS_ERR_OR_NULL(cs->pinctrl_state_release)) {
+		retval = PTR_ERR(cs->pinctrl_state_release);
+		D("Can not lookup %s pinstate %d\n",
+			PINCTRL_STATE_RELEASE, retval);
+	}
+
+	return 0;
+
+err_pinctrl_lookup:
+	devm_pinctrl_put(cs->pinctrl);
+err_pinctrl_get:
+	cs->pinctrl = NULL;
+	return retval;
 }
-static int himax_gpio_power_config_cap(struct i2c_client *client, struct himax_i2c_platform_data *pdata)
-{
-	int error = 0;
-
-	if ((pdata->gpio_1v8_en != 0)) {
-		error = gpio_request(pdata->gpio_1v8_en, "himax-1v8_en_cap");
-		if (error < 0) {
-			I("%s: request 1v8_en pin failed\n", __func__);
-			return error;
-		} else {
-			gpio_set_value(pdata->gpio_1v8_en, 1);
-			I("%s: set 1v8_en pin failed, value is %d\n", __func__, gpio_get_value(pdata->gpio_1v8_en));
-		}
-	}
-	if ((pdata->gpio_3v3_en != 0)) {
-		error = gpio_request(pdata->gpio_3v3_en, "himax-3v3_en_cap");
-		if (error < 0) {
-			I("%s: request 3v3_en pin failed\n", __func__);
-			return error;
-		} else {
-			gpio_set_value(pdata->gpio_3v3_en, 1);
-			I("%s: set 3v3_en pin failed, value is %d\n", __func__, gpio_get_value(pdata->gpio_3v3_en));
-		}
-	}
-
-	return error;
-}
-
 static int himax852xes_probe(struct i2c_client *client, const struct i2c_device_id *id)
 {
 
@@ -7835,7 +7963,6 @@ static int himax852xes_probe(struct i2c_client *client, const struct i2c_device_
 	struct himax_ts_data *ts;
 	struct himax_i2c_platform_data *pdata;
 	char *mfg_mode;
-	uint8_t buf[1] = {0};
 
 	I("%s: +++\n", __func__);
 
@@ -7903,11 +8030,6 @@ static int himax852xes_probe(struct i2c_client *client, const struct i2c_device_
 	ts->rst_gpio = pdata->gpio_reset;
 #endif
 	ts->irq_gpio = pdata->gpio_irq;
-	err = himax_gpio_power_config_cap(ts->client, pdata);
-	if (err < 0) {
-		E("%s: power config on failed\n", __func__);
-		goto err_gpio_config_failed;
-	}
 
 #ifndef CONFIG_OF
 	if (pdata->power) {
@@ -7924,14 +8046,39 @@ static int himax852xes_probe(struct i2c_client *client, const struct i2c_device_
 	if (himax_ic_package_check(ts) == false) {
 		E("Himax chip doesn NOT EXIST, retry_probe: %d\n", retry_probe);
 		if (retry_probe++ < MAX_RETRY_CNT) {
+			/** free pdata, ts data and power pin **/
+			if ((pdata->gpio_irq != 0)) {
+				gpio_free(pdata->gpio_irq);
+			}
+			if ((pdata->gpio_reset != 0)) {
+				gpio_free(pdata->gpio_reset);
+			}
+			if ((pdata->gpio_en != 0)) {
+				gpio_free(pdata->gpio_en);
+			}
+			kfree(pdata);
+			kfree(ts);
 			return -EPROBE_DEFER;
 		} else
 			goto err_ic_package_failed;
 	}
-	err = himax_gpio_config_cap(ts->client, pdata);
-	if (err < 0) {
-		E("%s: power config on failed\n", __func__);
-		goto err_gpio_config_failed;
+
+	err = himax_pinctrl_init(ts);
+	if (!err && ts->pinctrl) {
+		/*
+		* Pinctrl handle is optional. If pinctrl handle is found
+		* let pins to be configured in active state. If not
+		* found continue further without error.
+		*/
+		err = pinctrl_select_state(ts->pinctrl, ts->pinctrl_state_active);
+		if (err < 0) {
+			E("%s: Failed to select %s pinstate %d\n",
+				__func__, PINCTRL_STATE_ACTIVE, err);
+		}
+	}
+	if (ts->pinctrl) {
+		if (pinctrl_select_state(ts->pinctrl, ts->pinctrl_state_active) < 0)
+			E("Cannot get default pinctrl state\n");
 	}
 
 	mfg_mode = htc_get_bootmode();
@@ -7942,20 +8089,8 @@ static int himax852xes_probe(struct i2c_client *client, const struct i2c_device_
 		(strcmp(mfg_mode, "MFG_MODE_POWER_TEST") == 0) ||
 		(strcmp(mfg_mode, "MFG_MODE_RECOVERY") == 0))
 	{
-		I(" %s: %s mode. Set touch chip to sleep mode and skip touch driver probe\n",
+		I(" %s: %s mode. cap chip default sleep mode and skip cap driver probe\n",
 		__func__, mfg_mode);
-
-		buf[0] = HX_CMD_TSSOFF;
-		err = i2c_himax_master_write(client, buf, 1, DEFAULT_RETRY_CNT);
-		if(err < 0)
-			E("%s: I2C access failed addr = 0x%x\n", __func__, client->addr);
-		msleep(30);
-
-		buf[0] = HX_CMD_TSSLPIN;
-		err = i2c_himax_master_write(client, buf, 1, DEFAULT_RETRY_CNT);
-		if(err < 0)
-			E("%s: I2C access failed addr = 0x%x\n", __func__, client->addr);
-		msleep(30);
 		err = -ENODEV;
 		E("%s: goto err_off_mode\n", __func__);
 		goto err_off_mode;
@@ -8056,7 +8191,7 @@ static int himax852xes_probe(struct i2c_client *client, const struct i2c_device_
 
 //	if (get_tamper_sf() == 0) {
 		ts->debug_log_level |= BIT(3);
-		I("%s: Enable touch down/up debug log since not security-on device",
+		I("%s: Enable touch down/up debug log since not security-on device\n",
 		  __func__);
 		if (pdata->screenWidth > 0 && pdata->screenHeight > 0 &&
 		    (pdata->abs_x_max - pdata->abs_x_min) > 0 &&
@@ -8128,17 +8263,7 @@ wake_lock_init(&ts->ts_flash_wake_lock, WAKE_LOCK_SUSPEND, HIMAX852xes_NAME_CAP)
 		I(" %s: %s mode. Set touch chip to sleep mode and skip himax_ts_register_interrupt\n",
 		__func__, mfg_mode);
 
-		buf[0] = HX_CMD_TSSOFF;
-		err = i2c_himax_master_write(client, buf, 1, DEFAULT_RETRY_CNT);
-		if(err < 0)
-			E("%s: I2C access failed addr = 0x%x\n", __func__, client->addr);
-		msleep(30);
-
-		buf[0] = HX_CMD_TSSLPIN;
-		err = i2c_himax_master_write(client, buf, 1, DEFAULT_RETRY_CNT);
-		if(err < 0)
-			E("%s: I2C access failed addr = 0x%x\n", __func__, client->addr);
-		msleep(30);
+		hx_sensor_on(false);
 	} else {
 		I(" %s: %s mode, register FB\n",__func__, mfg_mode);
 		himax_int_enable_cap(ts->client->irq,1,true);
@@ -8199,8 +8324,11 @@ wake_lock_init(&ts->ts_flash_wake_lock, WAKE_LOCK_SUSPEND, HIMAX852xes_NAME_CAP)
 	ts->debounced[0] = false;
 	ts->debounced[1] = false;
 	ts->K_counter = 0;
+	ts->ESD_counter = 0;
 	memset(&ts->time_start, 0x00, sizeof(ts->time_start));
+	memset(&ts->ESD_time_start, 0x00, sizeof(ts->ESD_time_start));
 	getnstimeofday(&ts->time_start);
+	getnstimeofday(&ts->ESD_time_start);
 
 	/* Create singlethread workqueue */
 	INIT_DELAYED_WORK(&ts->monitorDB[0], himax_cap_debounce_work_func_back);
@@ -8282,7 +8410,6 @@ err_create_flash_wq_failed:
 err_off_mode:
 	gpio_free(pdata->gpio_reset);
 	gpio_free(pdata->gpio_irq);
-err_gpio_config_failed:
 err_ic_package_failed:
 #ifndef CONFIG_OF
 err_power_failed:
@@ -8353,6 +8480,15 @@ static int himax852xes_remove(struct i2c_client *client)
 #if defined(HX_TP_PROC_FLASH_DUMP) || defined(HX_TP_SYS_FLASH_DUMP)
 		destroy_workqueue(ts->flash_wq);
 #endif
+		if (ts->pinctrl) {
+			if (IS_ERR_OR_NULL(ts->pinctrl_state_release)) {
+				devm_pinctrl_put(ts->pinctrl);
+				ts->pinctrl = NULL;
+			} else {
+				if (pinctrl_select_state(ts->pinctrl, ts->pinctrl_state_release))
+					E("Failed to select release pinctrl state\n");
+			}
+		}
 		gpio_free(ts->rst_gpio);
 		gpio_free(ts->irq_gpio);
 		kfree(ts);
@@ -8375,7 +8511,9 @@ static int himax852xes_remove(struct i2c_client *client)
 void himax852xes_suspend_cap(struct device *dev)
 {
 	int ret;
+#ifdef HX_SMART_WAKEUP
 	uint8_t buf[2] = {0};
+#endif
 #ifdef HX_CHIP_STATUS_MONITOR
 	int t=0;
 #endif
@@ -8470,20 +8608,7 @@ void himax852xes_suspend_cap(struct device *dev)
 	himax_int_enable_cap(ts->client->irq,0,true);
 
 	//Himax 852xes IC enter sleep mode
-	buf[0] = HX_CMD_TSSOFF;
-	ret = i2c_himax_master_write(ts->client, buf, 1, DEFAULT_RETRY_CNT);
-	if (ret < 0)
-	{
-		E("[himax] %s: I2C access failed addr = 0x%x\n", __func__, ts->client->addr);
-	}
-	msleep(40);
-
-	buf[0] = HX_CMD_TSSLPIN;
-	ret = i2c_himax_master_write(ts->client, buf, 1, DEFAULT_RETRY_CNT);
-	if (ret < 0)
-	{
-		E("[himax] %s: I2C access failed addr = 0x%x\n", __func__, ts->client->addr);
-	}
+	hx_sensor_on(false);
 
 	if (!ts->use_irq) {
 		ret = cancel_work_sync(&ts->work);
@@ -8491,7 +8616,6 @@ void himax852xes_suspend_cap(struct device *dev)
 			himax_int_enable_cap(ts->client->irq,1,true);
 	}
 
-	//ts->first_pressed = 0;
 	atomic_set(&ts->suspend_mode, 1);
 	ts->pre_finger_mask = 0;
 	if (ts->pdata->powerOff3V3 && ts->pdata->power)
@@ -8503,29 +8627,28 @@ void himax852xes_suspend_cap(struct device *dev)
 static void himax_cap_post_resume_work_func(struct work_struct *dummy)
 {
 	struct himax_ts_data *cs = private_ts;
+	if (cs->pdata->wake_up_reset) {
 #ifdef HX_RST_PIN_FUNC
-	himax_HW_reset_cap(false, true);
-	//himax_touch_information_cap();
+		himax_HW_reset_cap(false, true);
 #endif
-//Sense On
-	i2c_himax_write_command(cs->client, HX_CMD_TSSON, DEFAULT_RETRY_CNT);
-	mdelay(30);
-	i2c_himax_write_command(cs->client, HX_CMD_TSSLPOUT, DEFAULT_RETRY_CNT);
+	}
+	if (cs->pdata->glove_mode_en) {
+		if (cs->cap_glove_mode_status)
+			hx_sensitivity_setup(cs, CS_SENS_HIGH);
+		else if (cs->cap_glove_mode_status == 0)
+			hx_sensitivity_setup(cs, CS_SENS_DEFAULT);
+	}
+	hx_sensor_on(true);
 	atomic_set(&cs->suspend_mode, 0);
-	mdelay(30);
-	himax_int_enable_cap(cs->client->irq, 1, true);
 #ifdef HX_CHIP_STATUS_MONITOR
 	HX_CHIP_POLLING_COUNT = 0;
 	queue_delayed_work(cs->himax_chip_monitor_wq, &cs->himax_chip_monitor, HX_POLLING_TIMER*HZ); //for ESD solution
 #endif
-	if (cs->cap_glove_mode_status == 1) {
-		hx_sensitivity_setup(cs, CS_SENS_HIGH);
-	} else if (cs->cap_glove_mode_status == 0)
-		hx_sensitivity_setup(cs, CS_SENS_DEFAULT);
 #ifdef CONFIG_AK8789_HALLSENSOR
-	if(cs->cap_hall_s_pole_status == HALL_NEAR)
-		himax_int_enable_cap(cs->client->irq,0,true);
+	if(cs->cap_hall_s_pole_status == HALL_FAR)
 #endif
+		himax_int_enable_cap(cs->client->irq, 1, true);
+
 	cs->suspended = false;
 	I("%s: cap sensor reset end----\n", __func__);
 }
@@ -8541,8 +8664,7 @@ static void himax852xes_resume_cap(struct device *dev)
 	int t=0;
 #endif
 	struct himax_ts_data *ts = dev_get_drvdata(dev);
-	if(HX_DRIVER_PROBE_Fial)
-	{
+	if(HX_DRIVER_PROBE_Fial) {
 		I("%s: Driver probe fail. \n", __func__);
 		return;
 	}
@@ -8551,38 +8673,27 @@ static void himax852xes_resume_cap(struct device *dev)
 	if (ts->pdata->powerOff3V3 && ts->pdata->power)
 		ts->pdata->power(1);
 #ifdef HX_CHIP_STATUS_MONITOR
-	if(HX_ON_HAND_SHAKING)//chip on hand shaking,wait hand shaking
-	{
-		for(t=0; t<100; t++)
-			{
-				if(HX_ON_HAND_SHAKING==0)//chip on hand shaking end
-					{
-						I("%s:HX_ON_HAND_SHAKING OK check %d times\n",__func__,t);
-						break;
-					}
-				else
-					msleep(1);
-			}
-		if(t==100)
-			{
-				E("%s:HX_ON_HAND_SHAKING timeout reject resume\n",__func__);
-				return;
-			}
+	if(HX_ON_HAND_SHAKING) {//chip on hand shaking,wait hand shaking
+		for(t=0; t<100; t++) {
+			if(HX_ON_HAND_SHAKING==0) {//chip on hand shaking end
+					I("%s:HX_ON_HAND_SHAKING OK check %d times\n",__func__,t);
+					break;
+			} else
+				msleep(1);
+		}
+		if(t==100) {
+			E("%s:HX_ON_HAND_SHAKING timeout reject resume\n",__func__);
+			return;
+		}
 	}
 #endif
 #ifdef HX_SMART_WAKEUP
-	if(ts->SMWP_enable)
-	{
-		//Sense Off
-		i2c_himax_write_command(ts->client, 0x82, DEFAULT_RETRY_CNT);
-		msleep(40);
-		//Sleep in
-		i2c_himax_write_command(ts->client, 0x80, DEFAULT_RETRY_CNT);
+	if(ts->SMWP_enable) {
+		hx_sensor_on(false);
 		buf[0] = 0x8F;
 		buf[1] = 0x00;
 		ret = i2c_himax_master_write(ts->client, buf, 2, DEFAULT_RETRY_CNT);
-		if (ret < 0)
-		{
+		if (ret < 0) {
 			E("[himax] %s: I2C access failed addr = 0x%x\n", __func__, ts->client->addr);
 		}
 		msleep(50);
@@ -8715,10 +8826,9 @@ static void __init himax852xes_init_async(void *unused, async_cookie_t cookie)
 {
 	I("%s:Enter \n", __func__);
 #ifdef QCT
-    if (i2c_add_driver(&himax852xes_driver) != 0)
-	    I("unable to add i2c driver.\n");
+	if (i2c_add_driver(&himax852xes_driver) != 0)
+		I("unable to add i2c driver.\n");
 #endif
-
 	I("End %s, %d\n", __func__, __LINE__);
 }
 

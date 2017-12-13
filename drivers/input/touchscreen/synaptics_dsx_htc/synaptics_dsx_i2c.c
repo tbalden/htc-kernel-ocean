@@ -1,11 +1,11 @@
 /*
  * Synaptics DSX touchscreen driver
  *
- * Copyright (C) 2012-2015 Synaptics Incorporated. All rights reserved.
+ * Copyright (C) 2012-2016 Synaptics Incorporated. All rights reserved.
  *
  * Copyright (C) 2012 Alexandra Chin <alexandra.chin@tw.synaptics.com>
  * Copyright (C) 2012 Scott Lin <scott.lin@tw.synaptics.com>
- * Copyright (C) 2016, The Linux Foundation.  All rights reserved.
+ *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -40,17 +40,13 @@
 #include <linux/types.h>
 #include <linux/of_gpio.h>
 #include <linux/platform_device.h>
-#include <linux/input/synaptics_dsx_v2_6.h>
+#include <linux/input/synaptics_dsx_htc.h>
 #include "synaptics_dsx_core.h"
 
 #define SYN_I2C_RETRY_TIMES 10
 
-/*
 #define I2C_BURST_LIMIT 255
-*/
-/*
-#define XFER_MSGS_LIMIT 8
-*/
+#define XFER_MSGS_LIMIT 1
 
 static unsigned char *wr_buf;
 
@@ -64,6 +60,10 @@ static int parse_dt(struct device *dev, struct synaptics_dsx_board_data *bdata)
 	int retval;
 	u32 value;
 	const char *name;
+#ifdef HTC_FEATURE
+	u32 coords[2] = {0};
+	int i;
+#endif
 	struct property *prop;
 	struct device_node *np = dev->of_node;
 
@@ -77,9 +77,6 @@ static int parse_dt(struct device *dev, struct synaptics_dsx_board_data *bdata)
 		bdata->irq_on_state = 0;
 	else
 		bdata->irq_on_state = value;
-
-	bdata->resume_in_workqueue = of_property_read_bool(np,
-			"synaptics,resume-in-workqueue");
 
 	retval = of_property_read_string(np, "synaptics,pwr-reg-name", &name);
 	if (retval < 0)
@@ -166,6 +163,67 @@ static int parse_dt(struct device *dev, struct synaptics_dsx_board_data *bdata)
 		bdata->reset_delay_ms = 0;
 	}
 
+#ifdef HTC_FEATURE
+	prop = of_find_property(np, "synaptics,switch-gpio", NULL);
+	if (prop && prop->length) {
+		bdata->switch_gpio = of_get_named_gpio_flags(np,
+				"synaptics,switch-gpio", 0, NULL);
+
+		retval = of_property_read_u32(np, "synaptics,switch-hub-state",
+				&value);
+		if (retval < 0) {
+			dev_err(dev, "%s: Unable to read synaptics,switch-hub-state property\n",
+					__func__);
+			bdata->switch_gpio = -1;
+		} else {
+			bdata->switch_hub_state = value;
+		}
+		pr_info("switch-gpio=%d, switch-hub-state=%d\n", bdata->switch_gpio, bdata->switch_hub_state);
+	} else {
+		bdata->switch_gpio = -1;
+	}
+
+	retval = of_property_read_u32(np, "synaptics,sensor-sleep-mode",
+			&value);
+	if (retval < 0)
+		bdata->sensor_sleep_mode = 0;
+	else {
+		bdata->sensor_sleep_mode = value;
+
+		retval = of_property_read_u32(np, "synaptics,set-wg-delay",
+				&value);
+		if (retval < 0) {
+			bdata->set_wg_delay = 0;
+		} else {
+			bdata->set_wg_delay = value;
+		}
+
+		retval = of_property_read_u32(np, "synaptics,set-sleep-delay",
+				&value);
+		if (retval < 0) {
+			bdata->set_sleep_delay = 0;
+		} else {
+			bdata->set_sleep_delay = value;
+		}
+	}
+
+	retval = of_property_read_u32(np, "synaptics,f51-set-pmic-offset",
+			&value);
+	if (retval < 0)
+		bdata->f51_set_pmic_offset = -1;
+	else {
+		bdata->f51_set_pmic_offset = value;
+
+		retval = of_property_read_u32(np, "synaptics,set-pmic-delay",
+				&value);
+		if (retval < 0) {
+			bdata->set_pmic_delay = 0;
+		} else {
+			bdata->set_pmic_delay = value;
+		}
+	}
+#endif
+
 	prop = of_find_property(np, "synaptics,max-y-for-2d", NULL);
 	if (prop && prop->length) {
 		retval = of_property_read_u32(np, "synaptics,max-y-for-2d",
@@ -247,6 +305,118 @@ static int parse_dt(struct device *dev, struct synaptics_dsx_board_data *bdata)
 		bdata->vir_button_map->nbuttons = 0;
 		bdata->vir_button_map->map = NULL;
 	}
+
+#ifdef HTC_FEATURE
+	retval = of_property_read_u32(np, "synaptics,support-glove",
+			&value);
+	if (retval < 0)
+		bdata->support_glove = 0;
+	else
+		bdata->support_glove = value;
+
+	if (bdata->support_glove) {
+		retval = of_property_read_u32(np, "synaptics,glove-cmd-num",
+				&value);
+		if (retval < 0) {
+			bdata->glove_cmd_num = 0;
+		} else {
+			bdata->glove_cmd_num = value;
+		}
+
+		if (bdata->glove_cmd_num > MAX_MODE_CMD_NUM || bdata->glove_cmd_num == 0)
+			goto err_read_glove;
+
+		for (i = 0; i < bdata->glove_cmd_num; i++) {
+			retval = of_property_read_string_index(np, "synaptics,glove-reg-name", i,
+					&name);
+			if (retval < 0) {
+				bdata->glove_cmd_num = 0;
+				goto err_read_glove;
+			} else
+				bdata->glove_reg_name[i] = name;
+		}
+
+		prop = of_find_property(np, "synaptics,glove-setting", NULL);
+		if (prop && prop->length && (prop->length == bdata->glove_cmd_num * sizeof(u32))) {
+			retval = of_property_read_u32_array(np, "synaptics,glove-setting",
+					bdata->glove_reg, prop->length / sizeof(u32));
+			if (retval < 0) {
+				bdata->glove_cmd_num = 0;
+				goto err_read_glove;
+			}
+		} else {
+			bdata->glove_cmd_num = 0;
+			goto err_read_glove;
+		}
+
+		prop = of_find_property(np, "synaptics,normal-setting", NULL);
+		if (prop && prop->length && (prop->length == bdata->glove_cmd_num * sizeof(u32))) {
+			retval = of_property_read_u32_array(np, "synaptics,normal-setting",
+					bdata->normal_reg, prop->length / sizeof(u32));
+			if (retval < 0){
+				bdata->glove_cmd_num = 0;
+				goto err_read_glove;
+			}
+		} else {
+			bdata->glove_cmd_num = 0;
+			goto err_read_glove;
+		}
+
+		for (i = 0; i < bdata->glove_cmd_num; i++) {
+			pr_info("%s: [%d]%s - nornal=0x%x, glove=0x%x\n",
+					__func__, i,
+					bdata->glove_reg_name[i],
+					bdata->normal_reg[i],
+					bdata->glove_reg[i]);
+		}
+
+		bdata->mode_f54_force_update = of_property_read_bool(np,
+				"synaptics,mode-f54-force-update");
+	}
+err_read_glove:
+
+	prop = of_find_property(np, "synaptics,display-coords", NULL);
+	if (prop && prop->length) {
+		if (2 == (prop->length / sizeof(u32))) {
+			retval = of_property_read_u32_array(np, "synaptics,display-coords",
+					coords, prop->length / sizeof(u32));
+
+			if (retval < 0) {
+				bdata->display_width  = 0;
+				bdata->display_height = 0;
+			} else {
+				bdata->display_width  = coords[0];
+				bdata->display_height = coords[1];
+			}
+		}
+		else
+			dev_err(dev, "%s: Invalid display coords size %ld",
+				__func__, prop->length / sizeof(u32));
+	}
+
+	prop = of_find_property(np, "synaptics,lcm-reset-seq", NULL);
+	if (prop && prop->length) {
+		retval = of_property_read_u32(np, "synaptics,lcm-reset-seq",
+				&value);
+		if (retval < 0) {
+			dev_err(dev, "%s: Unable to read synaptics,lcm-reset-seq property\n",
+					__func__);
+			return retval;
+		} else {
+			bdata->lcm_reset_seq = value;
+		}
+
+		retval = of_property_read_u32(np, "synaptics,reset-lcm-delay-ms",
+				&value);
+		if (retval < 0) {
+			bdata->reset_lcm_delay_ms = 0;
+		} else {
+			bdata->reset_lcm_delay_ms = value;
+		}
+	} else {
+		bdata->lcm_reset_seq = 0;
+	}
+#endif
 
 	return 0;
 }
@@ -332,23 +502,23 @@ static int synaptics_rmi4_i2c_set_page(struct synaptics_rmi4_data *rmi4_data,
 }
 
 static int synaptics_rmi4_i2c_read(struct synaptics_rmi4_data *rmi4_data,
-		unsigned short addr, unsigned char *data, unsigned short length)
+		unsigned short addr, unsigned char *data, unsigned int length)
 {
 	int retval;
 	unsigned char retry;
 	unsigned char buf;
 #ifdef I2C_BURST_LIMIT
-	unsigned char ii;
-	unsigned char rd_msgs = ((length - 1) / I2C_BURST_LIMIT) + 1;
+	unsigned int ii;
+	unsigned int rd_msgs = ((length - 1) / I2C_BURST_LIMIT) + 1;
 #else
-	unsigned char rd_msgs = 1;
+	unsigned int rd_msgs = 1;
 #endif
 	unsigned char index = 0;
 	unsigned char xfer_msgs;
 	unsigned char remaining_msgs;
 	unsigned short i2c_addr;
 	unsigned short data_offset = 0;
-	unsigned short remaining_length = length;
+	unsigned int remaining_length = length;
 	struct i2c_client *i2c = to_i2c_client(rmi4_data->pdev->dev.parent);
 	struct i2c_adapter *adap = i2c->adapter;
 	struct i2c_msg msg[rd_msgs + 1];
@@ -379,7 +549,7 @@ static int synaptics_rmi4_i2c_read(struct synaptics_rmi4_data *rmi4_data,
 
 	msg[rd_msgs].addr = hw_if.board_data->i2c_addr;
 	msg[rd_msgs].flags = I2C_M_RD;
-	msg[rd_msgs].len = remaining_length;
+	msg[rd_msgs].len = (unsigned short)remaining_length;
 	msg[rd_msgs].buf = &data[data_offset];
 
 	buf = addr & MASK_8BIT;
@@ -438,18 +608,18 @@ exit:
 }
 
 static int synaptics_rmi4_i2c_write(struct synaptics_rmi4_data *rmi4_data,
-		unsigned short addr, unsigned char *data, unsigned short length)
+		unsigned short addr, unsigned char *data, unsigned int length)
 {
 	int retval;
 	unsigned char retry;
 	struct i2c_client *i2c = to_i2c_client(rmi4_data->pdev->dev.parent);
 	struct i2c_msg msg[1];
 
-	mutex_lock(&rmi4_data->rmi4_io_ctrl_mutex);
-
 	retval = synaptics_rmi4_i2c_alloc_buf(rmi4_data, length + 1);
 	if (retval < 0)
-		goto exit;
+		return retval;
+
+	mutex_lock(&rmi4_data->rmi4_io_ctrl_mutex);
 
 	retval = synaptics_rmi4_i2c_set_page(rmi4_data, addr);
 	if (retval != PAGE_SELECT_LEN) {
@@ -459,7 +629,7 @@ static int synaptics_rmi4_i2c_write(struct synaptics_rmi4_data *rmi4_data,
 
 	msg[0].addr = hw_if.board_data->i2c_addr;
 	msg[0].flags = 0;
-	msg[0].len = length + 1;
+	msg[0].len = (unsigned short)(length + 1);
 	msg[0].buf = wr_buf;
 
 	wr_buf[0] = addr & MASK_8BIT;
@@ -500,73 +670,10 @@ exit:
 	return retval;
 }
 
-#if defined(CONFIG_SECURE_TOUCH_SYNAPTICS_DSX_V26)
-static int synaptics_rmi4_clk_prepare_enable(
-		struct synaptics_rmi4_data *rmi4_data)
-{
-	int ret;
-
-	ret = clk_prepare_enable(rmi4_data->iface_clk);
-	if (ret) {
-		dev_err(rmi4_data->pdev->dev.parent,
-			"error on clk_prepare_enable(iface_clk):%d\n", ret);
-		return ret;
-	}
-
-	ret = clk_prepare_enable(rmi4_data->core_clk);
-	if (ret) {
-		clk_disable_unprepare(rmi4_data->iface_clk);
-		dev_err(rmi4_data->pdev->dev.parent,
-			"error clk_prepare_enable(core_clk):%d\n", ret);
-	}
-	return ret;
-}
-
-static void synaptics_rmi4_clk_disable_unprepare(
-		struct synaptics_rmi4_data *rmi4_data)
-{
-	clk_disable_unprepare(rmi4_data->core_clk);
-	clk_disable_unprepare(rmi4_data->iface_clk);
-}
-
-static int synaptics_rmi4_i2c_get(struct synaptics_rmi4_data *rmi4_data)
-{
-	int retval;
-	struct i2c_client *i2c = to_i2c_client(rmi4_data->pdev->dev.parent);
-
-	mutex_lock(&rmi4_data->rmi4_io_ctrl_mutex);
-	retval = pm_runtime_get_sync(i2c->adapter->dev.parent);
-	if (retval >= 0 && rmi4_data->core_clk != NULL &&
-				rmi4_data->iface_clk != NULL) {
-		retval = synaptics_rmi4_clk_prepare_enable(rmi4_data);
-		if (retval)
-			pm_runtime_put_sync(i2c->adapter->dev.parent);
-	}
-	mutex_unlock(&rmi4_data->rmi4_io_ctrl_mutex);
-
-	return retval;
-}
-
-static void synaptics_rmi4_i2c_put(struct synaptics_rmi4_data *rmi4_data)
-{
-	struct i2c_client *i2c = to_i2c_client(rmi4_data->pdev->dev.parent);
-
-	mutex_lock(&rmi4_data->rmi4_io_ctrl_mutex);
-	if (rmi4_data->core_clk != NULL && rmi4_data->iface_clk != NULL)
-		synaptics_rmi4_clk_disable_unprepare(rmi4_data);
-	pm_runtime_put_sync(i2c->adapter->dev.parent);
-	mutex_unlock(&rmi4_data->rmi4_io_ctrl_mutex);
-}
-#endif
-
 static struct synaptics_dsx_bus_access bus_access = {
 	.type = BUS_I2C,
 	.read = synaptics_rmi4_i2c_read,
 	.write = synaptics_rmi4_i2c_write,
-#if defined(CONFIG_SECURE_TOUCH_SYNAPTICS_DSX_V26)
-	.get = synaptics_rmi4_i2c_get,
-	.put = synaptics_rmi4_i2c_put,
-#endif
 };
 
 static void synaptics_rmi4_i2c_dev_release(struct device *dev)
@@ -691,13 +798,13 @@ static struct i2c_driver synaptics_rmi4_i2c_driver = {
 	.id_table = synaptics_rmi4_id_table,
 };
 
-int synaptics_rmi4_bus_init_v26(void)
+int synaptics_rmi4_bus_init(void)
 {
 	return i2c_add_driver(&synaptics_rmi4_i2c_driver);
 }
-EXPORT_SYMBOL(synaptics_rmi4_bus_init_v26);
+EXPORT_SYMBOL(synaptics_rmi4_bus_init);
 
-void synaptics_rmi4_bus_exit_v26(void)
+void synaptics_rmi4_bus_exit(void)
 {
 	kfree(wr_buf);
 
@@ -705,7 +812,7 @@ void synaptics_rmi4_bus_exit_v26(void)
 
 	return;
 }
-EXPORT_SYMBOL(synaptics_rmi4_bus_exit_v26);
+EXPORT_SYMBOL(synaptics_rmi4_bus_exit);
 
 MODULE_AUTHOR("Synaptics, Inc.");
 MODULE_DESCRIPTION("Synaptics DSX I2C Bus Support Module");

@@ -248,7 +248,7 @@
 #define HID_LENGTH_AND_REPORT_ID_BYTES	3
 
 /*  Timeout in ms */
-#define CY_REQUEST_EXCLUSIVE_TIMEOUT		2000
+#define CY_REQUEST_EXCLUSIVE_TIMEOUT		8000
 //htc++: add watchdog retry
 #define CY_WATCHDOG_RETRY			3
 //htc--
