@@ -564,6 +564,7 @@ struct sdhci_host {
 	bool runtime_suspended;	/* Host is runtime suspended */
 	bool bus_on;		/* Bus power prevents runtime suspend */
 	bool preset_enabled;	/* Preset is enabled */
+	bool cdr_support;
 
 	struct mmc_request *mrq;	/* Current request */
 	struct mmc_command *cmd;	/* Current command */
@@ -659,6 +660,8 @@ struct sdhci_ops {
 				struct mmc_request *mrq, u32 slot);
 	int	(*crypto_engine_cmdq_cfg)(struct sdhci_host *host,
 			struct mmc_request *mrq, u32 slot, u64 *ice_ctx);
+	int	(*crypto_engine_cfg_end)(struct sdhci_host *host,
+					struct mmc_request *mrq);
 	int	(*crypto_engine_reset)(struct sdhci_host *host);
 	void	(*crypto_cfg_reset)(struct sdhci_host *host, unsigned int slot);
 	void	(*set_uhs_signaling)(struct sdhci_host *host, unsigned int uhs);
