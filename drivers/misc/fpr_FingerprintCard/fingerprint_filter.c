@@ -2009,7 +2009,7 @@ void kernel_ambient_display(void) {
 		ktime_t wakeup_time;
 		ktime_t curr_time = { .tv64 = 0 };
 		wakeup_time = ktime_add_us(curr_time,
-			500LL * 1000LL); // 0.5sec
+			1500LL * 1000LL); // 1.5sec OREO is faster to turn screen on
 		alarm_cancel(&kad_repeat_rtc);
 		alarm_start_relative(&kad_repeat_rtc, wakeup_time); // start new...
 	}
