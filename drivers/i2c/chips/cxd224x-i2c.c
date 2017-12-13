@@ -19,7 +19,6 @@
 #include <linux/poll.h>
 #include <linux/version.h>
 #include <linux/regulator/consumer.h>
-
 #include "cxd224x.h"
 #include <linux/wakelock.h>
 
@@ -62,7 +61,8 @@ int is_debug = 1;
 #define CONFIG_CXD224X_NFC_VEN
 #define LATCH_ERROR_NO (-110)
 
-struct regulator *pm8998_lvs1;
+struct regulator *nfc_regulator;
+const char *regulator_name;
 int nfc_cmd_result;
 static int readout_core_reset_ntf = 1;
 static int mfc_nfc_cmd_result = 0;
@@ -2167,6 +2167,8 @@ static DEVICE_ATTR(chkrstnft, 0440, chkrstnft_show, NULL);
 
 static int cxd224x_parse_dt(struct device *dev, struct cxd224x_platform_data *pdata)
 {
+	struct property *prop;
+	int ret;
 	struct device_node *dt = dev->of_node;
 	I("%s: Start\n", __func__);
 
@@ -2196,6 +2198,13 @@ static int cxd224x_parse_dt(struct device *dev, struct cxd224x_platform_data *pd
 		E("DT:pdata->wake_gpio PON value is not valid\n");
 	else
 		I("DT:pdata->wake_gpio PON=%d\n", pdata->wake_gpio);
+	prop = of_find_property(dev->of_node, "nfc_regulator", NULL);
+	if(prop)
+	{
+		ret = of_property_read_string(dev->of_node,"nfc_regulator",&regulator_name);
+		if(ret < 0)
+			E("DT:regulater value is not valid\n");
+	}
 
 	return 0;
 }
@@ -2218,24 +2227,6 @@ static int cxd224x_probe(struct i2c_client *client,
 
 	I("%s: Start, bootmode:%d\n", __func__, cxd224x_htc_get_bootmode());
 
-	if (cxd224x_htc_get_bootmode() != NFC_BOOT_MODE_OFF_MODE_CHARGING){
-		pm8998_lvs1 = regulator_get(&client->dev, "pm8998_lvs1");
-		if (pm8998_lvs1< 0) {
-			E("%s : pm8998_lvs1 regulator_get fail\n", __func__);
-			return -ENODEV;
-		}
-		ret = regulator_enable(pm8998_lvs1);
-		I("%s : pm8998_lvs1 regulator_enable\n", __func__);
-		I("%s : pm8998_lvs1 regulator_is_enabled = %d\n", __func__, regulator_is_enabled(pm8998_lvs1));
-		if (ret < 0) {
-			E("%s : pm8998_lvs1 regulator_enable fail\n", __func__);
-			return -ENODEV;
-		}
-	}
-	else{
-		I("%s: OFF mode charging, not Enable HVDD and return exit!\n", __func__);
-		return 0;
-	}
 	if (!i2c_check_functionality(client->adapter, I2C_FUNC_I2C)) {
 		E("%s : need I2C_FUNC_I2C\n", __func__);
 		return -ENODEV;
@@ -2261,6 +2252,25 @@ static int cxd224x_probe(struct i2c_client *client,
 				 is NULL\n", __func__);
 			 return  -ENODEV;
 		 }
+	}
+
+	if (cxd224x_htc_get_bootmode() != NFC_BOOT_MODE_OFF_MODE_CHARGING){
+		nfc_regulator = regulator_get(&client->dev, regulator_name);
+		if (nfc_regulator < 0) {
+			E("%s : %s regulator_get fail\n", __func__, regulator_name);
+			return -ENODEV;
+		}
+		ret = regulator_enable(nfc_regulator);
+		I("%s : %s regulator_enable\n", __func__, regulator_name);
+		I("%s : %s regulator_is_enabled = %d\n", __func__, regulator_name, regulator_is_enabled(nfc_regulator));
+		if (ret < 0) {
+			E("%s : %s regulator_enable fail\n", __func__, regulator_name);
+			return -ENODEV;
+		}
+	}
+	else{
+		I("%s: OFF mode charging, not Enable HVDD and return exit!\n", __func__);
+		return 0;
 	}
 
 	/* IRQ_GPIO */

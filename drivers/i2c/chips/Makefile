@@ -12,7 +12,7 @@
 #proximity-objs := cm3629.o
 
 #NFC ++
-ifeq ($(findstring OceanUHLJAPAN,$(PRIVATE_SKU_NAME)),OceanUHLJAPAN)
+ifeq ($(findstring JAPAN,$(PRIVATE_SKU_NAME)),JAPAN)
 obj-$(CONFIG_SENSORS_NFC_CXD224X) += cxd224x-i2c.o
 endif
 #NFC --
