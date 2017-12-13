@@ -51,14 +51,16 @@
 #include <asm/ptrace.h>
 #include <asm/irq_regs.h>
 
+atomic_t em_remount = ATOMIC_INIT(0);
 /* Whether we react on sysrq keys or just ignore them */
 static int __read_mostly sysrq_enabled = CONFIG_MAGIC_SYSRQ_DEFAULT_ENABLE;
 static bool __read_mostly sysrq_always_enabled;
 
-static bool sysrq_on(void)
+bool sysrq_on(void)
 {
 	return sysrq_enabled || sysrq_always_enabled;
 }
+EXPORT_SYMBOL(sysrq_on);
 
 /*
  * A value of 1 means 'all', other nonzero values are an op mask:
@@ -187,6 +189,7 @@ static struct sysrq_key_op sysrq_show_timers_op = {
 
 static void sysrq_handle_mountro(int key)
 {
+	atomic_set(&em_remount, 1);
 	emergency_remount();
 }
 static struct sysrq_key_op sysrq_mountro_op = {
@@ -949,8 +952,8 @@ static const struct input_device_id sysrq_ids[] = {
 	{
 		.flags = INPUT_DEVICE_ID_MATCH_EVBIT |
 				INPUT_DEVICE_ID_MATCH_KEYBIT,
-		.evbit = { BIT_MASK(EV_KEY) },
-		.keybit = { BIT_MASK(KEY_LEFTALT) },
+		.evbit = { [BIT_WORD(EV_KEY)] = BIT_MASK(EV_KEY) },
+		.keybit = { [BIT_WORD(KEY_LEFTALT)] = BIT_MASK(KEY_LEFTALT) },
 	},
 	{ },
 };

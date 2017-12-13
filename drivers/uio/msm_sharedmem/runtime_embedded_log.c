@@ -64,9 +64,8 @@ static int restart_notifier_cb(struct notifier_block *this,
 				unsigned long code,
 				void *data)
 {
-	struct notif_data *notif = data;
-
 #if defined(CONFIG_HTC_FEATURES_SSR)
+	struct notif_data *notif = data;
 	if (code == SUBSYS_RAMDUMP_NOTIFICATION &&
 	    notif->enable_ramdump == ENABLE_RAMDUMP) {
 #else
@@ -248,6 +247,14 @@ static ssize_t rtel_store(struct device *d,
 
 	pr_info("[rtel] %s entering\n", __func__);
 
+#if (IS_T_PROJECT == 0) /* Follw inhouse rule to enable smlog */
+        if (!is_smlog_enabled()) {
+                pr_info("[rtel] is_smlog_enabled = %d, drop rtel store\n",
+                         is_smlog_enabled());
+                return count;
+        }
+#endif /* IS_T_PROJECT == 0 */
+
 	if (!info) {
 		pr_err("can't get correct uio info.\n");
 		return count;
@@ -263,7 +270,7 @@ static ssize_t rtel_store(struct device *d,
 	}
 
 	/* Debug purpose, input userdebug/release to switch mem protect area */
-	if ((buf[0] == '1' && !uio_vaddr) || !strncmp(buf, "userdebug", 9)) {
+	if ((buf[0] == '1' && !uio_vaddr) || !strncmp(buf, "enable", 6)) {
 		uio_vaddr = dma_alloc_writecombine(uio_dev, rtel_size,
 							&rtel_addr, GFP_KERNEL);
 
@@ -280,6 +287,13 @@ static ssize_t rtel_store(struct device *d,
 
 		if (ret)
 			pr_err("%s setup_shared_ram_perms fail.\n", info->name);
+		else {
+			/* Set ver 1.0 for userspace smlog enable detection */
+			info->version = "1.0";
+			dev_set_drvdata(d, info);
+			pr_info("[rtel] Enable smlog, set %s device ver %s\n",
+					info->name, info->version);
+		}
 
 		if (rtel_ramdump_dev)
 			return count;
@@ -326,7 +340,7 @@ static ssize_t rtel_store(struct device *d,
 				pr_info("[rtel] registering notif for '%s', handle=0x%p\n",
 						nb->name, handle);
 		}
-	} else if (uio_vaddr && !strncmp(buf, "release", 7)) {
+	} else if (uio_vaddr && !strncmp(buf, "disable", 7)) {
 		clear_shared_ram_perms(MPSS_RMTS_CLIENT_ID, rtel_addr,
 		    rtel_size);
 		ret = setup_shared_ram_perms(MPSS_RMTS_CLIENT_ID, rmtfs_addr,
@@ -335,10 +349,19 @@ static ssize_t rtel_store(struct device *d,
 		if (ret)
 			pr_err("%s setup_shared_ram_perms fail!!\n",
 					info->name);
+		else {
+			/* Set ver N/A for userspace smlog disable detection */
+			info->version = "N/A";
+			dev_set_drvdata(d, info);
+			pr_info("[rtel] Disable smlog, set %s device ver %s\n",
+					info->name, info->version);
+		}
 
 		dma_free_writecombine(uio_dev, rtel_size, uio_vaddr, rtel_addr);
 		uio_vaddr = NULL;
-	}
+	} else
+		pr_info("[rtel] Invalid arg %s or uio_vaddr exists, do nothing\n",
+				buf);
 
 	return count;
 }
@@ -453,14 +476,6 @@ static int rtel_probe(struct platform_device *pdev)
 	bool is_addr_dynamic = false;
 	struct sharemem_qmi_entry qmi_entry;
 
-#if (IS_T_PROJECT == 0) /* Follw inhouse rule to enable smlog */
-	if (!is_smlog_enabled()) {
-		pr_info("[rtel] is_smlog_enabled = %d, drop setup rtel device",
-			 is_smlog_enabled());
-		goto out;
-	}
-#endif /* IS_T_PROJECT == 0 */
-
 	/* Get the addresses from platform-data */
 	if (!pdev->dev.of_node) {
 		pr_err("Node not found\n");
@@ -495,7 +510,7 @@ static int rtel_probe(struct platform_device *pdev)
 	/* Setup device */
 	info->mmap = sharedmem_mmap; /* Custom mmap function. */
 	info->name = clnt_res->name;
-	info->version = "1.0";
+	info->version = "N/A";
 	info->mem[0].addr = shared_mem_pyhsical;
 	info->mem[0].size = shared_mem_size;
 	info->mem[0].memtype = UIO_MEM_PHYS;

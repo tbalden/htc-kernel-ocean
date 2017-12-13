@@ -516,8 +516,14 @@ static char dbg_buff[1024];
 static struct dentry *dent;
 static struct dentry *dfile_stats;
 
-#ifdef CONFIG_HTC_POWER_DEBUG
+//common O80 branch for sdm630(1) and msm8998(2)
+#ifdef CONFIG_HTC_TSENS_CONTROLLER_1
+#define MONITOR_TSENS_NUM_CONTROLLER 1
+#else
 #define MONITOR_TSENS_NUM_CONTROLLER 2
+#endif
+
+#ifdef CONFIG_HTC_POWER_DEBUG
 static struct workqueue_struct *monitor_tsense_wq = NULL;
 struct delayed_work monitor_tsens_status_worker;
 static void monitor_tsens_status(struct work_struct *work);
@@ -2236,7 +2242,7 @@ static void monitor_tsens_status(struct work_struct *work)
 			if (enable > 0) {
 				rc = msm_tsens_get_temp(tsens_id, &temp);
 				if (!rc){
-					scnprintf(message, MESSAGE_SIZE, "%s(%d,%d.%ld)", j > 0 ? "," : "", tsens_id, temp/10, abs(temp%10));
+					scnprintf(message, MESSAGE_SIZE, "%s(%d,%d.%d)", j > 0 ? "," : "", tsens_id, temp/10, abs(temp%10));
 					safe_strcat(thermal_message, message);
 				}else
 					tsens_id++;
@@ -2383,7 +2389,7 @@ static int get_device_tree_data(struct platform_device *pdev,
 {
 	struct device_node *of_node = pdev->dev.of_node;
 	struct resource *res_mem = NULL;
-	u32 *tsens_slope_data, *sensor_id, *client_id;
+	u32 *tsens_slope_data = NULL, *sensor_id, *client_id;
 	u32 *temp1_calib_offset_factor, *temp2_calib_offset_factor;
 	u32 rc = 0, i, tsens_num_sensors = 0;
 	u32 cycle_monitor = 0, wd_bark = 0;

@@ -28,7 +28,9 @@
 #include <linux/bitmap.h>
 #include <linux/msm_thermal.h>
 #include <linux/string.h>
+#include <linux/cpumask.h>
 #include <soc/qcom/htc_util.h>
+#include <linux/htc_lmh_debug.h>
 
 #include <asm/smp_plat.h>
 #include <asm/cacheflush.h>
@@ -73,6 +75,11 @@
 #define FREQ_KHZ_TO_HZ(_val) ((_val) * 1000)
 #define FREQ_HZ_TO_KHZ(_val) ((_val) / 1000)
 
+#define CPU_FREQ_SPACING 500000
+#define CPU_FREQ_SPACING_NUM 6
+#define CPU_FREQ_SPACING_COUNT 10
+#define CPU_STRING_LENGTH 6
+
 enum lmh_hw_trips {
 	LIMITS_TRIP_LO,
 	LIMITS_TRIP_HI,
@@ -83,7 +90,7 @@ struct st_htc_lmh_statistic {
         u32 count;
 };
 
-struct st_htc_lmh_statistic htc_lmh_stat[CONFIG_NR_CPUS][5];
+struct st_htc_lmh_statistic htc_lmh_stat[CONFIG_NR_CPUS][CPU_FREQ_SPACING_NUM];
 
 struct msm_lmh_dcvs_hw {
 	char sensor_name[THERMAL_NAME_LENGTH];
@@ -120,79 +127,62 @@ static void msm_lmh_dcvs_get_max_freq(uint32_t cpu, uint32_t *max_freq)
 	*max_freq = freq_ceil/1000;
 }
 
-void htc_lmh_stat_add(int cpu, int cpu_freq){
-	if(cpu <= 7 && cpu >= 0){
-		if(cpu > 3){ //BC
-			if(cpu_freq >= 2035200){
-				htc_lmh_stat[cpu][4].count++;	// Turbo_L2
-				return;
-			}
-			if(cpu_freq < 2035200 && cpu_freq >= 1804800){
-				htc_lmh_stat[cpu][3].count++;	// Turbo
-				return;
-			}
-			if(cpu_freq < 1804800 && cpu_freq >= 1190400){
-				htc_lmh_stat[cpu][2].count++;	// Nominal
-				return;
-			}
-			if(cpu_freq < 1190400 && cpu_freq >= 902400){
-				htc_lmh_stat[cpu][1].count++;	// SVS
-				return;
-			}
-			if(cpu_freq < 902400){
-				htc_lmh_stat[cpu][0].count++;	// LowSVS
-				return;
-			}
-		}else{	//LC
-			if(cpu_freq >= 1824000){
-				htc_lmh_stat[cpu][4].count++;	// Turbo_L2
-				return;
-			}
-			if(cpu_freq < 1824000 && cpu_freq >= 1670400){
-				htc_lmh_stat[cpu][3].count++;	// Turbo
-				return;
-			}
-			if(cpu_freq < 1670400 && cpu_freq >= 1094400){
-				htc_lmh_stat[cpu][2].count++;	// Nominal
-				return;
-			}
-			if(cpu_freq < 1094400 && cpu_freq >= 883200){
-				htc_lmh_stat[cpu][1].count++;	// SVS
-				return;
-			}
-			if(cpu_freq < 883200){
-				htc_lmh_stat[cpu][0].count++;	// LowSVS
-				return;
+extern int get_cluster_info(int *cluster_id, unsigned long int *cluster_mask);
+int cluster_id[NR_CPUS] = {[0 ... NR_CPUS-1] = -1};
+int cluster_cnt = 0;
+unsigned long int cluster_mask[NR_CPUS] = {[0 ... NR_CPUS-1] = -1};
+int cpu_freq_distribute0[CPU_FREQ_SPACING_NUM][CPU_FREQ_SPACING_COUNT];
+int cpu_freq_distribute1[CPU_FREQ_SPACING_NUM][CPU_FREQ_SPACING_COUNT];
+void htc_lmh_stat_add(int cpu, int cpu_freq)
+{
+	int i;
+	if (cpu >= 0 && cpu < CONFIG_NR_CPUS){
+		if (cpumask_test_cpu(cpu, (struct cpumask *)&cluster_mask[0])){
+			for (i = CPU_FREQ_SPACING_NUM-1; i >= 0; i--){
+				if(cpu_freq >=cpu_freq_table_info.cpu_freq_table[cpu][cpu_freq_distribute0[i][0]] && cpu_freq_distribute0[i][0] >= 0){
+					htc_lmh_stat[cpu][i].count++;
+					break;
+				}
 			}
 		}
+		if (cpumask_test_cpu(cpu, (struct cpumask *)&cluster_mask[1])){
+			for (i = CPU_FREQ_SPACING_NUM-1; i >= 0; i--){
+                                if(cpu_freq >=cpu_freq_table_info.cpu_freq_table[cpu][cpu_freq_distribute1[i][0]] && cpu_freq_distribute1[i][0] >= 0){
+					htc_lmh_stat[cpu][i].count++;
+					break;
+				}
+                        }
+		}
 	}
-}
 
+}
 
 void htc_lmh_stat_show(void)
 {
 	int i = 0, j = 0;
-	char *cpu_clock_plan[] = {"LowSVS", "SVS", "Nominal", "Turbo", "Turbo_L2"};
-        int piece_size = 32;
-        int output_size = piece_size * (CONFIG_NR_CPUS + 1);
-        char output[output_size];
-        char piece[piece_size];
+	int piece_size = 32;
+	int output_size = piece_size * (CONFIG_NR_CPUS + 1);
+	char output[output_size];
+	char piece[piece_size];
+	char cpu_num_str[CPU_STRING_LENGTH];
 	for (i = 0; i < CONFIG_NR_CPUS ; i++) {
 		memset(output, 0, sizeof(output));
-		for (j = 4; j >= 0; j--){
+		for (j = CPU_FREQ_SPACING_NUM-1; j >= 0; j--){
 			memset(piece, 0, sizeof(piece));
-			if(i == 0){
-				snprintf(piece, sizeof(piece), "%s(%s,%d)",
-					strlen(output)>0 ? "," : "LC: ",
-					cpu_clock_plan[j],
+			if((cpumask_test_cpu(i, (struct cpumask *)&cluster_mask[0])) && (cpu_freq_distribute0[j][0] >= 0) && cpu_freq_table_info.cpu_freq_table[i][j] > 0){
+				snprintf(cpu_num_str, sizeof(cpu_num_str),"%s%d:", "CPU", i);
+				snprintf(piece, sizeof(piece), "%s%d(%d)",
+					strlen(output)>0 ? "," : cpu_num_str,
+					j,
 					htc_lmh_stat[i][j].count);
 				safe_strcat(output, piece);
-			}else if (i == 4){
-                                snprintf(piece, sizeof(piece), "%s(%s,%d)",
-                                        strlen(output)>0 ? "," : "BC: ",
-                                        cpu_clock_plan[j],
-                                        htc_lmh_stat[i][j].count);
-                                safe_strcat(output, piece);
+			}else if ((cpumask_test_cpu(i, (struct cpumask *)&cluster_mask[1])) && (cpu_freq_distribute1[j][0] >= 0) && cpu_freq_table_info.cpu_freq_table[i][j] > 0){
+				snprintf(cpu_num_str, sizeof(cpu_num_str),"%s%d:", "CPU", i);
+				snprintf(piece, sizeof(piece), "%s%d(%d)",
+					strlen(output)>0 ? "," : cpu_num_str,
+					j,
+					htc_lmh_stat[i][j].count);
+				safe_strcat(output, piece);
 			}
 		}
 		if(strlen(output) > 0){
@@ -202,9 +192,52 @@ void htc_lmh_stat_show(void)
 }
 
 
+void htc_lmh_stat_init(void)
+{
+	int i, j, tmp = 0, k = 0;
+	unsigned long cpu_freq_steps_num_lengh;
+	cluster_cnt = get_cluster_info(cluster_id, cluster_mask);
+
+	for (i = 0; i < CONFIG_NR_CPUS ; i++) {
+		for (j = 0; j < CPU_FREQ_SPACING_NUM; j++)
+			htc_lmh_stat[i][j].count = 0;
+	}
+	for (i = 0; i < CPU_FREQ_SPACING_NUM ; i++) {
+		for (j = 0; j < CPU_FREQ_SPACING_COUNT; j++){
+			cpu_freq_distribute0[i][j] = -1;
+			cpu_freq_distribute1[i][j] = -1;
+		}
+	}
+
+	if(cluster_cnt > 0){
+		for (i = 0; i < cluster_cnt; i++)
+		pr_info("cluster_cnt:%d, cluster_id[%d]:%d, cluster_mask[%d]:%lu\n", cluster_cnt, i, cluster_id[i], i, cluster_mask[i]);
+	}else
+		pr_debug("cluster_cnt:%d , Cluster Info not defined.\n", cluster_cnt);
+
+	cpu_freq_steps_num_lengh = sizeof(cpu_freq_table_info.cpu_freq_steps_num)/sizeof(cpu_freq_table_info.cpu_freq_steps_num[0]);
+	for (i = 0; i < cpu_freq_steps_num_lengh ; i++) {
+		if (cpu_freq_table_info.cpu_freq_steps_num[i] > 0){
+			for (j = 0; j < cpu_freq_table_info.cpu_freq_steps_num[i]; j++){
+				if(tmp != cpu_freq_table_info.cpu_freq_table[i][j]/CPU_FREQ_SPACING){
+					tmp = cpu_freq_table_info.cpu_freq_table[i][j]/CPU_FREQ_SPACING;
+					k = 0;
+				}
+				if(cpumask_test_cpu(i, (struct cpumask *)&cluster_mask[0])){
+					cpu_freq_distribute0[cpu_freq_table_info.cpu_freq_table[i][j]/CPU_FREQ_SPACING][k]=j;
+				}
+				if(cpumask_test_cpu(i, (struct cpumask *)&cluster_mask[1])){
+                                        cpu_freq_distribute1[cpu_freq_table_info.cpu_freq_table[i][j]/CPU_FREQ_SPACING][k]=j;
+				}
+				k++;
+			}
+		}
+	}
+}
+
 void htc_lmh_stat_clear(void)
 {
-        memset(htc_lmh_stat, 0, sizeof(htc_lmh_stat));
+	memset(htc_lmh_stat, 0, sizeof(htc_lmh_stat));
 }
 
 static uint32_t msm_lmh_mitigation_notify(struct msm_lmh_dcvs_hw *hw)
@@ -627,6 +660,8 @@ static int msm_lmh_dcvs_probe(struct platform_device *pdev)
 		return ret;
 	}
 
+	htc_lmh_stat_clear();
+	htc_lmh_stat_init();
 	INIT_LIST_HEAD(&hw->list);
 	list_add(&hw->list, &lmh_dcvs_hw_list);
 
