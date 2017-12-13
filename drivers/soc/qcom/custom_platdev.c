@@ -31,6 +31,10 @@
 #include "../../../fs/proc/internal.h"
 #include <soc/qcom/icnss.h>
 
+#ifdef CONFIG_CNSS_UTILS
+#include <net/cnss_utils.h>
+#endif
+
 #define NVS_MAX_SIZE	0x800U
 #define WLAN_MAC_OFFSET 0x40
 #define WLAN_MAC_SIZE 0x1C
@@ -95,8 +99,13 @@ static void set_wifi_mac(void)
 		mac[i+6] = mac[i];
 	}
 
+#ifdef CONFIG_CNSS_UTILS
+	if (cnss_utils_set_wlan_mac_address(mac, sizeof(mac)) != 0)
+		pr_err("[WLAN] set wlan mac address failed");
+#else
 	if (icnss_set_wlan_mac_address(mac, sizeof(mac)) != 0)
 		pr_err("[WLAN] set wlan mac address failed");
+#endif
 }
 
 static ssize_t wifi_mac_read_proc

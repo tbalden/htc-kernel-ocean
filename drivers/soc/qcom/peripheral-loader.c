@@ -39,6 +39,8 @@
 #include <asm/uaccess.h>
 #include <asm/setup.h>
 #include <asm-generic/io-64-nonatomic-lo-hi.h>
+#define CREATE_TRACE_POINTS
+#include <trace/events/trace_msm_pil_event.h>
 
 #include "peripheral-loader.h"
 
@@ -66,6 +68,7 @@ static int proxy_timeout_ms = -1;
 module_param(proxy_timeout_ms, int, S_IRUGO | S_IWUSR);
 
 static bool disable_timeouts;
+static const char firmware_error_msg[] = "firmware_error\n";
 /**
  * struct pil_mdt - Representation of <name>.mdt file in memory
  * @hdr: ELF32 header
@@ -476,6 +479,8 @@ static int pil_alloc_region(struct pil_priv *priv, phys_addr_t min_addr,
 	if (region == NULL) {
 		pil_err(priv->desc, "Failed to allocate relocatable region of size %zx\n",
 					size);
+		priv->region_start = 0;
+		priv->region_end = 0;
 		return -ENOMEM;
 	}
 
@@ -682,12 +687,14 @@ static int pil_load_seg(struct pil_desc *desc, struct pil_seg *seg)
 		if (ret < 0) {
 			pil_err(desc, "Failed to locate blob %s or blob is too big(rc:%d)\n",
 				fw_name, ret);
+			subsys_set_error(desc->subsys_dev, firmware_error_msg);
 			return ret;
 		}
 
 		if (ret != seg->filesz) {
 			pil_err(desc, "Blob size %u doesn't match %lu\n",
 					ret, seg->filesz);
+			subsys_set_error(desc->subsys_dev, firmware_error_msg);
 			return -EPERM;
 		}
 		ret = 0;
@@ -716,9 +723,11 @@ static int pil_load_seg(struct pil_desc *desc, struct pil_seg *seg)
 
 	if (desc->ops->verify_blob) {
 		ret = desc->ops->verify_blob(desc, seg->paddr, seg->sz);
-		if (ret)
+		if (ret) {
 			pil_err(desc, "Blob%u failed verification(rc:%d)\n",
 								num, ret);
+			subsys_set_error(desc->subsys_dev, firmware_error_msg);
+		}
 	}
 
 	return ret;
@@ -799,6 +808,7 @@ int pil_boot(struct pil_desc *desc)
 
 	if (fw->size < sizeof(*ehdr)) {
 		pil_err(desc, "Not big enough to be an elf header\n");
+		subsys_set_error(desc->subsys_dev, firmware_error_msg);
 		ret = -EIO;
 		goto release_fw;
 	}
@@ -808,18 +818,21 @@ int pil_boot(struct pil_desc *desc)
 
 	if (memcmp(ehdr->e_ident, ELFMAG, SELFMAG)) {
 		pil_err(desc, "Not an elf header\n");
+		subsys_set_error(desc->subsys_dev, firmware_error_msg);
 		ret = -EIO;
 		goto release_fw;
 	}
 
 	if (ehdr->e_phnum == 0) {
 		pil_err(desc, "No loadable segments\n");
+		subsys_set_error(desc->subsys_dev, firmware_error_msg);
 		ret = -EIO;
 		goto release_fw;
 	}
 	if (sizeof(struct elf32_phdr) * ehdr->e_phnum +
 	    sizeof(struct elf32_hdr) > fw->size) {
 		pil_err(desc, "Program headers not within mdt\n");
+		subsys_set_error(desc->subsys_dev, firmware_error_msg);
 		ret = -EIO;
 		goto release_fw;
 	}
@@ -835,13 +848,16 @@ int pil_boot(struct pil_desc *desc)
 		goto release_fw;
 	}
 
+	trace_pil_event("before_init_image", desc);
 	if (desc->ops->init_image)
 		ret = desc->ops->init_image(desc, fw->data, fw->size);
 	if (ret) {
 		pil_err(desc, "Initializing image failed(rc:%d)\n", ret);
+		subsys_set_error(desc->subsys_dev, firmware_error_msg);
 		goto err_boot;
 	}
 
+	trace_pil_event("before_mem_setup", desc);
 	if (desc->ops->mem_setup)
 		ret = desc->ops->mem_setup(desc, priv->region_start,
 				priv->region_end - priv->region_start);
@@ -857,6 +873,7 @@ int pil_boot(struct pil_desc *desc)
 		 * Also for secure boot devices, modem memory has to be released
 		 * after MBA is booted
 		 */
+		trace_pil_event("before_assign_mem", desc);
 		if (desc->modem_ssr) {
 			ret = pil_assign_mem_to_linux(desc, priv->region_start,
 				(priv->region_end - priv->region_start));
@@ -875,6 +892,7 @@ int pil_boot(struct pil_desc *desc)
 		hyp_assign = true;
 	}
 
+	trace_pil_event("before_load_seg", desc);
 	list_for_each_entry(seg, &desc->priv->segs, list) {
 		ret = pil_load_seg(desc, seg);
 		if (ret)
@@ -882,6 +900,7 @@ int pil_boot(struct pil_desc *desc)
 	}
 
 	if (desc->subsys_vmid > 0) {
+		trace_pil_event("before_reclaim_mem", desc);
 		ret =  pil_reclaim_mem(desc, priv->region_start,
 				(priv->region_end - priv->region_start),
 				desc->subsys_vmid);
@@ -893,11 +912,14 @@ int pil_boot(struct pil_desc *desc)
 		hyp_assign = false;
 	}
 
+	trace_pil_event("before_auth_reset", desc);
 	ret = desc->ops->auth_and_reset(desc);
 	if (ret) {
 		pil_err(desc, "Failed to bring out of reset(rc:%d)\n", ret);
+		subsys_set_error(desc->subsys_dev, firmware_error_msg);
 		goto err_auth_and_reset;
 	}
+	trace_pil_event("reset_done", desc);
 	pil_info(desc, "Brought out of reset\n");
 	desc->modem_ssr = false;
 err_auth_and_reset:
@@ -926,6 +948,8 @@ out:
 						priv->region_start),
 					VMID_HLOS);
 			}
+			if (desc->clear_fw_region && priv->region_start)
+				pil_clear_segment(desc);
 			dma_free_attrs(desc->dev, priv->region_size,
 					priv->region, priv->region_start,
 					&desc->attrs);
