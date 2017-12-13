@@ -72,7 +72,7 @@ static int ecryptfs_writepage(struct page *page, struct writeback_control *wbc)
 		&ecryptfs_inode_to_private(page->mapping->host)->crypt_stat;
 	ecryptfs_inode = page->mapping->host;
 
-	printk(KERN_ERR "_Achigo: %s:%d (FEATURE_SDCARD_ENCRYPTION)\n", __func__, __LINE__);
+	printk(KERN_ERR "%s:%d (FEATURE_SDCARD_ENCRYPTION)\n", __func__, __LINE__);
 	if (!crypt_stat || !(crypt_stat->flags & ECRYPTFS_ENCRYPTED)) {
 		ecryptfs_printk(KERN_DEBUG,
 				"Passing through unencrypted page\n");
