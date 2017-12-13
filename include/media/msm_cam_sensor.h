@@ -41,6 +41,7 @@ struct msm_camera_sensor_slave_info32 {
 	uint8_t  is_init_params_valid;
 	struct msm_sensor_init_params sensor_init_params;
 	enum msm_sensor_output_format_t output_format;
+	uint8_t bypass_video_node_creation;
 };
 
 struct msm_camera_csid_lut_params32 {
@@ -204,6 +205,9 @@ struct sensorb_cfg_data32 {
 		compat_uptr_t                 setting;
 		struct msm_sensor_i2c_sync_params sensor_i2c_sync_params;
 	} cfg;
+	//HTC_START
+	struct alpha_value alpha;
+	//HTC_END
 };
 
 struct msm_ois_params_t32 {

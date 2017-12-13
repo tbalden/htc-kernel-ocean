@@ -12,6 +12,8 @@
  * GNU General Public License for more details.
  *
  */
+#ifndef __HTC_AUDIO_IOCTL_H
+#define __HTC_AUDIO_IOCTL_H
 
 #define ACOUSTIC_IOCTL_MAGIC 'p'
 #define ACOUSTIC_GET_HW_COMPONENT	_IOR(ACOUSTIC_IOCTL_MAGIC, 45, unsigned)
@@ -54,3 +56,5 @@ typedef struct htc_adsp_params_ioctl_s {
 	uint32_t size;
 	uint16_t params[2+2+2+512]; /* module|param|data_size|data */
 } htc_adsp_params_ioctl_t;
+
+#endif

@@ -40,9 +40,9 @@
  * To allow proper structure padding for 64bit/32bit target
  */
 #ifdef __LP64
-#define MDP_LAYER_COMMIT_V1_PAD 3
+#define MDP_LAYER_COMMIT_V1_PAD 2
 #else
-#define MDP_LAYER_COMMIT_V1_PAD 4
+#define MDP_LAYER_COMMIT_V1_PAD 3
 #endif
 
 /**********************************************************************
@@ -166,6 +166,9 @@ VALIDATE/COMMIT FLAG CONFIGURATION
 /* Flag to indicate dual partial ROI update */
 #define MDP_COMMIT_PARTIAL_UPDATE_DUAL_ROI	0x20
 
+/* Flag to update brightness when commit */
+#define MDP_COMMIT_UPDATE_BRIGHTNESS		0x40
+
 /* Flag to enable concurrent writeback for the frame */
 #define MDP_COMMIT_CWB_EN 0x800
 
@@ -174,6 +177,12 @@ VALIDATE/COMMIT FLAG CONFIGURATION
  * is enabled without this flag, LM will be selected as data point.
  */
 #define MDP_COMMIT_CWB_DSPP 0x1000
+
+/*
+ * Flag to indicate that rectangle number is being assigned
+ * by userspace in multi-rectangle mode
+ */
+#define MDP_COMMIT_RECT_NUM 0x2000
 
 #define MDP_COMMIT_VERSION_1_0		0x00010000
 
@@ -422,8 +431,14 @@ struct mdp_input_layer {
 	 */
 	int			error_code;
 
+	/*
+	 * For source pipes supporting multi-rectangle, this field identifies
+	 * the rectangle index of the source pipe.
+	 */
+	uint32_t		rect_num;
+
 	/* 32bits reserved value for future usage. */
-	uint32_t		reserved[6];
+	uint32_t		reserved[5];
 };
 
 struct mdp_output_layer {
@@ -567,6 +582,9 @@ struct mdp_layer_commit_v1 {
 	 * Represents number of Destination scaler data provied by userspace.
 	 */
 	uint32_t		dest_scaler_cnt;
+
+	/* Backlight level that would update when display commit */
+	uint32_t		bl_level;
 
 	/* 32-bits reserved value for future usage. */
 	uint32_t		reserved[MDP_LAYER_COMMIT_V1_PAD];

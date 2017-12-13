@@ -229,6 +229,15 @@ struct camera_vreg_t {
 	enum camera_vreg_type type;
 };
 
+//HTC_START
+struct alpha_value{
+	uint8_t Alpha_Gb;
+	uint8_t Alpha_B;
+	uint8_t Alpha_R;
+	uint8_t Alpha_Gr;
+};
+//HTC_END
+
 struct sensorb_cfg_data {
 	int cfgtype;
 	union {
@@ -237,6 +246,9 @@ struct sensorb_cfg_data {
 		void                         *setting;
 		struct msm_sensor_i2c_sync_params sensor_i2c_sync_params;
 	} cfg;
+	//HTC_START
+	struct alpha_value alpha;
+	//HTC_END
 };
 
 struct csid_cfg_data {
@@ -349,6 +361,9 @@ enum msm_sensor_cfg_type_t {
 	CFG_SET_GYRO_CALIBRATION,
 	CFG_SET_SENSOR_OIS_FREQ,
 	/* HTC_END */
+//HTC_START
+	CFG_READ_BLC,
+//HTC_END
 };
 
 enum msm_actuator_cfg_type_t {

@@ -48,6 +48,8 @@
 #define MSM_EEPROM_MEMORY_MAP_MAX_SIZE  80
 #define MSM_EEPROM_MAX_MEM_MAP_CNT      8
 
+#define MSM_SENSOR_BYPASS_VIDEO_NODE    1
+
 enum msm_sensor_camera_id_t {
 	CAMERA_0,
 	CAMERA_1,
@@ -111,8 +113,10 @@ enum msm_sensor_power_seq_gpio_t {
 	SENSOR_GPIO_FL_RESET,
 	SENSOR_GPIO_CUSTOM1,
 	SENSOR_GPIO_CUSTOM2,
+	SENSOR_GPIO_CUSTOM3,
 	SENSOR_GPIO_MAX,
 };
+#define SENSOR_GPIO_CUSTOM3 SENSOR_GPIO_CUSTOM3
 
 enum msm_ir_cut_filter_gpio_t {
 	IR_CUT_FILTER_GPIO_P = 0,
@@ -300,6 +304,7 @@ struct msm_camera_sensor_slave_info {
 	unsigned char  is_init_params_valid;
 	struct msm_sensor_init_params sensor_init_params;
 	enum msm_sensor_output_format_t output_format;
+	uint8_t bypass_video_node_creation;
 };
 
 struct msm_camera_i2c_reg_array {

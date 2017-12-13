@@ -26,6 +26,8 @@ extern int htc_net_debug_print;
 extern int htc_net_debug_enable;
 
 extern void net_dbg_log_event(const char * event, ...);
+extern void net_dbg_log_event_oneline(int idx, const char * event, ...);
+extern int net_dbg_get_free_log_event_oneline(void);
 
 #define NET_DEBUG(fmt, args...) \
 do{ \
