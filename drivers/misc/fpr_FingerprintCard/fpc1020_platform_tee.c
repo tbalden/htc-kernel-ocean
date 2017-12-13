@@ -36,6 +36,10 @@
 #include <linux/platform_device.h>
 #include <linux/regulator/consumer.h>
 #include <linux/wakelock.h>
+#ifdef CONFIG_FPC_HTC_DISABLE_CHARGING
+#include <linux/power_supply.h>
+#include <linux/power/htc_battery.h>
+#endif //CONFIG_FPC_HTC_DISABLE_CHARGING
 #ifdef CONFIG_UCI
 #include <linux/uci/uci.h>
 #endif
@@ -67,6 +71,12 @@ struct vreg_config {
 	unsigned long vmax;
 	int ua_load;
 };
+
+#ifdef CONFIG_FPC_HTC_ENABLE_DBG
+#include <linux/htc_flags.h>
+static bool hal_is_waiting_irq = false;
+static bool htc_enable_fpc_dbg = false;
+#endif //CONFIG_FPC_HTC_ENABLE_DBG
 
 static const struct vreg_config const vreg_conf[] = {
 };
@@ -420,6 +430,15 @@ static ssize_t irq_ack(struct device *dev,
 	const char *buf, size_t count)
 {
 	struct fpc1020_data *fpc1020 = dev_get_drvdata(dev);
+	long value;
+
+#ifdef CONFIG_FPC_HTC_ENABLE_DBG
+	if (!kstrtol(buf, 10, &value)) {
+	    hal_is_waiting_irq = (value == 0) ? true : false;
+	    if (htc_enable_fpc_dbg)
+	        dev_info(fpc1020->dev, "%s:%ld\n", __func__, value);
+	}
+#endif //CONFIG_FPC_HTC_ENABLE_DBG
 
 	dev_dbg(fpc1020->dev, "%s\n", __func__);
 
@@ -442,6 +461,28 @@ static ssize_t hal_footprint_set(struct device *dev,
 static DEVICE_ATTR(hal_footprint, S_IWUSR, NULL, hal_footprint_set);
 #endif //CONFIG_HTC_HAL_FOOTPRINT
 
+#ifdef CONFIG_FPC_HTC_DISABLE_CHARGING
+/**
+ * sysfs node for disabling charging while capturing fp image
+ */
+static ssize_t fp_charger_control_set(struct device *dev,
+	struct device_attribute *attribute, const char *buf, size_t count)
+{
+    if (!strncmp(buf, "enable", strlen("enable"))) {
+        dev_info(dev, "%s:%s\n", __func__, buf);
+        htc_battery_charger_switch_internal(ENABLE_PWRSRC_FINGERPRINT);
+    } else if (!strncmp(buf, "disable", strlen("disable"))) {
+        dev_info(dev, "%s:%s\n", __func__, buf);
+        htc_battery_charger_switch_internal(DISABLE_PWRSRC_FINGERPRINT);
+    } else {
+        dev_err(dev, "%s: Wrong Parameter!!:%s\n", __func__, buf);
+        return -EINVAL;
+    }
+    return count;
+}
+static DEVICE_ATTR(fp_charger_control, S_IWUSR, NULL, fp_charger_control_set);
+#endif //CONFIG_FPC_HTC_DISABLE_CHARGING
+
 static struct attribute *attributes[] = {
 	&dev_attr_pinctl_set.attr,
 	&dev_attr_device_prepare.attr,
@@ -451,8 +492,11 @@ static struct attribute *attributes[] = {
 	&dev_attr_clk_enable.attr,
 	&dev_attr_irq.attr,
 #ifdef CONFIG_HTC_HAL_FOOTPRINT
-    &dev_attr_hal_footprint.attr,
+	&dev_attr_hal_footprint.attr,
 #endif //CONFIG_HTC_HAL_FOOTPRINT
+#ifdef CONFIG_FPC_HTC_DISABLE_CHARGING
+	&dev_attr_fp_charger_control.attr,
+#endif //CONFIG_FPC_HTC_DISABLE_CHARGING
 	NULL
 };
 
@@ -473,7 +517,15 @@ static irqreturn_t fpc1020_irq_handler(int irq, void *handle)
 #if 1
 	int wake_enabled = 0;
 #endif
+
+#ifdef CONFIG_FPC_HTC_ENABLE_DBG
+	if (htc_enable_fpc_dbg && hal_is_waiting_irq) {
+		dev_info(fpc1020->dev, "%s:%d\n", __func__, atomic_read(&fpc1020->wakeup_enabled));
+	}
+#endif //CONFIG_FPC_HTC_ENABLE_DBG
+
 	dev_dbg(fpc1020->dev, "%s\n", __func__);
+
 	if (atomic_read(&fpc1020->wakeup_enabled)) {
 #ifdef CONFIG_UCI
 //		if (!proximity)
@@ -647,9 +699,14 @@ static int fpc1020_probe(struct platform_device *pdev)
 		(void)device_prepare(fpc1020, true);
 	}
 
-	rc = hw_reset(fpc1020);
+	//rc = hw_reset(fpc1020);
 
 	dev_info(dev, "%s: ok\n", __func__);
+
+#ifdef CONFIG_FPC_HTC_ENABLE_DBG
+	if (get_radio_flag() & BIT(3))
+	    htc_enable_fpc_dbg = true;
+#endif //CONFIG_FPC_HTC_ENABLE_DBG
 
 exit:
 	return rc;

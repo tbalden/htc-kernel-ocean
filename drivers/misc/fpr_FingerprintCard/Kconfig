@@ -7,4 +7,14 @@ config FPR_FPC
        tristate "FPC_BTP fingerprint sensor support"
        depends on SPI_MASTER
 
+config FPC_HTC_DISABLE_CHARGING
+       tristate "HTC FPC disable charging while capturing image during enroll/verify"
+       depends on FPR_FPC
+       default n
+
+config FPC_HTC_ENABLE_DBG
+       tristate "HTC FPC enable dbg log"
+       depends on FPR_FPC
+       default y
+
 endmenu
