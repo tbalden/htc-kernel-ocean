@@ -48,6 +48,11 @@ static struct msm_actuator *actuators[] = {
 	&msm_bivcm_actuator_table,
 };
 
+//HTC_START
+static uint16_t pre_dac = 0;
+static uint8_t sac_mode = 3; //default mode 3
+//HTC_END
+
 //HTC_START, AF FW update
 static struct msm_camera_i2c_reg_array lc898214xd_fw_setting[] = {
 {0x42, 0x02, 0x00},
@@ -140,11 +145,38 @@ static void msm_actuator_parse_i2c_params(struct msm_actuator_ctrl_t *a_ctrl,
 				((hw_dword & write_arr[i].hw_mask) >>
 				write_arr[i].hw_shift);
 
+//HTC_START
+			if(a_ctrl->sac_switch == 1) {
+				if( abs(value - pre_dac) < 80 ) { //sac 3 for small dac
+					if (sac_mode == 4) {
+						i2c_tbl[a_ctrl->i2c_tbl_index].reg_addr = 0x06;
+						i2c_tbl[a_ctrl->i2c_tbl_index].reg_data = 0x40;
+						i2c_tbl[a_ctrl->i2c_tbl_index].delay = delay;
+						a_ctrl->i2c_tbl_index++;
+						sac_mode = 3;
+					}
+				} else { //sac 4 for big dac
+					if (sac_mode == 3) {
+						i2c_tbl[a_ctrl->i2c_tbl_index].reg_addr = 0x06;
+						i2c_tbl[a_ctrl->i2c_tbl_index].reg_data = 0x80;
+						i2c_tbl[a_ctrl->i2c_tbl_index].delay = delay;
+						a_ctrl->i2c_tbl_index++;
+						sac_mode = 4;
+					}
+				}
+				pre_dac = value;
+			}
+//HTC_END
 			if (write_arr[i].reg_addr != 0xFFFF) {
 				i2c_byte1 = write_arr[i].reg_addr;
 				i2c_byte2 = value;
 				if (size != (i+1)) {
-					i2c_byte2 = value & 0xFF;
+//HTC_START
+					if(a_ctrl->sac_switch == 1)
+						i2c_byte2 = (value & 0xFF00) >> 8;
+					else
+//HTC_END
+						i2c_byte2 = value & 0xFF;
 					CDBG("byte1:0x%x, byte2:0x%x\n",
 						i2c_byte1, i2c_byte2);
 					if (a_ctrl->i2c_tbl_index >
@@ -161,7 +193,12 @@ static void msm_actuator_parse_i2c_params(struct msm_actuator_ctrl_t *a_ctrl,
 					a_ctrl->i2c_tbl_index++;
 					i++;
 					i2c_byte1 = write_arr[i].reg_addr;
-					i2c_byte2 = (value & 0xFF00) >> 8;
+//HTC_START
+					if(a_ctrl->sac_switch == 1)
+						i2c_byte2 = value & 0xFF;
+					else
+//HTC_END
+						i2c_byte2 = (value & 0xFF00) >> 8;
 				}
 			} else {
 				i2c_byte1 = (value & 0xFF00) >> 8;
@@ -394,56 +431,61 @@ static void msm_actuator_fw_update(struct msm_actuator_ctrl_t *a_ctrl)
 	int32_t i = 0;
 	uint16_t reg_data = 0, reg_data2 = 0, reg_data3 = 0;
 	uint16_t cci_client_sid_backup;
+	pr_err("%s: af_update_ver = %d\n", __func__, a_ctrl->af_update_ver);
 
 	//Validate fw version and judge if need to update FW
-	cci_client_sid_backup = a_ctrl->i2c_client.cci_client->sid;
-	a_ctrl->i2c_client.cci_client->sid = AF_EEPROM_I2C_ADDR_WRITE >> 1;
-	rc = a_ctrl->i2c_client.i2c_func_tbl->i2c_read(&a_ctrl->i2c_client, 0x2F, &reg_data, MSM_CAMERA_I2C_BYTE_DATA);
-	rc = a_ctrl->i2c_client.i2c_func_tbl->i2c_read(&a_ctrl->i2c_client, 0x42, &reg_data2, MSM_CAMERA_I2C_BYTE_DATA);
-	rc = a_ctrl->i2c_client.i2c_func_tbl->i2c_read(&a_ctrl->i2c_client, 0x54, &reg_data3, MSM_CAMERA_I2C_BYTE_DATA);
-	a_ctrl->i2c_client.cci_client->sid = cci_client_sid_backup;
-	if(reg_data == 0x78 && reg_data2 == 0x02 && reg_data3 == 0x1B)
+	if(a_ctrl->af_update_ver == 1)
 	{
-		pr_err("%s: No need to update AF FW\n", __func__);
-	}
-	else	//need to update AF FW
-	{
-		pr_err("%s: Update AF FW...\n", __func__);
-		a_ctrl->i2c_client.i2c_func_tbl->i2c_write(&a_ctrl->i2c_client, 0x84, 0x0, MSM_CAMERA_I2C_BYTE_DATA);
-		a_ctrl->i2c_client.i2c_func_tbl->i2c_write(&a_ctrl->i2c_client, 0x87, 0x0, MSM_CAMERA_I2C_BYTE_DATA);
-		a_ctrl->i2c_client.i2c_func_tbl->i2c_write(&a_ctrl->i2c_client, 0x8E, 0x0, MSM_CAMERA_I2C_BYTE_DATA);
-		usleep_range(10000, 11000);
-		a_ctrl->i2c_client.i2c_func_tbl->i2c_write(&a_ctrl->i2c_client, 0x9C, 0xAF, MSM_CAMERA_I2C_BYTE_DATA);
-		a_ctrl->i2c_client.i2c_func_tbl->i2c_write(&a_ctrl->i2c_client, 0x9D, 0x80, MSM_CAMERA_I2C_BYTE_DATA);
-
-		/* Bcakup the I2C slave address */
 		cci_client_sid_backup = a_ctrl->i2c_client.cci_client->sid;
-		/* Replace the I2C slave address with AF EEPROM */
 		a_ctrl->i2c_client.cci_client->sid = AF_EEPROM_I2C_ADDR_WRITE >> 1;
-		for (i = 0; i < ARRAY_SIZE(lc898214xd_fw_setting); i++)
+		rc = a_ctrl->i2c_client.i2c_func_tbl->i2c_read(&a_ctrl->i2c_client, 0x2F, &reg_data, MSM_CAMERA_I2C_BYTE_DATA);
+		rc = a_ctrl->i2c_client.i2c_func_tbl->i2c_read(&a_ctrl->i2c_client, 0x42, &reg_data2, MSM_CAMERA_I2C_BYTE_DATA);
+		rc = a_ctrl->i2c_client.i2c_func_tbl->i2c_read(&a_ctrl->i2c_client, 0x54, &reg_data3, MSM_CAMERA_I2C_BYTE_DATA);
+		a_ctrl->i2c_client.cci_client->sid = cci_client_sid_backup;
+		if(reg_data == 0x78 && reg_data2 == 0x02 && reg_data3 == 0x1B)
 		{
-			a_ctrl->i2c_client.i2c_func_tbl->i2c_write(&a_ctrl->i2c_client, lc898214xd_fw_setting[i].reg_addr, lc898214xd_fw_setting[i].reg_data, MSM_CAMERA_I2C_BYTE_DATA);
-			usleep_range(3000, 4000);
-			rc = a_ctrl->i2c_client.i2c_func_tbl->i2c_poll(&a_ctrl->i2c_client, 0xED, 0x0, MSM_CAMERA_I2C_BYTE_DATA,10);	//wait 10ms
+			pr_err("%s: No need to update AF FW\n", __func__);
+		}
+		else	//need to update AF FW
+		{
+			pr_err("%s: Update AF FW...\n", __func__);
+			a_ctrl->i2c_client.i2c_func_tbl->i2c_write(&a_ctrl->i2c_client, 0x84, 0x0, MSM_CAMERA_I2C_BYTE_DATA);
+			a_ctrl->i2c_client.i2c_func_tbl->i2c_write(&a_ctrl->i2c_client, 0x87, 0x0, MSM_CAMERA_I2C_BYTE_DATA);
+			a_ctrl->i2c_client.i2c_func_tbl->i2c_write(&a_ctrl->i2c_client, 0x8E, 0x0, MSM_CAMERA_I2C_BYTE_DATA);
+			usleep_range(10000, 11000);
+			a_ctrl->i2c_client.i2c_func_tbl->i2c_write(&a_ctrl->i2c_client, 0x9C, 0xAF, MSM_CAMERA_I2C_BYTE_DATA);
+			a_ctrl->i2c_client.i2c_func_tbl->i2c_write(&a_ctrl->i2c_client, 0x9D, 0x80, MSM_CAMERA_I2C_BYTE_DATA);
+
+			/* Bcakup the I2C slave address */
+			cci_client_sid_backup = a_ctrl->i2c_client.cci_client->sid;
+			/* Replace the I2C slave address with AF EEPROM */
+			a_ctrl->i2c_client.cci_client->sid = AF_EEPROM_I2C_ADDR_WRITE >> 1;
+			for (i = 0; i < ARRAY_SIZE(lc898214xd_fw_setting); i++)
+			{
+				a_ctrl->i2c_client.i2c_func_tbl->i2c_write(&a_ctrl->i2c_client, lc898214xd_fw_setting[i].reg_addr, lc898214xd_fw_setting[i].reg_data, MSM_CAMERA_I2C_BYTE_DATA);
+				usleep_range(3000, 4000);
+				rc = a_ctrl->i2c_client.i2c_func_tbl->i2c_poll(&a_ctrl->i2c_client, 0xED, 0x0, MSM_CAMERA_I2C_BYTE_DATA,10);	//wait 10ms
+				if (rc < 0) {
+					pr_err("%s: i2c poll failed after wrtie 0x%x\n", __func__, lc898214xd_fw_setting[i].reg_addr);
+					a_ctrl->i2c_client.cci_client->sid = cci_client_sid_backup;
+					return;
+				}
+			}
+
+			/* Restore the I2C slave address */
+			a_ctrl->i2c_client.cci_client->sid = cci_client_sid_backup;
+			a_ctrl->i2c_client.i2c_func_tbl->i2c_write(&a_ctrl->i2c_client, 0x9C, 0x0, MSM_CAMERA_I2C_BYTE_DATA);
+			a_ctrl->i2c_client.i2c_func_tbl->i2c_write(&a_ctrl->i2c_client, 0x9D, 0x0, MSM_CAMERA_I2C_BYTE_DATA);
+			a_ctrl->i2c_client.i2c_func_tbl->i2c_write(&a_ctrl->i2c_client, 0x87, 0x0, MSM_CAMERA_I2C_BYTE_DATA);
+			a_ctrl->i2c_client.i2c_func_tbl->i2c_write(&a_ctrl->i2c_client, 0xE0, 0x01, MSM_CAMERA_I2C_BYTE_DATA);
+			rc = a_ctrl->i2c_client.i2c_func_tbl->i2c_poll(&a_ctrl->i2c_client, 0xE0, 0x0, MSM_CAMERA_I2C_BYTE_DATA,10);	//wait 10ms
 			if (rc < 0) {
-				pr_err("%s: i2c poll failed after wrtie 0x%x\n", __func__, lc898214xd_fw_setting[i].reg_addr);
+				pr_err("%s: i2c poll failed after wrtie 0xE0\n", __func__);
 				return;
 			}
-		}
 
-		/* Restore the I2C slave address */
-		a_ctrl->i2c_client.cci_client->sid = cci_client_sid_backup;
-		a_ctrl->i2c_client.i2c_func_tbl->i2c_write(&a_ctrl->i2c_client, 0x9C, 0x0, MSM_CAMERA_I2C_BYTE_DATA);
-		a_ctrl->i2c_client.i2c_func_tbl->i2c_write(&a_ctrl->i2c_client, 0x9D, 0x0, MSM_CAMERA_I2C_BYTE_DATA);
-		a_ctrl->i2c_client.i2c_func_tbl->i2c_write(&a_ctrl->i2c_client, 0x87, 0x0, MSM_CAMERA_I2C_BYTE_DATA);
-		a_ctrl->i2c_client.i2c_func_tbl->i2c_write(&a_ctrl->i2c_client, 0xE0, 0x01, MSM_CAMERA_I2C_BYTE_DATA);
-		rc = a_ctrl->i2c_client.i2c_func_tbl->i2c_poll(&a_ctrl->i2c_client, 0xE0, 0x0, MSM_CAMERA_I2C_BYTE_DATA,10);	//wait 10ms
-		if (rc < 0) {
-			pr_err("%s: i2c poll failed after wrtie 0xE0\n", __func__);
-			return;
+			pr_err("%s: Update AF FW successfully\n", __func__);
 		}
-
-		pr_err("%s: Update AF FW successfully\n", __func__);
 	}
 	return;
 }
@@ -733,7 +775,10 @@ static int32_t msm_actuator_move_focus(
 
 	CDBG("called, dir %d, num_steps %d\n", dir, num_steps);
 
-	if (dest_step_pos == a_ctrl->curr_step_pos)
+	if ((dest_step_pos == a_ctrl->curr_step_pos) ||
+		((dest_step_pos <= a_ctrl->total_steps) &&
+		(a_ctrl->step_position_table[dest_step_pos] ==
+		a_ctrl->step_position_table[a_ctrl->curr_step_pos])))
 		return rc;
 
 	if ((sign_dir > MSM_ACTUATOR_MOVE_SIGNED_NEAR) ||
@@ -1112,6 +1157,9 @@ static int32_t msm_actuator_init_step_table(struct msm_actuator_ctrl_t *a_ctrl,
 	uint16_t step_boundary = 0;
 	uint32_t max_code_size = 1;
 	uint16_t data_size = set_info->actuator_params.data_size;
+//HTC_START
+	static int first = 0;
+//HTC_END
 	CDBG("Enter\n");
 
 	/* validate the actuator state */
@@ -1183,10 +1231,26 @@ static int32_t msm_actuator_init_step_table(struct msm_actuator_ctrl_t *a_ctrl,
 						step_index] =
 						max_code_size;
 			}
+//HTC_START
+#if 1
+			if(first == 0)
+			{
+			pr_info("[CAM]step_position_table[%d] = %d (0x%x)\n", step_index,
+				a_ctrl->step_position_table[step_index], a_ctrl->step_position_table[step_index]);
+			}
+#else
 			CDBG("step_position_table[%d] = %d\n", step_index,
 				a_ctrl->step_position_table[step_index]);
+#endif
+//HTC_END
 		}
 	}
+//HTC_START
+	if(first == 0)
+	{
+	first = 1;
+	}
+//HTC_END
 	CDBG("Exit\n");
 	return 0;
 }
@@ -1642,11 +1706,6 @@ static int32_t msm_actuator_config(struct msm_actuator_ctrl_t *a_ctrl,
 		if (rc < 0)
 			pr_err("Failed write CFG_ACTUATOR_OIS_SSC_GAIN %d\n", rc);
 		break;
-#else
-	case CFG_OIS_GYRO_GAIN_WRITE:
-	case CFG_OIS_SSC_GAIN_WRITE:
-		rc = 0;
-		break;
 #endif
 /*HTC_END*/
 
@@ -1896,6 +1955,10 @@ static long msm_actuator_subdev_do_ioctl(
 			parg = &actuator_data;
 			break;
 		}
+		break;
+	case VIDIOC_MSM_ACTUATOR_CFG:
+		pr_err("%s: invalid cmd 0x%x received\n", __func__, cmd);
+		return -EINVAL;
 	}
 
 	rc = msm_actuator_subdev_ioctl(sd, cmd, parg);
@@ -1932,6 +1995,10 @@ static int32_t msm_actuator_power_up(struct msm_actuator_ctrl_t *a_ctrl)
 	enum msm_sensor_power_seq_gpio_t gpio;
 
 	CDBG("%s called\n", __func__);
+//HTC_START
+	pre_dac = 0;
+	sac_mode = 3; //default mode 3
+//HTC_END
 
 	rc = msm_actuator_vreg_control(a_ctrl, 1);
 	if (rc < 0) {
@@ -2140,6 +2207,19 @@ static int32_t msm_actuator_platform_probe(struct platform_device *pdev)
 			msm_actuator_t->cam_pinctrl_status = 0;
 		}
 	}
+//HTC_START
+	rc = of_property_read_u32((&pdev->dev)->of_node, "sac-switch",
+		&msm_actuator_t->sac_switch);
+	if (rc < 0) {
+		pr_err("Read sac_switch fail\n");
+	}
+
+	rc = of_property_read_u32((&pdev->dev)->of_node, "af-update",
+		&msm_actuator_t->af_update_ver);
+	if (rc < 0) {
+		pr_err("Read af-update fail\n");
+	}
+//HTC_END
 
 	msm_actuator_t->act_v4l2_subdev_ops = &msm_actuator_subdev_ops;
 	msm_actuator_t->actuator_mutex = &msm_actuator_mutex;

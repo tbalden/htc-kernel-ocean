@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -24,7 +24,13 @@
 /*HTC_END*/
 
 #undef CDBG
+//HTC_START
+#if 1
+#define CDBG(fmt, args...) pr_info("[CAM]"fmt, ##args)
+#else
 #define CDBG(fmt, args...) pr_debug(fmt, ##args)
+#endif
+//HTC_END
 
 static struct msm_camera_i2c_fn_t msm_sensor_cci_func_tbl;
 static struct msm_camera_i2c_fn_t msm_sensor_secure_func_tbl;
@@ -383,10 +389,17 @@ int msm_sensor_match_id(struct msm_sensor_ctrl_t *s_ctrl)
 		return rc;
 	}
 
-	CDBG("%s: read id: 0x%x expected id 0x%x:\n",
+//HTC_START
+#if 1
+	CDBG("%s: read id: 0x%x expected id 0x%x, name:%s\n",
+			__func__, chipid, slave_info->sensor_id, sensor_name);
+#else
+	pr_debug("%s: read id: 0x%x expected id 0x%x:\n",
 			__func__, chipid, slave_info->sensor_id);
+#endif
+//HTC_END
 	if (msm_sensor_id_by_mask(s_ctrl, chipid) != slave_info->sensor_id) {
-		pr_err("%s chip id %x does not match %x\n",
+		pr_err("[CAM]%s chip id %x does not match %x\n",
 				__func__, chipid, slave_info->sensor_id);
 		return -ENODEV;
 	}
@@ -540,6 +553,47 @@ long msm_sensor_subdev_fops_ioctl(struct file *file,
 {
 	return video_usercopy(file, cmd, arg, msm_sensor_subdev_do_ioctl);
 }
+
+//HTC_START
+static int msm_sensor_read_blc32(struct sensorb_cfg_data32 *cdata,
+    struct msm_sensor_ctrl_t *s_ctrl)
+{
+    int rc = 0;
+    static int first = true;
+    static uint8_t otp[4] = {0};
+    uint16_t read_data = 0;
+
+    if (first)
+    {
+        first = false;
+        // Read alpha value for BLC
+        msleep(10);
+        rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_read(s_ctrl->sensor_i2c_client, 0x798F, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+        otp[0] = read_data;
+        rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_read(s_ctrl->sensor_i2c_client, 0x7991, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+        otp[1] = read_data - 0xa;
+        rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_read(s_ctrl->sensor_i2c_client, 0x7993, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+        otp[2] = read_data - 0xe;
+        rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_read(s_ctrl->sensor_i2c_client, 0x7995, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+        otp[3] = read_data;
+    }
+
+    if(cdata != NULL)
+    {
+        cdata->alpha.Alpha_Gb = otp[0];
+        cdata->alpha.Alpha_B = otp[1];
+        cdata->alpha.Alpha_R = otp[2];
+        cdata->alpha.Alpha_Gr = otp[3];
+
+        pr_info("%s: alpha value (Alpha_Gb) = 0x%x\n", __func__,  cdata->alpha.Alpha_Gb);
+        pr_info("%s: alpha value (Alpha_B) = 0x%x\n", __func__,  cdata->alpha.Alpha_B);
+        pr_info("%s: alpha value (Alpha_R) = 0x%x\n", __func__,  cdata->alpha.Alpha_R);
+        pr_info("%s: alpha value (Alpha_Gr) = 0x%x\n", __func__,  cdata->alpha.Alpha_Gr);
+    }
+
+    return rc;
+}
+//HTC_END
 
 static int msm_sensor_config32(struct msm_sensor_ctrl_t *s_ctrl,
 	void __user *argp)
@@ -747,7 +801,12 @@ static int msm_sensor_config32(struct msm_sensor_ctrl_t *s_ctrl,
 			pr_err("%s:%d: i2c_read failed\n", __func__, __LINE__);
 			break;
 		}
-		read_config_ptr->data = local_data;
+		if (copy_to_user(&read_config_ptr->data,
+				&local_data, sizeof(local_data))) {
+			pr_err("%s:%d failed\n", __func__, __LINE__);
+			rc = -EFAULT;
+			break;
+		}
 		break;
 	}
 	case CFG_SLAVE_WRITE_I2C_ARRAY: {
@@ -1073,6 +1132,11 @@ static int msm_sensor_config32(struct msm_sensor_ctrl_t *s_ctrl,
 #endif
 		break;
 /*HTC_END*/
+// HTC_START
+    case CFG_READ_BLC:
+        rc = msm_sensor_read_blc32(cdata, s_ctrl);
+        break;
+// HTC_END
 
 	default:
 		rc = -EFAULT;
@@ -1277,7 +1341,12 @@ int msm_sensor_config(struct msm_sensor_ctrl_t *s_ctrl, void __user *argp)
 			pr_err("%s:%d: i2c_read failed\n", __func__, __LINE__);
 			break;
 		}
-		read_config_ptr->data = local_data;
+		if (copy_to_user(&read_config_ptr->data,
+				&local_data, sizeof(local_data))) {
+			pr_err("%s:%d failed\n", __func__, __LINE__);
+			rc = -EFAULT;
+			break;
+		}
 		break;
 	}
 	case CFG_SLAVE_WRITE_I2C_ARRAY: {

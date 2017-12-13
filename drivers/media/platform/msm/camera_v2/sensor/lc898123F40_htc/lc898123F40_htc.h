@@ -1,7 +1,7 @@
 /* OIS calibration interface for LC898123 F40
  *
  */
-#include "Ois.h"
+#include	"PhoneUpdate.h"
 
 void RamWrite32A(UINT_16 RamAddr, UINT_32 RamData);
 void RamRead32A(UINT_16 RamAddr, UINT_32 * ReadData);

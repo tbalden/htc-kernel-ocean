@@ -104,7 +104,7 @@ unsigned char htc_ext_GyroReCalib(struct msm_camera_i2c_client *i2c_client, int 
 		return -1;
 
 	//Do gyro offset calibration
-	UcSndDat = GyroReCalib(&pReCalib);
+	UcSndDat = F40_GyroReCalib(&pReCalib);
 	pr_info("[OIS_Cali]%s: %d, pReCalib->SsDiffX = %d (%#x), pReCalib->SsDiffY = %d (%#x)\n", __func__, UcSndDat, pReCalib.SsDiffX, pReCalib.SsDiffX, pReCalib.SsDiffY, pReCalib.SsDiffY);
 
 	//Write calibration result
@@ -140,7 +140,7 @@ unsigned char htc_ext_WrGyroOffsetData( void )
 {
 	UINT_8	ans;
     pr_info("[OIS_Cali]%s: E\n", __func__);
-    ans = WrGyroOffsetData();
+    ans = F40_WrGyroOffsetData();
 	return ans;
 }
 
@@ -158,7 +158,7 @@ void htc_ext_FlashSectorRead(struct msm_camera_i2c_client *i2c_client, unsigned 
 		return;
 
 	//First read to check module version+
-	FlashSectorRead_htc(address, data_ptr, 0);
+	F40_FlashSectorRead_htc(address, data_ptr, 0);
 	if(data_ptr[0] != 0xFF)
 	{
 		version = 0;
@@ -176,9 +176,9 @@ void htc_ext_FlashSectorRead(struct msm_camera_i2c_client *i2c_client, unsigned 
 	for (i = 0; i < blk_num; i++)
 	{
 		if(version == 0)
-			FlashSectorRead_htc(address, data_ptr+SECTOR_UNIT*i, version);
+			F40_FlashSectorRead_htc(address, data_ptr+SECTOR_UNIT*i, version);
 		else
-			FlashSectorRead_htc(address, data_ptr+SECTOR_DATA*i, version);
+			F40_FlashSectorRead_htc(address, data_ptr+SECTOR_DATA*i, version);
 		address += 64;
 	}
 	//dump data
@@ -194,7 +194,7 @@ void htc_ext_FlashInt32Write(struct msm_camera_i2c_client *i2c_client, UINT_32 a
 
 	// dump write
 	pr_info("[EEPROM][write] addr:0x%x data:0x%x\n", address, data);
-	FlashInt32Write(address, &data, 1);
+	F40_FlashInt32Write(address, &data, 1);
 }
 #define VERNUM 0x19 // LGIT HTC original
 #define CALID_CM1 0x00000006 // Calibration ID
@@ -220,14 +220,14 @@ int htc_checkFWUpdate(struct msm_camera_i2c_client *i2c_client)
 		if((UlFWDat&0xFF00) == 0x0500)
 		{
 			pr_info("[OIS_Cali]%s: CM1 FW update. %x -> %x", __func__, UlFWDat, VERNUM);
-			rc = FlashDownload(0, 9, 5);
+			rc = F40_FlashDownload(0, 9, 5);
 			if(rc!=0)
 				pr_info("[OIS_Cali]%s: CM1 FlashUpdate = %d  fail.", __func__, rc);
 		}
 		else if((UlFWDat&0xFF00) == 0x0100 || (UlFWDat&0xFF00) == 0x0700)
 		{
 			pr_info("[OIS_Cali]%s: CM2 FW update. %x -> %x", __func__, UlFWDat, VERNUM);
-			rc = FlashDownload(0, 9, 7);
+			rc = F40_FlashDownload(0, 9, 7);
 			if(rc!=0)
 				pr_info("[OIS_Cali]%s: CM2 FlashUpdate = %d  fail.", __func__, rc);
 		}

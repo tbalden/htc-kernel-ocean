@@ -23,7 +23,8 @@ static inline void msm_isp_stats_cfg_wm_scratch(struct vfe_device *vfe_dev,
 {
 	vfe_dev->hw_info->vfe_ops.stats_ops.update_ping_pong_addr(
 		vfe_dev, stream_info,
-		pingpong_status, vfe_dev->buf_mgr->scratch_buf_stats_addr);
+		pingpong_status, vfe_dev->buf_mgr->scratch_buf_stats_addr,
+		SZ_32M);
 }
 
 static inline void msm_isp_stats_cfg_stream_scratch(
@@ -123,7 +124,8 @@ static int msm_isp_stats_cfg_ping_pong_address(
 		vfe_dev->hw_info->vfe_ops.stats_ops.update_ping_pong_addr(
 			vfe_dev, stream_info, pingpong_status,
 			buf->mapped_info[0].paddr +
-			stream_info->buffer_offset[k]);
+			stream_info->buffer_offset[k],
+			buf->mapped_info[0].len);
 	}
 	stream_info->buf[pingpong_bit] = buf;
 	buf->pingpong_bit = pingpong_bit;
@@ -226,9 +228,14 @@ static int32_t msm_isp_stats_buf_divert(struct vfe_device *vfe_dev,
 		done_buf->buf_idx;
 
 	stats_event->pd_stats_idx = 0xF;
-	if (stream_info->stats_type == MSM_ISP_STATS_BF)
-		stats_event->pd_stats_idx = vfe_dev->pd_buf_idx;
-
+	if (stream_info->stats_type == MSM_ISP_STATS_BF) {
+		spin_lock_irqsave(&vfe_dev->common_data->
+			common_dev_data_lock, flags);
+		stats_event->pd_stats_idx = vfe_dev->common_data->pd_buf_idx;
+		vfe_dev->common_data->pd_buf_idx = 0xF;
+		spin_unlock_irqrestore(&vfe_dev->common_data->
+			common_dev_data_lock, flags);
+	}
 	if (comp_stats_type_mask == NULL) {
 		stats_event->stats_mask =
 			1 << stream_info->stats_type;
@@ -260,7 +267,9 @@ static int32_t msm_isp_stats_configure(struct vfe_device *vfe_dev,
 	int result = 0;
 
 	memset(&buf_event, 0, sizeof(struct msm_isp_event_data));
-	buf_event.timestamp = ts->buf_time;
+	buf_event.timestamp = ts->event_time;
+	buf_event.mono_timestamp = ts->buf_time;
+
 	buf_event.frame_id = vfe_dev->axi_data.src_info[VFE_PIX_0].frame_id;
 	pingpong_status = vfe_dev->hw_info->
 		vfe_ops.stats_ops.get_pingpong_status(vfe_dev);
@@ -405,6 +414,9 @@ int msm_isp_stats_create_stream(struct vfe_device *vfe_dev,
 		framedrop_period = msm_isp_get_framedrop_period(
 			stream_req_cmd->framedrop_pattern);
 		stream_info->framedrop_period = framedrop_period;
+		if(stream_req_cmd->stats_type == MSM_ISP_STATS_BF)
+			pr_err("%s: num_isp = %d, stream_info[%d, %x, %pK], framedrop_period = %d, req_cmd->framedrop_pattern = %d, framedrop_pattern = %d\n",
+				__func__, stream_info->num_isp, stream_info->session_id, stream_info->stream_id, stream_info, stream_info->framedrop_period, stream_req_cmd->framedrop_pattern, framedrop_pattern);
 	} else {
 		if (stream_info->vfe_mask & (1 << vfe_dev->pdev->id)) {
 			pr_err("%s: stats %d already requested for vfe %d\n",
@@ -429,11 +441,36 @@ int msm_isp_stats_create_stream(struct vfe_device *vfe_dev,
 			rc = -EINVAL;
 		framedrop_period = msm_isp_get_framedrop_period(
 			stream_req_cmd->framedrop_pattern);
+		if(stream_req_cmd->stats_type == MSM_ISP_STATS_BF)
+			pr_err("%s: num_isp = %d, stream_info[%d, %x, %pK], framedrop_period = %d, req_cmd->framedrop_pattern = %d, framedrop_pattern = %d\n",
+				__func__, stream_info->num_isp, stream_info->session_id, stream_info->stream_id, stream_info, stream_info->framedrop_period, stream_req_cmd->framedrop_pattern, framedrop_pattern);
+#if 0
 		if (stream_info->framedrop_period != framedrop_period)
 			rc = -EINVAL;
+#else   //HTC modify
+		if (stream_info->framedrop_period != framedrop_period)
+		{
+			pr_err("[CAM]%s: Stats stream param mismatch between vfe, try to get framedrop_period again...\n", __func__);
+			pr_err("[CAM]%s: stream_info session_id 0x%x, composite_flag 0x%x, stats_type %d, framedrop_pattern %d\n",
+				__func__, stream_info->session_id, stream_info->composite_flag, stream_info->stats_type, stream_info->framedrop_pattern);
+			pr_err("[CAM]%s: stream_req_cmd session_id 0x%x, composite_flag 0x%x, stats_type %d, framedrop_pattern %d(%d)\n",
+				__func__, stream_req_cmd->session_id, stream_req_cmd->composite_flag, stream_req_cmd->stats_type,
+				stream_req_cmd->framedrop_pattern, framedrop_period);
+			stream_info->framedrop_period = msm_isp_get_framedrop_period(
+				stream_req_cmd->framedrop_pattern);
+		}
+#endif
 		if (rc) {
 			pr_err("%s: Stats stream param mismatch between vfe\n",
 				__func__);
+			//HTC_START
+			pr_err("%s: stream_info session_id 0x%x, composite_flag 0x%x, stats_type %d, framedrop_pattern %d\n",
+				__func__, stream_info->session_id, stream_info->composite_flag, stream_info->stats_type, stream_info->framedrop_pattern);
+			pr_err("%s: stream_req_cmd session_id 0x%x, composite_flag 0x%x, stats_type %d, framedrop_pattern %d(%d)\n",
+				__func__, stream_req_cmd->session_id, stream_req_cmd->composite_flag, stream_req_cmd->stats_type,
+				stream_req_cmd->framedrop_pattern, framedrop_period);
+			//HTC_END
+
 			return rc;
 		}
 	}
@@ -763,7 +800,7 @@ void msm_isp_process_stats_reg_upd_epoch_irq(struct vfe_device *vfe_dev,
 			spin_unlock_irqrestore(&stream_info->lock, flags);
 			if (-EFAULT == rc) {
 				msm_isp_halt_send_error(vfe_dev,
-						ISP_EVENT_BUF_FATAL_ERROR);
+						ISP_EVENT_PING_PONG_MISMATCH);
 				return;
 			}
 			continue;
@@ -831,6 +868,12 @@ static int msm_isp_stats_update_cgc_override(struct vfe_device *vfe_dev,
 	struct vfe_device *update_vfes[MAX_VFE] = {NULL, NULL};
 	struct msm_vfe_stats_stream *stream_info;
 	int k;
+
+	if (stream_cfg_cmd->num_streams > MSM_ISP_STATS_MAX) {
+		pr_err("%s invalid num_streams %d\n", __func__,
+			stream_cfg_cmd->num_streams);
+		return -EINVAL;
+	}
 
 	for (i = 0; i < stream_cfg_cmd->num_streams; i++) {
 		idx = STATS_IDX(stream_cfg_cmd->stream_handle[i]);
@@ -961,6 +1004,11 @@ static int msm_isp_check_stream_cfg_cmd(struct vfe_device *vfe_dev,
 	int vfe_idx;
 	uint32_t stats_idx[MSM_ISP_STATS_MAX];
 
+	if (stream_cfg_cmd->num_streams > MSM_ISP_STATS_MAX) {
+		pr_err("%s invalid num_streams %d\n", __func__,
+			stream_cfg_cmd->num_streams);
+		return -EINVAL;
+	}
 	memset(stats_idx, 0, sizeof(stats_idx));
 	for (i = 0; i < stream_cfg_cmd->num_streams; i++) {
 		idx = STATS_IDX(stream_cfg_cmd->stream_handle[i]);
@@ -1074,7 +1122,7 @@ static int msm_isp_start_stats_stream(struct vfe_device *vfe_dev_ioctl,
 	uint32_t comp_stats_mask[MAX_NUM_STATS_COMP_MASK] = {0};
 	uint32_t num_stats_comp_mask = 0;
 	struct msm_vfe_stats_stream *stream_info;
-	struct msm_vfe_stats_shared_data *stats_data;
+	struct msm_vfe_stats_shared_data *stats_data = NULL;
 	int num_stream = 0;
 	struct msm_vfe_stats_stream *streams[MSM_ISP_STATS_MAX];
 	struct msm_isp_timestamp timestamp;
@@ -1136,10 +1184,12 @@ static int msm_isp_start_stats_stream(struct vfe_device *vfe_dev_ioctl,
 			comp_stats_mask[stream_info->composite_flag-1] |=
 				1 << idx;
 
-		ISP_DBG("%s: stats_mask %x %x active streams %d\n",
+		ISP_DBG("%s: stats_mask %x %x\n",
 			__func__, comp_stats_mask[0],
-			comp_stats_mask[1],
-			stats_data->num_active_stream);
+			comp_stats_mask[1]);
+		if (stats_data)
+			ISP_DBG("%s: active_streams = %d\n", __func__,
+				stats_data->num_active_stream);
 		streams[num_stream++] = stream_info;
 	}
 
@@ -1231,13 +1281,19 @@ int msm_isp_update_stats_stream(struct vfe_device *vfe_dev, void *arg)
 	int vfe_idx;
 	int k;
 
+	if (update_cmd->num_streams > MSM_ISP_STATS_MAX) {
+		pr_err("%s: Invalid num_streams %d\n",
+			__func__, update_cmd->num_streams);
+		return -EINVAL;
+	}
+
 	/*validate request*/
 	for (i = 0; i < update_cmd->num_streams; i++) {
 		update_info = (struct msm_vfe_axi_stream_cfg_update_info *)
 				&update_cmd->update_info[i];
 		/*check array reference bounds*/
 		if (STATS_IDX(update_info->stream_handle)
-			> vfe_dev->hw_info->stats_hw_info->num_stats_type) {
+			>= vfe_dev->hw_info->stats_hw_info->num_stats_type) {
 			pr_err("%s: stats idx %d out of bound!", __func__,
 			STATS_IDX(update_info->stream_handle));
 			return -EINVAL;
