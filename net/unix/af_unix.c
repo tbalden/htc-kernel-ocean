@@ -118,6 +118,21 @@
 #include <linux/security.h>
 #include <linux/freezer.h>
 
+#if CONFIG_HTC_NET_DEBUG && CONFIG_HTC_NETWORK_MODIFY
+#include <net/htc_net_debug.h>
+
+#define THRESHOLD_TIME_MS 200
+
+struct xtables_lock_info {
+	const struct sock* sk;
+	ktime_t time_start, time_end;
+};
+static struct xtables_lock_info xt_lock_info;
+
+static int xshare_lock_idx = -1;
+static int xshare_unlock_idx = -1;
+#endif /* CONFIG_HTC_NET_DEBUG && CONFIG_HTC_NETWORK_MODIFY */
+
 struct hlist_head unix_socket_table[2 * UNIX_HASH_SIZE];
 EXPORT_SYMBOL_GPL(unix_socket_table);
 DEFINE_SPINLOCK(unix_table_lock);
@@ -661,11 +676,11 @@ static int unix_set_peek_off(struct sock *sk, int val)
 {
 	struct unix_sock *u = unix_sk(sk);
 
-	if (mutex_lock_interruptible(&u->readlock))
+	if (mutex_lock_interruptible(&u->iolock))
 		return -EINTR;
 
 	sk->sk_peek_off = val;
-	mutex_unlock(&u->readlock);
+	mutex_unlock(&u->iolock);
 
 	return 0;
 }
@@ -778,7 +793,8 @@ static struct sock *unix_create1(struct net *net, struct socket *sock, int kern)
 	spin_lock_init(&u->lock);
 	atomic_long_set(&u->inflight, 0);
 	INIT_LIST_HEAD(&u->link);
-	mutex_init(&u->readlock); /* single task reading lock */
+	mutex_init(&u->iolock); /* single task reading lock */
+	mutex_init(&u->bindlock); /* single task binding lock */
 	init_waitqueue_head(&u->peer_wait);
 	init_waitqueue_func_entry(&u->peer_wake, unix_dgram_peer_wake_relay);
 	unix_insert_socket(unix_sockets_unbound(sk), sk);
@@ -831,6 +847,38 @@ static int unix_release(struct socket *sock)
 	if (!sk)
 		return 0;
 
+#if CONFIG_HTC_NET_DEBUG && CONFIG_HTC_NETWORK_MODIFY
+	if(xt_lock_info.sk == sk)
+	{
+		u32 time_elapsed_ms;
+		xt_lock_info.time_end = ktime_get();
+		time_elapsed_ms = ktime_to_ms(ktime_sub(xt_lock_info.time_end, xt_lock_info.time_start));
+
+		if(time_elapsed_ms >= THRESHOLD_TIME_MS)
+		{
+			pr_info("[NET] xshare_unlock by [%d,%s], parent=[%d,%s], sk=[%p], start,end,hold time=[%lld,%lld,%d](ms)\n",
+				current->pid,
+				current->comm,
+				(current->parent) ? current->parent->pid : 0,
+				(current->parent) ? current->parent->comm : "(Invalid)",
+				sk,
+				ktime_to_ms(xt_lock_info.time_start),
+				ktime_to_ms(xt_lock_info.time_end),
+				time_elapsed_ms
+			);
+		}
+
+		net_dbg_log_event_oneline(xshare_unlock_idx, "xshare_unlock by [%d,%s], parent=[%d,%s], sk=[%p]",
+			current->pid,
+			current->comm,
+			(current->parent) ? current->parent->pid : 0,
+			(current->parent) ? current->parent->comm : "(Invalid)",
+			sk
+		);
+		memset(&xt_lock_info, 0, sizeof(struct xtables_lock_info));
+	}
+#endif /* CONFIG_HTC_NET_DEBUG && CONFIG_HTC_NETWORK_MODIFY */
+
 	unix_release_sock(sk, 0);
 	sock->sk = NULL;
 
@@ -847,7 +895,7 @@ static int unix_autobind(struct socket *sock)
 	int err;
 	unsigned int retries = 0;
 
-	err = mutex_lock_interruptible(&u->readlock);
+	err = mutex_lock_interruptible(&u->bindlock);
 	if (err)
 		return err;
 
@@ -894,7 +942,7 @@ retry:
 	spin_unlock(&unix_table_lock);
 	err = 0;
 
-out:	mutex_unlock(&u->readlock);
+out:	mutex_unlock(&u->bindlock);
 	return err;
 }
 
@@ -953,20 +1001,32 @@ fail:
 	return NULL;
 }
 
-static int unix_mknod(struct dentry *dentry, struct path *path, umode_t mode,
-		      struct path *res)
+static int unix_mknod(const char *sun_path, umode_t mode, struct path *res)
 {
-	int err;
+	struct dentry *dentry;
+	struct path path;
+	int err = 0;
+	/*
+	 * Get the parent directory, calculate the hash for last
+	 * component.
+	 */
+	dentry = kern_path_create(AT_FDCWD, sun_path, &path, 0);
+	err = PTR_ERR(dentry);
+	if (IS_ERR(dentry))
+		return err;
 
-	err = security_path_mknod(path, dentry, mode, 0);
+	/*
+	 * All right, let's create it.
+	 */
+	err = security_path_mknod(&path, dentry, mode, 0);
 	if (!err) {
-		err = vfs_mknod(d_inode(path->dentry), dentry, mode, 0);
+		err = vfs_mknod(d_inode(path.dentry), dentry, mode, 0);
 		if (!err) {
-			res->mnt = mntget(path->mnt);
+			res->mnt = mntget(path.mnt);
 			res->dentry = dget(dentry);
 		}
 	}
-
+	done_path_create(&path, dentry);
 	return err;
 }
 
@@ -977,15 +1037,15 @@ static int unix_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 	struct unix_sock *u = unix_sk(sk);
 	struct sockaddr_un *sunaddr = (struct sockaddr_un *)uaddr;
 	char *sun_path = sunaddr->sun_path;
-	int err, name_err;
-	unsigned int hash;
+	int err;
+	unsigned int hash = 0;
 	struct unix_address *addr;
 	struct hlist_head *list;
-	struct path path;
-	struct dentry *dentry;
+	struct path path = { NULL, NULL };
 
 	err = -EINVAL;
-	if (sunaddr->sun_family != AF_UNIX)
+	if (addr_len < offsetofend(struct sockaddr_un, sun_family) ||
+	    sunaddr->sun_family != AF_UNIX)
 		goto out;
 
 	if (addr_len == sizeof(short)) {
@@ -998,33 +1058,24 @@ static int unix_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 		goto out;
 	addr_len = err;
 
-	name_err = 0;
-	dentry = NULL;
 	if (sun_path[0]) {
-		/* Get the parent directory, calculate the hash for last
-		 * component.
-		 */
-		dentry = kern_path_create(AT_FDCWD, sun_path, &path, 0);
-
-		if (IS_ERR(dentry)) {
-			/* delay report until after 'already bound' check */
-			name_err = PTR_ERR(dentry);
-			dentry = NULL;
+		umode_t mode = S_IFSOCK |
+		       (SOCK_INODE(sock)->i_mode & ~current_umask());
+		err = unix_mknod(sun_path, mode, &path);
+		if (err) {
+			if (err == -EEXIST)
+				err = -EADDRINUSE;
+			goto out;
 		}
 	}
 
-	err = mutex_lock_interruptible(&u->readlock);
+	err = mutex_lock_interruptible(&u->bindlock);
 	if (err)
-		goto out_path;
+		goto out_put;
 
 	err = -EINVAL;
 	if (u->addr)
 		goto out_up;
-
-	if (name_err) {
-		err = name_err == -EEXIST ? -EADDRINUSE : name_err;
-		goto out_up;
-	}
 
 	err = -ENOMEM;
 	addr = kmalloc(sizeof(*addr)+addr_len, GFP_KERNEL);
@@ -1036,21 +1087,11 @@ static int unix_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 	addr->hash = hash ^ sk->sk_type;
 	atomic_set(&addr->refcnt, 1);
 
-	if (dentry) {
-		struct path u_path;
-		umode_t mode = S_IFSOCK |
-		       (SOCK_INODE(sock)->i_mode & ~current_umask());
-		err = unix_mknod(dentry, &path, mode, &u_path);
-		if (err) {
-			if (err == -EEXIST)
-				err = -EADDRINUSE;
-			unix_release_addr(addr);
-			goto out_up;
-		}
+	if (sun_path[0]) {
 		addr->hash = UNIX_HASH_SIZE;
-		hash = d_real_inode(dentry)->i_ino & (UNIX_HASH_SIZE - 1);
+		hash = d_real_inode(path.dentry)->i_ino & (UNIX_HASH_SIZE - 1);
 		spin_lock(&unix_table_lock);
-		u->path = u_path;
+		u->path = path;
 		list = &unix_socket_table[hash];
 	} else {
 		spin_lock(&unix_table_lock);
@@ -1060,6 +1101,30 @@ static int unix_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 			unix_release_addr(addr);
 			goto out_unlock;
 		}
+
+#if CONFIG_HTC_NET_DEBUG && CONFIG_HTC_NETWORK_MODIFY
+		do{
+			struct sockaddr_un saddr_un = {0};
+			memcpy(&saddr_un, uaddr, addr_len);
+
+			// ip[6]tables acquires xtables lock
+			// abstract socket address[0] is a null byte ('\0')
+			if(strcmp(&saddr_un.sun_path[1], "xtables") != 0)
+				break;
+
+			memset(&xt_lock_info, 0, sizeof(struct xtables_lock_info));
+			xt_lock_info.sk = sk;
+			xt_lock_info.time_start = ktime_get();
+
+			net_dbg_log_event_oneline(xshare_lock_idx, "xshare_lock by [%d,%s], parent=[%d,%s], sk=[%p]",
+					current->pid,
+					current->comm,
+					(current->parent) ? current->parent->pid : 0,
+					(current->parent) ? current->parent->comm : "(Invalid)",
+					sk
+			);
+		} while(0);
+#endif /* CONFIG_HTC_NET_DEBUG && CONFIG_HTC_NETWORK_MODIFY */
 
 		list = &unix_socket_table[addr->hash];
 	}
@@ -1072,11 +1137,10 @@ static int unix_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 out_unlock:
 	spin_unlock(&unix_table_lock);
 out_up:
-	mutex_unlock(&u->readlock);
-out_path:
-	if (dentry)
-		done_path_create(&path, dentry);
-
+	mutex_unlock(&u->bindlock);
+out_put:
+	if (err)
+		path_put(&path);
 out:
 	return err;
 }
@@ -1115,6 +1179,10 @@ static int unix_dgram_connect(struct socket *sock, struct sockaddr *addr,
 	struct sock *other;
 	unsigned int hash;
 	int err;
+
+	err = -EINVAL;
+	if (alen < offsetofend(struct sockaddr, sa_family))
+		goto out;
 
 	if (addr->sa_family != AF_UNSPEC) {
 		err = unix_mkname(sunaddr, alen, &hash);
@@ -1971,17 +2039,17 @@ static ssize_t unix_stream_sendpage(struct socket *socket, struct page *page,
 	if (false) {
 alloc_skb:
 		unix_state_unlock(other);
-		mutex_unlock(&unix_sk(other)->readlock);
+		mutex_unlock(&unix_sk(other)->iolock);
 		newskb = sock_alloc_send_pskb(sk, 0, 0, flags & MSG_DONTWAIT,
 					      &err, 0);
 		if (!newskb)
 			goto err;
 	}
 
-	/* we must acquire readlock as we modify already present
+	/* we must acquire iolock as we modify already present
 	 * skbs in the sk_receive_queue and mess with skb->len
 	 */
-	err = mutex_lock_interruptible(&unix_sk(other)->readlock);
+	err = mutex_lock_interruptible(&unix_sk(other)->iolock);
 	if (err) {
 		err = flags & MSG_DONTWAIT ? -EAGAIN : -ERESTARTSYS;
 		goto err;
@@ -2048,7 +2116,7 @@ alloc_skb:
 	}
 
 	unix_state_unlock(other);
-	mutex_unlock(&unix_sk(other)->readlock);
+	mutex_unlock(&unix_sk(other)->iolock);
 
 	other->sk_data_ready(other);
 	scm_destroy(&scm);
@@ -2057,7 +2125,7 @@ alloc_skb:
 err_state_unlock:
 	unix_state_unlock(other);
 err_unlock:
-	mutex_unlock(&unix_sk(other)->readlock);
+	mutex_unlock(&unix_sk(other)->iolock);
 err:
 	kfree_skb(newskb);
 	if (send_sigpipe && !(flags & MSG_NOSIGNAL))
@@ -2122,7 +2190,7 @@ static int unix_dgram_recvmsg(struct socket *sock, struct msghdr *msg,
 	if (flags&MSG_OOB)
 		goto out;
 
-	err = mutex_lock_interruptible(&u->readlock);
+	err = mutex_lock_interruptible(&u->iolock);
 	if (unlikely(err)) {
 		/* recvmsg() in non blocking mode is supposed to return -EAGAIN
 		 * sk_rcvtimeo is not honored by mutex_lock_interruptible()
@@ -2198,7 +2266,7 @@ static int unix_dgram_recvmsg(struct socket *sock, struct msghdr *msg,
 out_free:
 	skb_free_datagram(sk, skb);
 out_unlock:
-	mutex_unlock(&u->readlock);
+	mutex_unlock(&u->iolock);
 out:
 	return err;
 }
@@ -2207,7 +2275,8 @@ out:
  *	Sleep until more data has arrived. But check for races..
  */
 static long unix_stream_data_wait(struct sock *sk, long timeo,
-				  struct sk_buff *last, unsigned int last_len)
+				  struct sk_buff *last, unsigned int last_len,
+				  bool freezable)
 {
 	struct sk_buff *tail;
 	DEFINE_WAIT(wait);
@@ -2228,7 +2297,10 @@ static long unix_stream_data_wait(struct sock *sk, long timeo,
 
 		sk_set_bit(SOCKWQ_ASYNC_WAITDATA, sk);
 		unix_state_unlock(sk);
-		timeo = freezable_schedule_timeout(timeo);
+		if (freezable)
+			timeo = freezable_schedule_timeout(timeo);
+		else
+			timeo = schedule_timeout(timeo);
 		unix_state_lock(sk);
 
 		if (sock_flag(sk, SOCK_DEAD))
@@ -2258,7 +2330,8 @@ struct unix_stream_read_state {
 	unsigned int splice_flags;
 };
 
-static int unix_stream_read_generic(struct unix_stream_read_state *state)
+static int unix_stream_read_generic(struct unix_stream_read_state *state,
+				    bool freezable)
 {
 	struct scm_cookie scm;
 	struct socket *sock = state->socket;
@@ -2293,7 +2366,7 @@ static int unix_stream_read_generic(struct unix_stream_read_state *state)
 	/* Lock the socket to prevent queue disordering
 	 * while sleeps in memcpy_tomsg
 	 */
-	mutex_lock(&u->readlock);
+	mutex_lock(&u->iolock);
 
 	if (flags & MSG_PEEK)
 		skip = sk_peek_offset(sk, flags);
@@ -2334,10 +2407,10 @@ again:
 				break;
 			}
 
-			mutex_unlock(&u->readlock);
+			mutex_unlock(&u->iolock);
 
 			timeo = unix_stream_data_wait(sk, timeo, last,
-						      last_len);
+						      last_len, freezable);
 
 			if (signal_pending(current)) {
 				err = sock_intr_errno(timeo);
@@ -2345,7 +2418,7 @@ again:
 				goto out;
 			}
 
-			mutex_lock(&u->readlock);
+			mutex_lock(&u->iolock);
 			continue;
 unlock:
 			unix_state_unlock(sk);
@@ -2448,7 +2521,7 @@ unlock:
 		}
 	} while (size);
 
-	mutex_unlock(&u->readlock);
+	mutex_unlock(&u->iolock);
 	if (state->msg)
 		scm_recv(sock, state->msg, &scm, flags);
 	else
@@ -2479,7 +2552,7 @@ static int unix_stream_recvmsg(struct socket *sock, struct msghdr *msg,
 		.flags = flags
 	};
 
-	return unix_stream_read_generic(&state);
+	return unix_stream_read_generic(&state, true);
 }
 
 static ssize_t skb_unix_socket_splice(struct sock *sk,
@@ -2489,9 +2562,9 @@ static ssize_t skb_unix_socket_splice(struct sock *sk,
 	int ret;
 	struct unix_sock *u = unix_sk(sk);
 
-	mutex_unlock(&u->readlock);
+	mutex_unlock(&u->iolock);
 	ret = splice_to_pipe(pipe, spd);
-	mutex_lock(&u->readlock);
+	mutex_lock(&u->iolock);
 
 	return ret;
 }
@@ -2525,7 +2598,7 @@ static ssize_t unix_stream_splice_read(struct socket *sock,  loff_t *ppos,
 	    flags & SPLICE_F_NONBLOCK)
 		state.flags = MSG_DONTWAIT;
 
-	return unix_stream_read_generic(&state);
+	return unix_stream_read_generic(&state, false);
 }
 
 static int unix_shutdown(struct socket *sock, int mode)
@@ -2917,6 +2990,12 @@ static int __init af_unix_init(void)
 
 	sock_register(&unix_family_ops);
 	register_pernet_subsys(&unix_net_ops);
+
+#if CONFIG_HTC_NET_DEBUG && CONFIG_HTC_NETWORK_MODIFY
+	xshare_lock_idx = net_dbg_get_free_log_event_oneline();
+	xshare_unlock_idx = net_dbg_get_free_log_event_oneline();
+#endif /* CONFIG_HTC_NET_DEBUG && CONFIG_HTC_NETWORK_MODIFY */
+
 out:
 	return rc;
 }
