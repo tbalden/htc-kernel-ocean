@@ -273,6 +273,7 @@ static void usb_read_work_fn(struct work_struct *work)
 	spin_unlock_irqrestore(&ch->lock, flags);
 }
 
+extern bool vendor_cmd;
 static void usb_read_done_work_fn(struct work_struct *work)
 {
 	struct diag_request *req = NULL;
@@ -292,6 +293,14 @@ static void usb_read_done_work_fn(struct work_struct *work)
 	req = ch->read_ptr;
 	ch->read_cnt++;
 
+#if DIAG_XPST && !defined(CONFIG_DIAGFWD_BRIDGE_CODE)
+	if (vendor_cmd) {
+		req->buf = ch->read_buf;
+		req->length = USB_MAX_OUT_BUF;
+		usb_diag_read(ch->hdl, req);
+		return;
+	}
+#endif
 	if (ch->ops && ch->ops->read_done && req->status >= 0)
 		ch->ops->read_done(req->buf, req->actual, ch->ctxt);
 }
