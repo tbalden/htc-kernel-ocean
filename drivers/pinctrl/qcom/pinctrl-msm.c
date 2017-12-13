@@ -42,6 +42,18 @@
 #define GPIO_GROUP2 0x900000
 #define GPIO_GROUP3 0x500000
 #define REG_SIZE 0x1000
+#define MSM_PIN_START 0
+
+#ifdef CONFIG_ARCH_MSM8998
+#define MSM_PIN_END 150
+#define SDC_PIN_START 150
+#define SDC_PIN_END 153
+#endif
+#ifdef CONFIG_ARCH_SDM630
+#define MSM_PIN_END 114
+#define SDC_PIN_START 114
+#define SDC_PIN_END 121
+#endif
 
 /**
  * struct msm_pinctrl - state for a pinctrl-msm device
@@ -485,7 +497,7 @@ int msm_dump_sdc(struct seq_file *m, int curr_len, char *gpio_buffer)
 		pr_info("%s\n", title_msg);
 		curr_len += sprintf(gpio_buffer + curr_len, "%s\n", title_msg);
 	}
-	for (i = 150 ;i < 153; i++) {
+	for (i = SDC_PIN_START ;i < SDC_PIN_END; i++) {
 		memset(list_gpio, 0 , sizeof(list_gpio));
 		len = 0;
 		g = &pctrl->soc->groups[i];
@@ -544,14 +556,14 @@ int msm_dump_gpios(struct seq_file *m, int curr_len, char *gpio_buffer)
 		pr_info("%s\n", title_msg);
 		curr_len += sprintf(gpio_buffer + curr_len, "%s\n", title_msg);
 	}
-//	msm_gpio_dbg_show_8998();
-	for (i = 0 ;i < 150; i++) {
+	for (i = MSM_PIN_START ;i < MSM_PIN_END; i++) {
 		memset(list_gpio, 0 , sizeof(list_gpio));
 		len = 0;
 
 		g = &pctrl->soc->groups[i];
+#ifdef CONFIG_ARCH_MSM8998
 	if((i>=4 && i<=7)||(i>=38 && i<=39)||(i>=53 && i<=80)||(i>=97 && i<=104)||\
-	(i>=114 && i<=116)||(i>=127 && i<=129)||(i>=132 && i<=149)){
+		(i>=114 && i<=116)||(i>=127 && i<=129)||(i>=132 && i<=149)){
 		ctl_reg = readl(pctrl->regs + GPIO_GROUP1 + (REG_SIZE * i));
 	}else if((i>=8 && i<=34)||(i>=40 && i<=48)||(i>=85 && i<=96)||(i>=117 && i<=126)){
 		ctl_reg = readl(pctrl->regs + GPIO_GROUP2 + (REG_SIZE * i));
@@ -559,7 +571,19 @@ int msm_dump_gpios(struct seq_file *m, int curr_len, char *gpio_buffer)
 		ctl_reg = readl(pctrl->regs + GPIO_GROUP3 + (REG_SIZE * i));
 	}else
 	continue;
-
+#endif
+#ifdef CONFIG_ARCH_SDM630
+	if((i>=0 && i<=3)||(i>=5 && i<=7)||(i>=20 && i<=21)||(i>=32 && i<=52)||(i>=55 && i<=58)||\
+		(i>=64 && i<=65)||(i>=79 && i<=80)||(i>=83 && i<=113)){
+		ctl_reg = readl(pctrl->regs + GPIO_GROUP1 + (REG_SIZE * i));
+	}else if((i==4)||(i>=8 && i<=11)||(i>=24 && i<=27)||(i>=53 && i<=54)||\
+		(i>=59 && i<=63)||(i>=66 && i<=78)){
+		ctl_reg = readl(pctrl->regs + GPIO_GROUP2 + (REG_SIZE * i));
+	}else if((i>=16 && i<=19)||(i>=22 && i<=23)||(i>=28 && i<=31)||(i>=81 && i<=82)){
+		ctl_reg = readl(pctrl->regs + GPIO_GROUP3 + (REG_SIZE * i));
+	}else
+	continue;
+#endif
 		io_reg = readl(pctrl->regs + g->io_reg);
 		intr_cfg_reg = readl(pctrl->regs + g->intr_cfg_reg);
 		is_out = !!(ctl_reg & BIT(g->oe_bit));
@@ -569,7 +593,6 @@ int msm_dump_gpios(struct seq_file *m, int curr_len, char *gpio_buffer)
 		intr_en = intr_cfg_reg & 0x1;
 		intr_target = (ctl_reg >> g->intr_target_bit) & 3;
 
-//	pr_info("%s:GPIO[%3d] ctl[%X] io_reg[%d] g->ctl_reg[%8X]\n",__func__,i, ctl_reg, io_reg, g->ctl_reg);
         len += sprintf(list_gpio + len, "GPIO[%3d]: ", i);
         len += sprintf(list_gpio + len, "[FS]0x%x, ", func);
 
@@ -787,10 +810,6 @@ static void msm_gpio_irq_unmask(struct irq_data *d)
 	g = &pctrl->soc->groups[d->hwirq];
 
 	spin_lock_irqsave(&pctrl->lock, flags);
-
-	val = readl(pctrl->regs + g->intr_status_reg);
-	val &= ~BIT(g->intr_status_bit);
-	writel(val, pctrl->regs + g->intr_status_reg);
 
 	val = readl(pctrl->regs + g->intr_cfg_reg);
 	val |= BIT(g->intr_enable_bit);

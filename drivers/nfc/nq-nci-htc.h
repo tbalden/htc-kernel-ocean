@@ -30,7 +30,7 @@
 #define I(x...) printk(KERN_INFO "[NFC] " x)
 #define E(x...) printk(KERN_ERR "[NFC] [Err] " x)
 #define NFC_I2C_RETRY 5
-#define OCN_NFC_POWER_CONTROL
+#define NFC_POWER_CONTROL
 
 #define NFCC_MAGIC 0xE9
 #define NFCC_GET_INFO _IOW(NFCC_MAGIC, 0x09, unsigned int)

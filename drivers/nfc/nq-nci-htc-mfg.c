@@ -329,11 +329,21 @@ control_msg_pack nfc_reader_pll_script[] ={
                 { 2, 0x00, 0x00 },
                 { 0 },
         },
+#ifdef OCEAN_M_NFC_TVDD3V
+        {   /*TVDD 3.3V no external 5V*/
+                { 0x12,
+        0x20, 0x02, 0x0F, 0x01,
+        0xA0, 0x0E, 0x0B, 0x31,
+        0x01, 0x01, 0x31, 0x00,
+        0x00, 0x00, 0x01, 0x00, 0xD0, 0x0C
+        },
+#else
 	{   /*NXP_CORE_CONF_EXTN*/
 		{ 0x0A,
         0x20, 0x02, 0x07, 0x01, 
         0xA0, 0x0E, 0x03, 0x56, 0x24, 0x0A
         },
+#endif
 		{ 0 },
 		{ 0 },
 	},
@@ -368,37 +378,6 @@ control_msg_pack nfc_reader_pll_script[] ={
 		{ 1, 0x01 }
 	},
 };
-
-#if 0
-static control_msg_pack nfc_off_mode_charging_enble_script[] = {
-	{
-		.cmd = { 4, 0x20, 0x00, 0x01, 0x00 },
-		.exp_resp_content = { 1, 0x00 },
-		.exp_ntf = { 0 },
-	},
-	{
-		{ 3, 0x20, 0x01, 0x00 },
-		{ 1, 0x00 },
-		{ 0 },
-	},
-	{
-		/*NFCEE_MODE_SET*/
-		{ 5, 0x22, 0x01, 0x02, 0x02, 0x01},
-		{ 1, 0x00 },
-		{ 0 },
-	},
-	{
-		{ 4, 0x2F, 0x15, 0x01, 0x01 },
-		{ 1, 0x00 },
-		{ 0 },
-	},
-	{
-		{ 0x0A, 0x21,0x03,0x07,0x03,0x80,0x01,0x81,0x01,0x82,0x01},
-		{ 1, 0x00 },
-		{ 0 },
-	},
-};
-#endif
 
 #if FTM_NFC_CPLC
 control_msg_pack nfc_cplc_part1_script[] ={
@@ -486,6 +465,298 @@ control_msg_pack nfc_cplc_part2_3_script[] ={
 	},
 };
 
+control_msg_pack nfc_cplc553_part1_script[] ={
+
+	{
+		.cmd = { 4, 0x20, 0x00, 0x01, 0x00 }, //CORE_RESET_CMD Keep Configuration
+		.exp_resp_content = { 1, 0x00 }, //4000 XX "00"XXXX Status OK
+		.exp_ntf = { 0 },
+	},
+	{
+		{ 3, 0x20, 0x01, 0x00 }, //CORE_INIT_CMD
+		{ 1, 0x00 }, //4001 XX "00"XXXX Status OK
+		{ 0 },
+	},
+	{
+		{ 3, 0x2F, 0x02, 0x00 }, //PROPRIETARY_ACT_CMD
+		{ 1, 0x00 }, //4F02 XX "00"XXXX Status OK
+		{ 0 },
+	},
+	{
+		{ 0x0B, 0x20, 0x02, 0x08, 0x01, 0xA0, 0xFC, 0x04, 0xE8, 0x03, 0x00, 0x00 },
+		{ 1, 0x00 }, //4002 XX "00"XXXX Status OK
+		{ 0 },
+	},
+	{
+		{ 8, 0x20, 0x02, 0x05, 0x01, 0xA0, 0xF2, 0x01, 0x01},
+		{ 1, 0x00 },
+		{ 0 },
+	},
+	{ //SWP_SYS_CONF_INT2
+		{ 8, 0x20, 0x02, 0x05, 0x01, 0xA0, 0xD7, 0x01, 0x40},
+		{ 1, 0x00 },
+		{ 0 },
+	},
+	{
+		{ 0x0C, 0x20, 0x02, 0x09, 0x02, 0xA0, 0x03, 0x01, 0x01, 0xA0, 0x04, 0x01, 0x06},
+		{ 1, 0x00 },
+		{ 0 },
+	},
+	{
+		{ 0x12, 0x20, 0x02, 0x0F, 0x01, 0xA0, 0x0E, 0x0B, 0x11, 0x01, 0xC2, 0xB2, 0x00, 0xBA, 0x1E, 0x1F, 0x00, 0xD0, 0x0C},
+		{ 1, 0x00 },
+		{ 0 },
+	},
+	{
+		{ 8, 0x20, 0x02, 0x05, 0x01, 0xA0, 0x44, 0x01, 0x00},
+		{ 1, 0x00 },
+		{ 0 },
+	},
+	{
+		{ 0x12, 0x20, 0x02, 0x0F, 0x01, 0xA0, 0x0E, 0x0B, 0x11, 0x01, 0xC2, 0xB2, 0x00, 0xB2, 0x1E, 0x1F, 0x00, 0xD0, 0x0C},
+		{ 1, 0x00 },
+		{ 0 },
+	},
+	{
+		{ 0x16, 0x20, 0x02, 0x13, 0x02, 0xA0, 0x0D, 0x06, 0x34, 0x44, 0x44, 0x0A, 0x00, 0x00, 0xA0, 0x0D, 0x06, 0x34, 0x2D, 0xDC, 0x60, 0x03, 0x00},
+		{ 1, 0x00 },
+		{ 0 },
+	},
+	{
+		{ 0x2C, 0x20, 0x02, 0x29, 0x0A, 0xA0, 0xEC, 0x01, 0x01, 0xA0, 0xED, 0x01, 0x01, 0xA0, 0x5E, 0x01, 0x01, 0xA0, 0x12, 0x01, 0x02, 0xA0, 0x40, 0x01, 0x01, 0xA0, 0xD1, 0x01, 0x02, 0xA0, 0xD4, 0x01, 0x01, 0xA0, 0x37, 0x01, 0x35, 0xA0, 0xD8, 0x01, 0x02, 0xA0, 0xD5, 0x01, 0x0A},
+		{ 1, 0x00 },
+		{ 0 },
+	},
+	{
+		{ 0x27, 0x20, 0x02, 0x24, 0x01, 0xA0, 0x14, 0x20, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+		{ 1, 0x00 },
+		{ 0 },
+	},
+	{
+		{ 0x2D, 0x20, 0x02, 0x2A, 0x0E, 0x28, 0x01, 0x00, 0x21, 0x01, 0x00, 0x30, 0x01, 0x04, 0x31, 0x01, 0x00, 0x32, 0x01, 0x60, 0x38, 0x01, 0x01, 0x33, 0x00, 0x54, 0x01, 0x06, 0x50, 0x01, 0x02, 0x5B, 0x01, 0x00, 0x80, 0x01, 0x01, 0x81, 0x01, 0x01, 0x82, 0x01, 0x0E, 0x18, 0x01, 0x01},
+		{ 1, 0x00 },
+		{ 0 },
+	},
+	{
+		{ 8, 0x20, 0x02, 0x05, 0x01, 0xA0, 0x62, 0x01, 0x01},
+		{ 1, 0x00 },
+		{ 0 },
+	},
+	{
+		{ 9, 0x20, 0x02, 0x06, 0x01, 0xA0, 0xF3, 0x02, 0x10, 0x27},
+		{ 1, 0x00 },
+		{ 0 },
+	},
+	{
+		{ 0x0B, 0x20, 0x02, 0x08, 0x01, 0xA0, 0x85, 0x04, 0x50, 0x08, 0xA8, 0x3C},
+		{ 1, 0x00 },
+		{ 0 },
+	},
+	{
+		{ 0x0A, 0x21, 0x01, 0x07, 0x00, 0x01, 0x01, 0x03, 0x00, 0x01, 0x05},
+		{ 1, 0x00 },
+		{ 0 },
+	},
+	{
+		{ 8, 0x20, 0x02, 0x05, 0x01, 0xA0, 0xF1, 0x01, 0x00},
+		{ 1, 0x00 },
+		{ 0 },
+	},
+	{
+		{ 0x27, 0x20, 0x02, 0x24, 0x01, 0xA0, 0x0F, 0x20, 0x00, 0x03, 0x0E, 0x01, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
+		{ 1, 0x00 },
+		{ 0 },
+	},
+	{
+		{ 0x0C, 0x20, 0x02, 0x09, 0x02, 0xA0, 0xEC, 0x01, 0x00, 0xA0, 0xD4, 0x01, 0x00 },
+		{ 1, 0x00 },
+		{ 0 },
+	},
+	{
+		{ 4, 0x20, 0x00, 0x01, 0x00},
+		{ 1, 0x00 },
+		{ 0 },
+	},
+	{
+
+		{ 3, 0x20, 0x01, 0x00},
+		{ 1, 0x00 },
+		{ 0 },
+	},
+	{
+		{ 5, 0x22, 0x03, 0x02, 0xC0, 0x03},
+		{ 1, 0x00 },
+		{ 0 },
+	},
+	{
+		{ 0x10, 0x21, 0x00, 0x0D, 0x04, 0x04, 0x03, 0x02, 0x05, 0x03, 0x03, 0x03, 0x02, 0x01, 0x80, 0x01, 0x80},
+		{ 1, 0x00 },
+		{ 0 },
+	},
+};
+control_msg_pack nfc_cplc553_part2_script[] ={
+
+	{
+		.cmd = { 4, 0x22, 0x00, 0x01, 0x01 },
+		.exp_resp_content = { 1, 0x00},
+		.exp_ntf = { 1, 0x01 },
+	},
+	{
+		.cmd = { 9,  0x20, 0x04, 0x06, 0x03, 0x01, 0x01, 0x02, 0x01, 0x01},
+		.exp_resp_content = { 1, 0x00},
+		.exp_ntf = { 0 },
+	},
+};
+
+//open pipe
+control_msg_pack nfc_cplc553_part2_1_script[] ={
+
+	{
+		.cmd = { 5, 0x03, 0x00, 0x02, 0x81, 0x03 },
+		.exp_resp_content = { 1, 0x81},
+		{ 0 },
+	},
+};
+
+control_msg_pack nfc_cplc553_part2_2_script[] ={
+
+	{
+		.cmd = { 8, 0x03, 0x00, 0x05, 0x81, 0x01, 0x03, 0x02, 0xC0 },
+		.exp_resp_content = { 2, 0x81, 0x80},
+		{ 0 },
+	},
+};
+
+control_msg_pack nfc_cplc553_part2_3_script[] ={
+
+	{
+		.cmd = { 8, 0x03, 0x00, 0x05, 0x81, 0x01, 0x06, 0x01, 0x00 },
+		.exp_resp_content = { 2, 0x81, 0x80},
+		{ 0 },
+	},
+};
+
+control_msg_pack nfc_cplc553_part2_4_script[] ={
+
+	{
+		.cmd = { 0x0E, 0x03, 0x00, 0x0B, 0x81, 0x01, 0x01, 0xAC, 0xE7, 0x54, 0x55, 0xA9, 0xE7, 0x54, 0x55 },
+		.exp_resp_content = { 2, 0x81, 0x80},
+		{ 0 },
+	},
+};
+
+control_msg_pack nfc_cplc553_part3_script[] ={
+
+	{
+		.cmd = { 6, 0x03, 0x00, 0x03, 0x96, 0x80, 0x00 },
+		.exp_resp_content = { 0},
+		.exp_ntf = { 0 },
+	},
+	{
+		.cmd = { 6, 0x03, 0x00, 0x03, 0x81, 0x02, 0x04 },
+		.exp_resp_content = { 2, 0x81, 0x80},
+		.exp_ntf = { 0 },
+	},
+	{
+		.cmd = { 6, 0x03, 0x00, 0x03, 0x81, 0x02, 0x07 },
+		.exp_resp_content = { 2, 0x81, 0x80 },
+		.exp_ntf = { 0 },
+	},
+	{
+		.cmd = { 6, 0x20, 0x03, 0x03, 0x01, 0xA0, 0xF0 },
+		.exp_resp_content = { 1, 0x00 },
+		.exp_ntf = { 0 },
+	},
+};
+
+
+control_msg_pack nfc_cplc553_part4_1_script[] ={
+
+	{
+		.cmd = { 5, 0x22, 0x01, 0x02, 0xC0, 0x01 },
+		.exp_resp_content = { 1, 0x00 },
+		.exp_ntf = { 2, 0x00, 0xC0 },
+	},
+	{
+		.cmd = { 8, 0x03, 0x00, 0x05, 0x81, 0x10, 0x05, 0xC0, 0x05 },
+		.exp_resp_content = { 1, 0x81},
+		.exp_ntf = { 0 },
+	},
+	{
+		.cmd = { 5, 0x03, 0x00, 0x02, 0x98, 0x03 },
+		.exp_resp_content = { 2, 0x98, 0x80 },
+		.exp_ntf = { 0 },
+	},
+	{
+		.cmd = { 6, 0x03, 0x00, 0x03, 0x98, 0x02, 0x06  },
+		.exp_resp_content = { 2, 0x98, 0x80 },
+		.exp_ntf = { 0 },
+	},
+	{
+		.cmd = { 8, 0x03, 0x00, 0x05, 0x81, 0x10, 0x30, 0xC0, 0x30 },
+		.exp_resp_content = { 1, 0x81},
+		.exp_ntf = { 0 },
+	},
+};
+
+control_msg_pack nfc_cplc553_part4_2_script[] ={
+	{
+		.cmd = { 6, 0x03, 0x00, 0x03, 0x99, 0x02, 0x01 },
+		.exp_resp_content = { 2, 0x99, 0x80 },
+		.exp_ntf = { 0 },
+	},
+	{
+		.cmd = { 6, 0x03, 0x00, 0x03, 0x99, 0x02, 0x02 },
+		.exp_resp_content = { 2, 0x99, 0x80 },
+		.exp_ntf = { 0 },
+	},
+	{
+		.cmd = { 5, 0x03, 0x00, 0x02, 0x99, 0x51 },
+		.exp_resp_content = { 2, 0x99, 0x52 },
+		.exp_ntf = { 0 },
+	},
+};
+
+control_msg_pack nfc_cplc553_part4_3_script[] ={
+	{
+		.cmd = { 0x0C, 0x03, 0x00, 0x09, 0x99, 0x50, 0x80, 0xCA, 0x00, 0xFE, 0x02, 0xDF, 0x31 },
+		.exp_resp_content = { 1, 0x99 },
+		.exp_ntf = { 0 },
+	},
+	{
+		.cmd = { 0x0C, 0x03, 0x00, 0x09, 0x99, 0x50, 0x80, 0xCA, 0x00, 0xFE, 0x02, 0xDF, 0x20 },
+		.exp_resp_content = { 1, 0x99 },
+		.exp_ntf = { 0 },
+	},
+	{
+		.cmd = { 0x0C, 0x03, 0x00, 0x09, 0x99, 0x50, 0x80, 0xCA, 0x00, 0xFE, 0x02, 0xDF, 0x21 },
+		.exp_resp_content = { 1, 0x99 },
+		.exp_ntf = { 0 },
+	},
+};
+//CPCL HERE
+control_msg_pack nfc_cplc553_part4_4_script[] ={
+	{
+		.cmd = { 10, 0x03, 0x00, 0x07, 0x99, 0x50, 0x80, 0xCA, 0x9F, 0x7F, 0x00 },
+		.exp_resp_content = { 4, 0x99, 0x50, 0x9F, 0x7F },
+		.exp_ntf = { 0 },
+	},
+};
+
+control_msg_pack nfc_cplc553_part4_5_script[] ={
+	{
+		.cmd = { 5 ,0x22, 0x03, 0x02, 0xC0, 0x00 },
+		.exp_resp_content = { 1, 0x00},
+		.exp_ntf = { 0 },
+	},
+	{
+		.cmd = { 5 , 0x03, 0x00, 0x02, 0x99, 0x61},
+		.exp_resp_content = {0},
+		.exp_ntf = { 0 },
+	},
+};
+
+
 #endif //FTM_NFC_CPLC
 
 
@@ -552,6 +823,45 @@ void nfc_nci_dump_data(unsigned char *data, int len) {
 	I("%s\r\n", NCI_TMP);
 }
 
+int mfg_nciread(void)
+{
+	int i =0;
+	memset(NCI_TMP, 0x00, MAX_BUFFER_SIZE);
+	while(i < 5) {
+		if (pn544_irq_gpio()) {
+			if ( pn544_RxData((uint8_t *)NCI_TMP, 3) < 0) {
+				I("I2C error while read out the NCI data.\r\n");
+				mfc_nfc_cmd_result = -2;
+				return -2;
+			}else {
+				I("NCI data get %02X %02X %02X", NCI_TMP[0], NCI_TMP[1], NCI_TMP[2]);
+				if ( pn544_RxData( (uint8_t *)NCI_TMP+3,  NCI_TMP[2]) < 0) {
+					I("I2C error while read out the NCI data.\r\n");
+					mfc_nfc_cmd_result = -2;
+					return -2;
+				} else {
+				    I("NCI data get");
+					break;
+				}
+			}
+		}
+		msleep(20);
+		i = i+1;
+	}
+	return 0;
+}
+
+int mfg_nciwrite(uint8_t *txData ) {
+
+	if (pn544_TxData( txData, txData[2] + 3) == 0) {
+		I("NCI data Send %02X %02X %02X", txData[0], txData[1], txData[2]);
+		return 0;
+	} else {
+		I("I2C fail at TxData");
+		mfc_nfc_cmd_result = -2;
+		return -2;
+	}
+}
 
 
 //	nci_reader return conditions:
@@ -1050,6 +1360,10 @@ TIMEOUT_FAIL:
 int mfg_nfc_test(int arg)
 {
 	bool PLL_clock = true;
+	int retry_count = 0;
+	uint8_t cplc_553_arg1_1[5] = {0x22, 0x01, 0x02, 0x01, 0x01};
+	uint8_t cplc_553_arg1_2[5] = {0x03, 0x00, 0x02, 0x81, 0x80};
+	uint8_t cplc_553_arg2[5] = {0x03, 0x00, 0x02, 0x99, 0x03};
 	gDevice_info.NTF_count = 0;
 	memset(gDevice_info.NTF_queue, 0x00, sizeof(gDevice_info.NTF_queue));
 	gDevice_info.protocol_set = 4;
@@ -1143,6 +1457,183 @@ int mfg_nfc_test(int arg)
 			I("nci_cplc_part2_2 script processing error!\r\n");
 			break;
 		}
+		pn544_hw_reset_control(0);
+		break;
+	case 4:
+		I("%s: nfc cplc PN80T test :\n", __func__);
+		memset(CPLC, 0, MAX_BUFFER_SIZE);
+		memset(RF_PARAM_CE_eSE, 0, MAX_BUFFER_SIZE);
+		memset(NCI_TMP, 0, MAX_BUFFER_SIZE);
+		pn544_hw_reset_control(1);
+
+		if (script_processor(nfc_cplc553_part1_script, sizeof(nfc_cplc553_part1_script)) == 0) {
+			I("nfc_cplc553_part1_script complete.\r\n");
+			msleep(100);
+		} else {
+			I("nci_cplc553_part1 script processing error!\r\n");
+			break;
+		}
+		pn544_hw_reset_control(0);
+		msleep(50);
+//reboot NFC and do again
+		pn544_hw_reset_control(1);
+		if (script_processor(nfc_cplc553_part1_script, sizeof(nfc_cplc553_part1_script)) == 0) {
+			I("nfc_cplc553_part1_script complete.\r\n");
+			msleep(100);
+		} else {
+			I("nci_cplc553_part1 script processing error!\r\n");
+			break;
+		}
+
+		if (script_processor(nfc_cplc553_part2_script, sizeof(nfc_cplc553_part2_script)) == 0) {
+			I("nfc_cplc553_part2_script complete.\r\n");
+			msleep(100);
+		} else {
+			I("nci_cplc553_part2 script processing error!\r\n");
+			break;
+		}
+
+		if (script_processor(nfc_cplc553_part2_1_script, sizeof(nfc_cplc553_part2_1_script)) == 0) {
+			I("nfc_cplc553_part2_1_script complete.\r\n");
+			msleep(100);
+		} else {
+			I("nci_cplc553_part2_1 script processing error!\r\n");
+			break;
+		}
+		//read any after this command
+		I("read process 0 ++\r\n");
+		while(retry_count < 10) {
+				if (mfg_nciread () == 0) {
+					if( NCI_TMP[0] == 0x03 && NCI_TMP[0] == 0x00) {
+						I("Data packet found! keep going\r\n");
+					}
+				} else {
+					I("I2C error!\r\n");
+					break;
+				}
+				retry_count++;
+		}
+		I("read process 0 --\r\n");
+
+		if (script_processor(nfc_cplc553_part2_2_script, sizeof(nfc_cplc553_part2_2_script)) == 0) {
+			I("nfc_cplc553_part2_2_script complete.\r\n");
+			msleep(100);
+		} else {
+			I("nci_cplc553_part2_2 script processing error!\r\n");
+			break;
+		}
+		if (script_processor(nfc_cplc553_part2_3_script, sizeof(nfc_cplc553_part2_3_script)) == 0) {
+			I("nfc_cplc553_part2_3_script complete.\r\n");
+			msleep(100);
+		} else {
+			I("nci_cplc553_part2_3 script processing error!\r\n");
+			break;
+		}
+		if (script_processor(nfc_cplc553_part2_4_script, sizeof(nfc_cplc553_part2_4_script)) == 0) {
+			I("nfc_cplc553_part2_4_script complete.\r\n");
+			msleep(100);
+		} else {
+			I("nci_cplc553_part2_4 script processing error!\r\n");
+			break;
+		}
+		//Check EE_MODE_SET
+		I("read process 1 ++\r\n");
+		retry_count = 0;
+		if(mfg_nciwrite (cplc_553_arg1_1) == 0) {
+			msleep(900);
+			while(retry_count < 16) {
+				if (mfg_nciread () == 0) {
+					if( NCI_TMP[0] == 0x03 && NCI_TMP[1] == 0x00) {
+						I("Data packet found!\r\n");
+						if(NCI_TMP[2] == 0x02) {
+							if(NCI_TMP[3] == 0x96 && NCI_TMP[4] == 0x03) {
+								I("HCI SMX connectivity: open!\r\n");
+								break;
+							} else {
+								I("HCI SMX connectivity: Fail, send again !\r\n");
+								if(mfg_nciwrite (cplc_553_arg1_2) != 0) {
+									I("I2C error!\r\n");
+								}
+							}
+						} else {
+								I("HCI SMX connectivity: Fail, send again !\r\n");
+								if(mfg_nciwrite (cplc_553_arg1_2) != 0) {
+									I("I2C error!\r\n");
+								}
+						}
+					} else if (NCI_TMP[0] == 0x61 && NCI_TMP[1] == 0x0A){
+						I("NFCEE_DISCOVERY_REQ_NTF keep going!\r\n");
+						retry_count = 0;
+					}
+				} else {
+					I("I2C error!\r\n");
+					break;
+				}
+				retry_count++;
+			}
+		}
+		I("read process 1 --\r\n");
+		if (script_processor(nfc_cplc553_part3_script, sizeof(nfc_cplc553_part3_script)) == 0) {
+			memcpy(RF_PARAM_CE_eSE,NCI_TMP,MAX_BUFFER_SIZE);
+			I("nfc_cplc553_part3_script complete.\r\n");
+		} else {
+			I("nfc_cplc553_part3_script processing error!\r\n");
+			break;
+		}
+
+		if (script_processor(nfc_cplc553_part4_1_script, sizeof(nfc_cplc553_part4_1_script)) == 0) {
+			I("nfc_cplc553_part4_1_script complete.\r\n");
+		} else {
+			I("nfc_cplc553_part4_1_script processing error!\r\n");
+			break;
+		}
+		//CHECK POINT 2
+		I("read process2 ++\r\n");
+		if(mfg_nciwrite (cplc_553_arg2) == 0) {
+			while(retry_count < 14) {
+				if (mfg_nciread () == 0) {
+					if( NCI_TMP[0] == 0x03 && NCI_TMP[1] == 0x00) {
+						I("cplc_553_arg2 Data packet found! keep going\r\n");
+					}
+				} else {
+					I("I2C error!\r\n");
+					break;
+				}
+				retry_count++;
+			}
+		}
+		I("read process 2 --\r\n");
+
+		if (script_processor(nfc_cplc553_part4_2_script, sizeof(nfc_cplc553_part4_2_script)) == 0) {
+			I("nfc_cplc553_part4_2_script complete.\r\n");
+			msleep(500);
+		} else {
+			I("nfc_cplc553_part4_2_script processing error!\r\n");
+			break;
+		}
+
+		if (script_processor(nfc_cplc553_part4_3_script, sizeof(nfc_cplc553_part4_3_script)) == 0) {
+			I("nfc_cplc553_part4_3_script complete.\r\n");
+		} else {
+			I("nfc_cplc553_part4_3_script processing error!\r\n");
+			break;
+		}
+
+		if (script_processor(nfc_cplc553_part4_4_script, sizeof(nfc_cplc553_part4_4_script)) == 0) {
+			memcpy(CPLC,NCI_TMP,MAX_BUFFER_SIZE);
+			I("CPLC!!! nfc_cplc553_part4_4_script complete.\r\n");
+		} else {
+			I("nfc_cplc553_part4_4_script processing error!\r\n");
+			break;
+		}
+		if (script_processor(nfc_cplc553_part4_5_script, sizeof(nfc_cplc553_part4_5_script)) == 0) {
+			I("nfc_cplc553_part4_5_script complete.\r\n");
+			mfc_nfc_cmd_result = 99;
+		} else {
+			I("nfc_cplc553_part4_5_script processing error!\r\n");
+			break;
+		}
+		pn544_hw_reset_control(0);
 		break;
 	case 77:
 		I("%s: nfc dpc test :\n", __func__);
@@ -1159,6 +1650,7 @@ int mfg_nfc_test(int arg)
 			I("nci_dpc script processing error!\r\n");
 			break;
 		}
+		pn544_hw_reset_control(0);
 		break;
 #endif  //FTM_NFC_CPLC
 	case 88:
@@ -1198,7 +1690,7 @@ int mfg_nfc_test(int arg)
 
 #if FTM_NFC_CPLC
 char* mfg_nfc_cplc_result() {
-	if (mfg_nfc_test(3) == 99) {
+	if (mfg_nfc_test(4) == 99) {
 		return CPLC;
 	} else {
 		return NULL;

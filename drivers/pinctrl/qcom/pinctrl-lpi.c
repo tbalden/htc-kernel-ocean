@@ -117,12 +117,12 @@ static const u32 lpi_offset[] = {
 	0x00005010,
 	0x00005020,
 	0x00005030,
-	0x00005040,
-	0x00005050,
 	0x00006000,
 	0x00006010,
 	0x00007000,
 	0x00007010,
+	0x00005040,
+	0x00005050,
 	0x00008000,
 	0x00008010,
 	0x00008020,
@@ -408,13 +408,21 @@ static void lpi_gpio_set(struct gpio_chip *chip, unsigned pin, int value)
 static int lpi_notifier_service_cb(struct notifier_block *this,
 				   unsigned long opcode, void *ptr)
 {
+	static bool initial_boot = true;
+
 	pr_debug("%s: Service opcode 0x%lx\n", __func__, opcode);
 
 	switch (opcode) {
 	case AUDIO_NOTIFIER_SERVICE_DOWN:
+		if (initial_boot) {
+			initial_boot = false;
+			break;
+		}
 		lpi_dev_up = false;
 		break;
 	case AUDIO_NOTIFIER_SERVICE_UP:
+		if (initial_boot)
+			initial_boot = false;
 		lpi_dev_up = true;
 		break;
 	default:
@@ -457,6 +465,7 @@ static void lpi_gpio_dbg_show_one(struct seq_file *s,
 		"pull up"
 	};
 
+	pctldev = pctldev ? : to_gpio_state(chip)->ctrl;
 	pindesc = pctldev->desc->pins[offset];
 	pad = pctldev->desc->pins[offset].drv_data;
 	ctl_reg = lpi_gpio_read(pad, LPI_GPIO_REG_DIR_CTL);

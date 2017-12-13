@@ -101,9 +101,10 @@ struct nqx_dev {
 struct nqx_dev *pn_info;
 static int mfg_nfc_cmd_result = -1;
 static int is_alive = 1;
-#ifdef OCN_NFC_POWER_CONTROL
-struct regulator *nfc_pm8998_lvs1;
-#endif //OCN_NFC_POWER_CONTROL
+#ifdef NFC_POWER_CONTROL
+struct regulator *regulator;
+const char *regulator_name;
+#endif //NFC_POWER_CONTROL
 #ifdef SW_ENABLE_OFFMODECHARGING
 struct workqueue_struct *nfc_wq;
 struct delayed_work nfc_work;
@@ -851,6 +852,14 @@ static ssize_t mfg_nfc_cplc(struct device *dev,
 			struct device_attribute *attr, char *buf)
 {
 	char* tmp_cplc  = mfg_nfc_cplc_result();
+	if(tmp_cplc == NULL) {
+		D("%s : Fail once try again!!!\n", __func__);
+		tmp_cplc  = mfg_nfc_cplc_result();
+	}
+	if(tmp_cplc == NULL) {
+		D("%s : Fail twice final retry !!! \n", __func__);
+		tmp_cplc  = mfg_nfc_cplc_result();
+	}
 	if (tmp_cplc != NULL) {
 		return scnprintf(buf, PAGE_SIZE,
 			"CPLC:\n%s\nUID:\n%s\n",tmp_cplc,mfg_nfc_cplc_result_uid());
@@ -876,7 +885,9 @@ static void pn544_process_irq(struct work_struct *work) {
                     D("%s: waiting read-event INT, because "
                             "irq_gpio = 0\n", __func__);
                     ret = wait_event_interruptible(pni->read_wq,
-                                    gpio_get_value(pni->irq_gpio));
+                                    !pni->irq_enabled);
+		    if(!gpio_get_value(pni->irq_gpio)) //Workaround : ignore the unknown nqx_dev_irq_handler 
+			continue;
                     nqx_disable_irq(pni);
                     D("%s : wait_event_interruptible done\n", __func__);
                     if (ret) {
@@ -1100,6 +1111,9 @@ static int nqx_clock_deselect(struct nqx_dev *nqx_dev)
 static int nfc_parse_dt(struct device *dev, struct nqx_platform_data *pdata)
 {
 	int r = 0;
+#ifdef NFC_POWER_CONTROL
+	struct property *prop;
+#endif
 	struct device_node *np = dev->of_node;
 
 	pdata->en_gpio = of_get_named_gpio(np, "qcom,nq-ven", 0);
@@ -1128,7 +1142,15 @@ static int nfc_parse_dt(struct device *dev, struct nqx_platform_data *pdata)
 			"ese GPIO <OPTIONAL> error getting from OF node\n");
 		pdata->ese_gpio = -EINVAL;
 	}
-
+#ifdef NFC_POWER_CONTROL
+	prop = of_find_property(np,"regulator_name", NULL);
+	if(prop)
+	{
+		r = of_property_read_string(np,"regulator_name",&regulator_name);
+		if(r)
+			return -EINVAL;
+	}
+#endif
 	r = of_property_read_string(np, "qcom,clk-src", &pdata->clk_src_name);
 
 	pdata->clkreq_gpio = of_get_named_gpio(np, "qcom,nq-clkreq", 0);
@@ -1164,26 +1186,7 @@ static int nqx_probe(struct i2c_client *client,
 	struct nqx_dev *nqx_dev;
 
 	dev_dbg(&client->dev, "%s: enter\n", __func__);
-#ifdef HTC_NFC_PN553
-#ifdef OCN_NFC_POWER_CONTROL
-    nfc_pm8998_lvs1 = regulator_get(&client->dev, "pm8998_lvs1");
-    dev_dbg(&client->dev,
-    	"%s : pm8998_lvs1 regulator_get\n", __func__);
-    if (nfc_pm8998_lvs1 < 0) {
-            dev_err(&client->dev,
-            	"%s : nfc_pm8998_lvs1 regulator_get fail\n", __func__);
-            return -ENODEV;
-    }
-    r = regulator_enable(nfc_pm8998_lvs1);
-    dev_dbg(&client->dev,
-    	"%s : nfc_pm8998_lvs1 regulator_is_enabled = %d\n", __func__, regulator_is_enabled(nfc_pm8998_lvs1));
-    if (r < 0) {
-            dev_err(&client->dev,
-            	"%s : nfc_pm8998_lvs1 regulator_enable fail\n", __func__);
-            return -ENODEV;
-    }
-#endif //OCN_NFC_POWER_CONTROL
-#endif //HTC_NFC_PN553
+
 	if (client->dev.of_node) {
 		platform_data = devm_kzalloc(&client->dev,
 			sizeof(struct nqx_platform_data), GFP_KERNEL);
@@ -1196,6 +1199,28 @@ static int nqx_probe(struct i2c_client *client,
 			goto err_free_data;
 	} else
 		platform_data = client->dev.platform_data;
+
+#ifdef HTC_NFC_PN553
+#ifdef NFC_POWER_CONTROL
+    regulator = regulator_get(&client->dev, regulator_name);
+    dev_dbg(&client->dev,
+        "%s : %s regulator_get\n", __func__, regulator_name);
+    if (regulator < 0) {
+            dev_err(&client->dev,
+                "%s : %s regulator_get fail\n", __func__, regulator_name);
+            return -ENODEV;
+    }
+    r = regulator_enable(regulator);
+    dev_dbg(&client->dev,
+        "%s : %s regulator_is_enabled = %d\n", __func__, regulator_name ,regulator_is_enabled(regulator));
+    if (r < 0) {
+            dev_err(&client->dev,
+                "%s : %s regulator_enable fail\n", __func__, regulator_name);
+            return -ENODEV;
+    }
+#endif //NFC_POWER_CONTROL
+#endif //HTC_NFC_PN553
+
 
 	dev_dbg(&client->dev,
 		"%s, inside nfc-nci flags = %x\n",
@@ -1625,6 +1650,7 @@ static struct i2c_driver nqx = {
 		.name = "nq-nci",
 #endif //HTC_NFC_PN553
 		.of_match_table = msm_match_table,
+		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
 		.pm = &nfc_pm_ops,
 	},
 };
