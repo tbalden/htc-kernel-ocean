@@ -356,7 +356,7 @@ static void sync_access(void)
 	}
 }
 
-#ifdef CONFIG_HTC_POWER_DEBUG
+#if 0 //FIX ME
 void htc_prink_name_offset(unsigned long addr)
 {
         char symname[KSYM_NAME_LEN];

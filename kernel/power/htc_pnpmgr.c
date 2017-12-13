@@ -27,14 +27,8 @@
 #define MAX_BUF     100
 #define MAX_VALUE   999999999    // To avoid pnp apply thermal condition right after boot up
 #define MAX_CPU_NUM 8
-
-enum {
-	BC_TYPE = 0,
-	LC_TYPE,
-	MAX_TYPE,
-};
-
 #define DEBUG_DUMP 0
+#define MAX_TYPE 2
 
 static struct kobject *mp_hotplug_kobj;
 static struct kobject *thermal_kobj;
@@ -110,6 +104,12 @@ static ssize_t _name##_store					\
 }
 
 extern void set_ktm_freq_limit(uint32_t freq_limit);
+
+#ifdef CONFIG_HTC_POWER_DEBUG
+extern int get_kernel_cluster_info(int *cluster_id, cpumask_t *cluster_cpus);
+#else
+static int get_kernel_cluster_info(int *cluster_id, cpumask_t *cluster_cpus) { return -1; }
+#endif
 
 static char activity_buf[MAX_BUF];
 static char vr_mode_buf[MAX_BUF];
@@ -264,9 +264,10 @@ define_int_show(cpu_asn, cpu_asn_value);
 define_int_store(cpu_asn, cpu_asn_value, null_cb);
 power_attr(cpu_asn);
 
-
-static const unsigned long big_cluster_mask = CONFIG_PERFORMANCE_CLUSTER_CPU_MASK;
-static const unsigned long little_cluster_mask = CONFIG_POWER_CLUSTER_CPU_MASK;
+static int cluster_id[NR_CPUS] = {[0 ... NR_CPUS-1] = -1};
+static cpumask_t cluster_cpus[NR_CPUS];
+static int little_cluster_id = 0;
+static int big_cluster_id = 0;
 
 /*
  * We would only notify pnpmgr under following condition:
@@ -286,7 +287,7 @@ int pnpmgr_cpu_temp_notify(int cpu, int temp)
 		temp_diff = abs(pre_notify_temp[cpu] - temp);
 		scnprintf(buf, sizeof(buf), "thermal_temp_cpu%d", cpu);
 		buf[sizeof(buf) - 1] = '\0';
-		if (cpumask_test_cpu(cpu, (struct cpumask *)&big_cluster_mask)){
+		if (cpumask_test_cpu(cpu, &cluster_cpus[big_cluster_id])){
 			if(thermal_bcpu_notify_pnp_thres_value > 0 &&
 				((temp > thermal_bcpu_notify_pnp_thres_value &&
 				temp_diff > thermal_bcpu_notify_diff_value) ||
@@ -297,7 +298,7 @@ int pnpmgr_cpu_temp_notify(int cpu, int temp)
 				pre_notify_temp[cpu] = temp;
 				sysfs_notify(thermal_kobj, NULL, buf);
 			}
-		}else if (cpumask_test_cpu(cpu, (struct cpumask *)&little_cluster_mask)){
+		}else if (cpumask_test_cpu(cpu, &cluster_cpus[little_cluster_id])){
 			if(thermal_lcpu_notify_pnp_thres_value > 0 &&
 				((temp > thermal_lcpu_notify_pnp_thres_value &&
 				temp_diff > thermal_lcpu_notify_diff_value) ||
@@ -370,7 +371,7 @@ power_attr(thermal_ktm_freq_limit);
 
 static int default_rule_value = 1;
 define_int_show(default_rule, default_rule_value);
-power_ro_attr(default_rule);
+power_attr_ro(default_rule);
 
 static unsigned int info_gpu_max_clk;
 void set_gpu_clk(unsigned int value)
@@ -386,7 +387,7 @@ gpu_max_clk_show(struct kobject *kobj, struct kobj_attribute *attr,
 	ret = sprintf(buf, "%u", info_gpu_max_clk);
 	return ret;
 }
-power_ro_attr(gpu_max_clk);
+power_attr_ro(gpu_max_clk);
 
 define_int_show(pause_dt, data_throttling_value);
 define_int_store(pause_dt, data_throttling_value, null_cb);
@@ -623,11 +624,6 @@ define_int_show(launch_event, launch_event_enabled);
 define_int_store(launch_event, launch_event_enabled, null_cb);
 power_attr(launch_event);
 
-int launch_event_enabledv2 = 0;
-define_int_show(launch_eventv2, launch_event_enabledv2);
-define_int_store(launch_eventv2, launch_event_enabledv2, null_cb);
-power_attr(launch_eventv2);
-
 static struct timer_list app_timer;
 static ssize_t
 app_timeout_show(struct kobject *kobj, struct kobj_attribute *attr,
@@ -662,19 +658,19 @@ power_attr(app_timeout);
  * cluster info
  */
 static struct pnp_cluster_info info[MAX_TYPE];
-static int cluster_num = 0;
+static int cluster_cnt = 0;
 
 static int get_cluster_type(struct kobject *kobj)
 {
 	struct kobject *parent = kobj->parent;
 	if (!parent)
-		return BC_TYPE;
+		return big_cluster_id;
 	if (!strncmp(kobj->name, "big", 3))
-		return BC_TYPE;
+		return big_cluster_id;
 	if (!strncmp(parent->name, "big", 3))
-		return BC_TYPE;
+		return big_cluster_id;
 	else
-		return LC_TYPE;
+		return little_cluster_id;
 }
 
 #define define_cluster_info_show(_name)			\
@@ -695,8 +691,8 @@ cpu_seq_store(struct kobject *kobj, struct kobj_attribute *attr,
 
 	i = bc = lc = num = 0;
 	cpumask_clear(&cpu_mask);
-	cpumask_copy(&bc_mask, &info[BC_TYPE].cpu_mask);
-	cpumask_copy(&lc_mask, &info[LC_TYPE].cpu_mask);
+	cpumask_copy(&bc_mask, &info[big_cluster_id].cpu_mask);
+	cpumask_copy(&lc_mask, &info[little_cluster_id].cpu_mask);
 
 	// Store input value to temp buffer.
 	while ((pch = strsep(&tmp, " ,.-=")) != NULL) {
@@ -710,28 +706,28 @@ cpu_seq_store(struct kobject *kobj, struct kobj_attribute *attr,
 
 	// Find the big/LITTLE cpu's sequence.
 	for (i = 0; i < num; i++) {
-		if (cpumask_test_cpu(cpu_seq[i], &info[BC_TYPE].cpu_mask)) {
-			info[BC_TYPE].cpu_seq[bc++] = cpu_seq[i];
+		if (cpumask_test_cpu(cpu_seq[i], &info[big_cluster_id].cpu_mask)) {
+			info[big_cluster_id].cpu_seq[bc++] = cpu_seq[i];
 			cpumask_clear_cpu(cpu_seq[i], &bc_mask);
 		}
-		else if (cpumask_test_cpu(cpu_seq[i], &info[LC_TYPE].cpu_mask)) {
-			info[LC_TYPE].cpu_seq[lc++] = cpu_seq[i];
+		else if (cpumask_test_cpu(cpu_seq[i], &info[little_cluster_id].cpu_mask)) {
+			info[little_cluster_id].cpu_seq[lc++] = cpu_seq[i];
 			cpumask_clear_cpu(cpu_seq[i], &lc_mask);
 		}
 	}
 
 	// For the remaining cpus, set it sequentially.
-	for (cpu = -1, i = bc; i < info[BC_TYPE].num_cpus; i++) {
+	for (cpu = -1, i = bc; i < info[big_cluster_id].num_cpus; i++) {
 		cpu = cpumask_next(cpu, &bc_mask);
-		info[BC_TYPE].cpu_seq[i] = cpu;
+		info[big_cluster_id].cpu_seq[i] = cpu;
 	}
-	for (cpu = -1, i = lc; i < info[LC_TYPE].num_cpus; i++) {
+	for (cpu = -1, i = lc; i < info[little_cluster_id].num_cpus; i++) {
 		cpu = cpumask_next(cpu, &lc_mask);
-		info[LC_TYPE].cpu_seq[i] = cpu;
+		info[little_cluster_id].cpu_seq[i] = cpu;
 	}
 	return n;
 }
-power_wo_attr(cpu_seq);
+power_attr_wo(cpu_seq);
 
 static ssize_t
 cpu_mask_info_show(struct kobject *kobj, struct kobj_attribute *attr,
@@ -746,7 +742,7 @@ cpu_mask_info_show(struct kobject *kobj, struct kobj_attribute *attr,
 	}
 	return sprintf(buf, "%d\n", val);
 }
-power_ro_attr(cpu_mask_info);
+power_attr_ro(cpu_mask_info);
 
 define_cluster_info_show(mp_cpunum_max);
 static ssize_t
@@ -756,8 +752,8 @@ mp_cpunum_max_store(struct kobject *kobj, struct kobj_attribute *attr,
 	int type = get_cluster_type(kobj);
 	int val;
 	if (sscanf(buf, "%d", &val) > 0) {
-		if ((type == BC_TYPE && val < 1)
-			|| (type == LC_TYPE && val < 0))
+		if ((type == big_cluster_id && val < 1)
+			|| (type == little_cluster_id && val < 0))
 			return -EINVAL;
 
 		if (val > info[type].num_cpus)
@@ -779,8 +775,8 @@ mp_cpunum_min_store(struct kobject *kobj, struct kobj_attribute *attr,
 	int val;
 
 	if (sscanf(buf, "%d", &val) > 0) {
-		if ((type == BC_TYPE && val < 1)
-			|| (type == LC_TYPE && val < 0))
+		if ((type == big_cluster_id && val < 1)
+			|| (type == little_cluster_id && val < 0))
 			return -EINVAL;
 
 		if (val > info[type].num_cpus)
@@ -889,10 +885,10 @@ power_attr(user_cpunum_min);
 
 // cpufreq
 define_cluster_info_show(max_freq_info);
-power_ro_attr(max_freq_info);
+power_attr_ro(max_freq_info);
 
 define_cluster_info_show(min_freq_info);
-power_ro_attr(min_freq_info);
+power_attr_ro(min_freq_info);
 
 static inline void scaling_freq_verify(struct cpufreq_policy *policy)
 {
@@ -1295,7 +1291,6 @@ static struct attribute *battery_g[] = {
 
 static struct attribute *pnpmgr_g[] = {
 	&launch_event_attr.attr,
-	&launch_eventv2_attr.attr,
 	&default_rule_attr.attr,
 	&touch_boost_attr.attr,
 	&touch_boost_duration_attr.attr,
@@ -1463,21 +1458,12 @@ static int get_cpu_frequency(struct cpumask *mask, int *min, int *max)
 
 static int init_cluster_info(void)
 {
-	cpumask_t cluster_cpus[MAX_TYPE];
 	int first_cpu, minfreq, maxfreq;
-	int ret = 0, cluster_cnt = 0, i, j, k;
+	int ret = 0, i, j, k;
 
-	if (big_cluster_mask) {
-		*cluster_cpus[cluster_cnt].bits = big_cluster_mask;
-		cluster_cnt++;
-	}
+	cluster_cnt = get_kernel_cluster_info(cluster_id, cluster_cpus);
 
-	if (little_cluster_mask) {
-		*cluster_cpus[cluster_cnt].bits = little_cluster_mask;
-		cluster_cnt++;
-	}
-
-	if (!cluster_cnt) {
+	if (cluster_cnt <= 0) {
 		pr_err("Invalid number of cluster number : 0\n");
 		return -EINVAL;
 	}
@@ -1522,7 +1508,10 @@ static int init_cluster_info(void)
 			info[i].thermal_freq[j] = MAX_VALUE;
 	}
 
-	cluster_num = cluster_cnt;
+	if (cluster_id[0])
+		little_cluster_id = 1;
+	else
+		big_cluster_id = 1;
 
 	return ret;
 }
@@ -1569,7 +1558,7 @@ static int __init pnpmgr_init(void)
 	if ((ret = init_cluster_info()) < 0)
 		goto err;
 
-	for (i = 0; i < cluster_num; i++) {
+	for (i = 0; i < cluster_cnt; i++) {
 		cluster_kobj[i] = kobject_create_and_add(name[i], cluster_root_kobj);
 		if (!cluster_kobj[i]) {
 			pr_err("%s: Can not allocate enough memory for cluster%d\n", __func__, i);
@@ -1638,7 +1627,7 @@ static int __init pnpmgr_init(void)
 	ret |= sysfs_create_group(sysinfo_kobj, &sysinfo_attr_group);
 	ret |= sysfs_create_group(battery_kobj, &battery_attr_group);
 
-	for (i = 0; i < cluster_num; i++) {
+	for (i = 0; i < cluster_cnt; i++) {
 		ret |= sysfs_create_group(cluster_kobj[i], &cluster_type_attr_group);
 		ret |= sysfs_create_group(hotplug_kobj[i], &hotplug_attr_group);
 		for (j = 0; j < info[i].num_cpus; j++) {
@@ -1678,7 +1667,7 @@ static void  __exit pnpmgr_exit(void)
 	sysfs_remove_group(sysinfo_kobj, &sysinfo_attr_group);
 	sysfs_remove_group(battery_kobj, &battery_attr_group);
 
-	for (i = 0; i < cluster_num; i++) {
+	for (i = 0; i < cluster_cnt; i++) {
 		sysfs_remove_group(cluster_kobj[i], &cluster_type_attr_group);
 		sysfs_remove_group(hotplug_kobj[i], &hotplug_attr_group);
 		sysfs_remove_group(cpuX_kobj[i][0], &cpuX_attr_group);

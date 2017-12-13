@@ -285,7 +285,7 @@ static void suspend_monitor_debug(struct work_struct *work)
  */
 static int suspend_prepare(suspend_state_t state)
 {
-	int error;
+	int error, nr_calls = 0;
 
 	if (suspend_monitor_debug_init == 0) {
 		INIT_DELAYED_WORK(&suspend_monitor_debug_work, suspend_monitor_debug);
@@ -299,12 +299,14 @@ static int suspend_prepare(suspend_state_t state)
 	schedule_delayed_work(&suspend_monitor_debug_work, msecs_to_jiffies(5000));
 	pm_prepare_console();
 
-	error = pm_notifier_call_chain(PM_SUSPEND_PREPARE);
+	error = __pm_notifier_call_chain(PM_SUSPEND_PREPARE, -1, &nr_calls);
 	cancel_delayed_work_sync(&suspend_monitor_debug_work);
 	suspend_monitor_debug_count = 0;
 
-	if (error)
+	if (error) {
+		nr_calls--;
 		goto Finish;
+	}
 
 	trace_suspend_resume(TPS("freeze_processes"), 0, true);
 	error = suspend_freeze_processes();
@@ -315,7 +317,7 @@ static int suspend_prepare(suspend_state_t state)
 	suspend_stats.failed_freeze++;
 	dpm_save_failed_step(SUSPEND_FREEZE);
  Finish:
-	pm_notifier_call_chain(PM_POST_SUSPEND);
+	__pm_notifier_call_chain(PM_POST_SUSPEND, nr_calls, NULL);
 	pm_restore_console();
 	return error;
 }

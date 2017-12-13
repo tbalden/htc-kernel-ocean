@@ -3,6 +3,9 @@
 #include <linux/utsname.h>
 #include <linux/freezer.h>
 #include <linux/compiler.h>
+#ifdef CONFIG_HTC_POWER_DEBUG
+#include <linux/notifier.h>
+#endif
 
 struct swsusp_info {
 	struct new_utsname	uts;
@@ -77,24 +80,24 @@ static struct kobj_attribute _name##_attr = {	\
 	.store	= _name##_store,		\
 }
 
-#define power_ro_attr(_name)			\
+#define power_attr_wo(_name)			\
 static struct kobj_attribute _name##_attr = {	\
 	.attr	= {				\
 		.name = __stringify(_name),	\
-		.mode = 0444,			\
-	},					\
-	.show	= _name##_show,			\
-	.store	= NULL,				\
-}
-
-#define power_wo_attr(_name)			\
-static struct kobj_attribute _name##_attr = {	\
-	.attr	= {				\
-		.name = __stringify(_name),	\
-		.mode = 0220,			\
+		.mode = S_IWUGO,			\
 	},					\
 	.show	= NULL,				\
 	.store	= _name##_store,		\
+}
+
+#define power_attr_ro(_name) \
+static struct kobj_attribute _name##_attr = {	\
+	.attr	= {				\
+		.name = __stringify(_name),	\
+		.mode = S_IRUGO,		\
+	},					\
+	.show	= _name##_show,			\
+	.store	= NULL,				\
 }
 
 /* Preferred image size in bytes (default 500 MB) */
@@ -211,6 +214,8 @@ static inline void suspend_test_finish(const char *label) {}
 
 #ifdef CONFIG_PM_SLEEP
 /* kernel/power/main.c */
+extern int __pm_notifier_call_chain(unsigned long val, int nr_to_call,
+				    int *nr_calls);
 extern int pm_notifier_call_chain(unsigned long val);
 #endif
 
@@ -313,3 +318,7 @@ extern int pm_wake_lock(const char *buf);
 extern int pm_wake_unlock(const char *buf);
 
 #endif /* !CONFIG_PM_WAKELOCKS */
+
+#ifdef CONFIG_HTC_POWER_DEBUG
+extern struct blocking_notifier_head *get_pm_chain_head(void);
+#endif
