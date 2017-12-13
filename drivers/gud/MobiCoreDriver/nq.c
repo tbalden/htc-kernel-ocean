@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2016 TRUSTONIC LIMITED
+ * Copyright (c) 2013-2017 TRUSTONIC LIMITED
  * All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or
@@ -19,6 +19,10 @@
 #include <linux/irq.h>
 #include <linux/kthread.h>
 #include <linux/of_irq.h>
+#include <linux/version.h>
+#if KERNEL_VERSION(4, 11, 0) <= LINUX_VERSION_CODE
+#include <linux/sched/clock.h>	/* local_clock */
+#endif
 
 #include "public/mc_user.h"
 
@@ -238,26 +242,26 @@ static int irq_bh_worker(void *arg)
 				rx->hdr.read_cnt % rx->hdr.queue_size];
 
 			/*
-			* Ensure read_cnt writing happens after buffer read
-			* We want a ARM dmb() / ARM64 dmb(sy) here
-			*/
+			 * Ensure read_cnt writing happens after buffer read
+			 * We want a ARM dmb() / ARM64 dmb(sy) here
+			 */
 			smp_mb();
 			rx->hdr.read_cnt++;
 			/*
-			* Ensure read_cnt writing finishes before reader
-			* We want a ARM dsb() / ARM64 dsb(sy) here
-			*/
+			 * Ensure read_cnt writing finishes before reader
+			 * We want a ARM dsb() / ARM64 dsb(sy) here
+			 */
 			rmb();
 			nq_notif_handler(nf.session_id, nf.payload);
 		}
 
 		/*
-		* Finished processing notifications. It does not matter whether
-		* there actually were any notification or not.  S-SIQs can also
-		* be triggered by an SWd driver which was waiting for a FIQ.
-		* In this case the S-SIQ tells NWd that SWd is no longer idle
-		* an will need scheduling again.
-		*/
+		 * Finished processing notifications. It does not matter whether
+		 * there actually were any notification or not.  S-SIQs can also
+		 * be triggered by an SWd driver which was waiting for a FIQ.
+		 * In this case the S-SIQ tells NWd that SWd is no longer idle
+		 * an will need scheduling again.
+		 */
 		if (l_ctx.scheduler_cb)
 			l_ctx.scheduler_cb(MC_NQ_NSIQ);
 	}
@@ -352,6 +356,7 @@ static ssize_t debug_smclog_read(struct file *file, char __user *user_buf,
 static const struct file_operations mc_debug_smclog_ops = {
 	.read = debug_smclog_read,
 	.llseek = default_llseek,
+	.open = debug_generic_open,
 	.release = debug_generic_release,
 };
 

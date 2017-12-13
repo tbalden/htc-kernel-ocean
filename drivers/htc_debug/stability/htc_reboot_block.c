@@ -23,6 +23,15 @@
 #include <linux/platform_device.h>
 #include <linux/of.h>
 
+/* This constant is used in bootloader to decide actions. */
+#define RESTART_REASON_BOOT_BASE			0x77665500
+#define RESTART_REASON_BOOTLOADER			(RESTART_REASON_BOOT_BASE | 0x00)
+#define RESTART_REASON_REBOOT				(RESTART_REASON_BOOT_BASE | 0x01)
+#define RESTART_REASON_DM_VERITY_DEVICE_CORRUPTED	(RESTART_REASON_BOOT_BASE | 0x04)
+#define RESTART_REASON_RECOVERY				(RESTART_REASON_BOOT_BASE | 0x02)
+#define RESTART_REASON_RAMDUMP				(RESTART_REASON_BOOT_BASE | 0xAA)
+#define RESTART_REASON_ERASE_FLASH			(RESTART_REASON_BOOT_BASE | 0xEF)
+
 static char pname[128];
 static uint64_t poffset;
 const struct device *dev;
@@ -41,6 +50,12 @@ static int reboot_block_command(int reason, const char* msg)
 	int ret = 0;
 
 	msg = msg ? : "";
+
+	/*DM-verity cannot access misc for it violates selinux policy*/
+	if (reason == RESTART_REASON_DM_VERITY_DEVICE_CORRUPTED) {
+		dev_info(dev, "dm-verity device corrupted, skipping writing to misc.\n");
+		return ret;
+	}
 
 	dev_info(dev, "reason=%08x msg=%s save to /%s+%08llx\n",
 			reason, msg, pname, poffset);
@@ -61,7 +76,7 @@ static int reboot_block_command(int reason, const char* msg)
 	nwrite = kernel_write(filp,
 			(const char*) &block, sizeof(block),
 			poffset);
-	if (nwrite == sizeof(reason))
+	if (nwrite == sizeof(block))
 		dev_info(dev, "wrote reason: %08x\n", reason);
 	else {
 		dev_err(dev, "kernel_write failed: %zd\n", nwrite);
@@ -73,14 +88,6 @@ err:
 	filp_close(filp, NULL);
 	return ret;
 }
-
-/* This constant is used in bootloader to decide actions. */
-#define RESTART_REASON_BOOT_BASE        0x77665500
-#define RESTART_REASON_BOOTLOADER       (RESTART_REASON_BOOT_BASE | 0x00)
-#define RESTART_REASON_REBOOT           (RESTART_REASON_BOOT_BASE | 0x01)
-#define RESTART_REASON_RECOVERY         (RESTART_REASON_BOOT_BASE | 0x02)
-#define RESTART_REASON_RAMDUMP          (RESTART_REASON_BOOT_BASE | 0xAA)
-#define RESTART_REASON_ERASE_FLASH      (RESTART_REASON_BOOT_BASE | 0xEF)
 
 /*
  * This restart constant is used for oem commands.

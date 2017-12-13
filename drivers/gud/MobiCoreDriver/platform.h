@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2015 TRUSTONIC LIMITED
+ * Copyright (c) 2013-2017 TRUSTONIC LIMITED
  * All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or
@@ -103,12 +103,5 @@ static inline int smc_fastcall(void *fc_generic, size_t size)
 
 /* All TZBSPv4 targets are using AARCH32_FC flag */
 #define MC_AARCH32_FC
-
-/*
- * On Kernel >= 4.4 debugfs_create_bool API changed
- * and this flag should be defined
- * define DEBUGFS_CREATE_BOOL_TAKES_A_BOOL
- */
-#define DEBUGFS_CREATE_BOOL_TAKES_A_BOOL
 
 #endif /* _MC_PLATFORM_H_ */
