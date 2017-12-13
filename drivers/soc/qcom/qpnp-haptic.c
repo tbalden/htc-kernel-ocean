@@ -901,7 +901,7 @@ static int qpnp_hap_play_mode_config(struct qpnp_hap *hap)
 	return rc;
 }
 
-if 1
+#if 1
 static u64 stored_vmax_mv = 0;
 #endif
 
@@ -2488,7 +2488,7 @@ static void qpnp_hap_td_enable(struct timed_output_dev *dev, int time_ms)
 				if (new_val > VMAX_MV_NOTIFICATION) new_val = VMAX_MV_NOTIFICATION;
 				if (stored_vmax_mv > new_val) { goto skip_reset; } // stored value is higher than boosted notif MV then use stored in the end...
 				hap->vmax_mv = new_val;
-				qpnp_hap_vmax_config(hap);
+				qpnp_hap_vmax_config(hap, new_val, true);
 				vmax_needs_reset = 1;
 			}
 			goto skip_reset; // this time skip reset part!
@@ -2503,7 +2503,7 @@ reset:
 		} else {
 			hap->vmax_mv = stored_vmax_mv;
 		}
-		qpnp_hap_vmax_config(hap);
+		qpnp_hap_vmax_config(hap, stored_vmax_mv, true);
 		vmax_needs_reset = 0;
 	}
 skip_reset:
@@ -2538,7 +2538,7 @@ void boosted_vib(int time) {
 	while (counter-->0) {
 		ghap->vmax_mv = QPNP_HAP_VMAX_MAX_MV - voltage_step;
 		voltage_step += 800; // decrease voltage by each buzz..
-		rc = qpnp_hap_vmax_config(ghap);
+		rc = qpnp_hap_vmax_config(ghap, ghap->vmax_mv, true);
 
 		// buzz...
 		skip_register_haptic = 1;
@@ -2550,7 +2550,7 @@ void boosted_vib(int time) {
 		msleep(time/2);
 	}
 	ghap->vmax_mv = current_vmax_mv;
-	rc = qpnp_hap_vmax_config(ghap);
+	rc = qpnp_hap_vmax_config(ghap,current_vmax_mv, false);
 }
 EXPORT_SYMBOL(boosted_vib);
 #endif
