@@ -1511,7 +1511,7 @@ static void ufs_qcom_advertise_quirks(struct ufs_hba *hba)
 		hba->quirks |= UFSHCD_QUIRK_BROKEN_LCC;
 	}
 
-	if (host->hw_ver.major >= 0x2) {
+	if (host->hw_ver.major == 0x2) {
 		hba->quirks |= UFSHCD_QUIRK_BROKEN_UFS_HCI_VERSION;
 
 		if (!ufs_qcom_cap_qunipro(host))
@@ -2109,9 +2109,6 @@ static int ufs_qcom_init(struct ufs_hba *hba)
 	struct ufs_qcom_host *host;
 	struct resource *res;
 
-	if (strlen(android_boot_dev) && strcmp(android_boot_dev, dev_name(dev)))
-		return -ENODEV;
-
 	host = devm_kzalloc(dev, sizeof(*host), GFP_KERNEL);
 	if (!host) {
 		err = -ENOMEM;
@@ -2435,7 +2432,8 @@ static int ufs_qcom_clk_scale_notify(struct ufs_hba *hba,
  */
 static int ufs_qcom_update_sec_cfg(struct ufs_hba *hba, bool restore_sec_cfg)
 {
-	int ret = 0, scm_ret = 0;
+	int ret = 0;
+	u64 scm_ret = 0;
 	struct ufs_qcom_host *host = ufshcd_get_variant(hba);
 
 	/* scm command buffer structrue */
@@ -2476,7 +2474,7 @@ static int ufs_qcom_update_sec_cfg(struct ufs_hba *hba, bool restore_sec_cfg)
 	cbuf.device_id = UFS_TZ_DEV_ID;
 	ret = scm_restore_sec_cfg(cbuf.device_id, cbuf.spare, &scm_ret);
 	if (ret || scm_ret) {
-		dev_dbg(hba->dev, "%s: failed, ret %d scm_ret %d\n",
+		dev_dbg(hba->dev, "%s: failed, ret %d scm_ret %llu\n",
 			__func__, ret, scm_ret);
 		if (!ret)
 			ret = scm_ret;
@@ -2485,7 +2483,7 @@ static int ufs_qcom_update_sec_cfg(struct ufs_hba *hba, bool restore_sec_cfg)
 	}
 
 out:
-	dev_dbg(hba->dev, "%s: ip: restore_sec_cfg %d, op: restore_sec_cfg %d, ret %d scm_ret %d\n",
+	dev_dbg(hba->dev, "%s: ip: restore_sec_cfg %d, op: restore_sec_cfg %d, ret %d scm_ret %llu\n",
 		__func__, restore_sec_cfg, host->sec_cfg_updated, ret, scm_ret);
 	return ret;
 }
@@ -2803,6 +2801,24 @@ static int ufs_qcom_probe(struct platform_device *pdev)
 {
 	int err;
 	struct device *dev = &pdev->dev;
+	struct device_node *np = dev->of_node;
+
+	/*
+	 * On qcom platforms, bootdevice is the primary storage
+	 * device. This device can either be eMMC or UFS.
+	 * The type of device connected is detected at runtime.
+	 * So, if an eMMC device is connected, and this function
+	 * is invoked, it would turn-off the regulator if it detects
+	 * that the storage device is not ufs.
+	 * These regulators are turned ON by the bootloaders & turning
+	 * them off without sending PON may damage the connected device.
+	 * Hence, check for the connected device early-on & don't turn-off
+	 * the regulators.
+	 */
+	if (of_property_read_bool(np, "non-removable") &&
+	    strlen(android_boot_dev) &&
+	    strcmp(android_boot_dev, dev_name(dev)))
+		return -ENODEV;
 
 	/* Perform generic probe */
 	err = ufshcd_pltfrm_init(pdev, &ufs_hba_qcom_variant);

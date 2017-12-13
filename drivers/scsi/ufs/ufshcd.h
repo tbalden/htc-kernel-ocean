@@ -3,7 +3,7 @@
  *
  * This code is based on drivers/scsi/ufs/ufshcd.h
  * Copyright (C) 2011-2013 Samsung India Software Operations
- * Copyright (c) 2013-2016, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2017, The Linux Foundation. All rights reserved.
  *
  * Authors:
  *	Santosh Yaraganavi <santosh.sy@samsung.com>
@@ -519,7 +519,7 @@ struct ufs_init_prefetch {
 	u32 icc_level;
 };
 
-#define UIC_ERR_REG_HIST_LENGTH 8
+#define UIC_ERR_REG_HIST_LENGTH 20
 /**
  * struct ufs_uic_err_reg_hist - keeps history of uic errors
  * @pos: index to indicate cyclic buffer position
@@ -543,6 +543,7 @@ struct debugfs_files {
 	struct dentry *dump_dev_desc;
 	struct dentry *dump_health_desc;
 	struct dentry *power_mode;
+	struct dentry *force_mode;
 	struct dentry *dme_local_read;
 	struct dentry *dme_peer_read;
 	struct dentry *dbg_print_en;
@@ -589,6 +590,22 @@ struct ufshcd_req_stat {
 };
 #endif
 
+enum ufshcd_ctx {
+	QUEUE_CMD,
+	ERR_HNDLR_WORK,
+	H8_EXIT_WORK,
+	UIC_CMD_SEND,
+	PWRCTL_CMD_SEND,
+	TM_CMD_SEND,
+	XFR_REQ_COMPL,
+	CLK_SCALE_WORK,
+};
+
+struct ufshcd_clk_ctx {
+	ktime_t ts;
+	enum ufshcd_ctx ctx;
+};
+
 /**
  * struct ufs_stats - keeps usage/err statistics
  * @enabled: enable tag stats for debugfs
@@ -616,7 +633,22 @@ struct ufs_stats {
 	struct ufshcd_req_stat req_stats[TS_NUM_STATS];
 	int query_stats_arr[UPIU_QUERY_OPCODE_MAX][MAX_QUERY_IDN];
 
+	unsigned long rbytes_drv;  /* Rd bytes UFS Host  */
+	unsigned long wbytes_drv;  /* Wr bytes UFS Host  */
+	unsigned long wbytes_low_perf;
+	unsigned long wtime_low_perf;
+	unsigned long lp_duration;	/* low performance duration */
+
+	struct ufshcd_req_stat last_req_stats[TS_NUM_STATS];
+	ktime_t last_req_ktime[TS_NUM_STATS];
+	struct delayed_work	stats_work;
+	struct workqueue_struct *workq;
+
 #endif
+	u32 last_intr_status;
+	ktime_t last_intr_ts;
+	struct ufshcd_clk_ctx clk_hold;
+	struct ufshcd_clk_ctx clk_rel;
 	u32 hibern8_exit_cnt;
 	ktime_t last_hibern8_exit_tstamp;
 	struct ufs_uic_err_reg_hist pa_err;
@@ -641,6 +673,27 @@ struct ufs_stats {
 		 UFSHCD_DBG_PRINT_HOST_REGS_EN | UFSHCD_DBG_PRINT_TRS_EN | \
 		 UFSHCD_DBG_PRINT_TMRS_EN | UFSHCD_DBG_PRINT_PWR_EN |	   \
 		 UFSHCD_DBG_PRINT_HOST_STATE_EN)
+
+struct ufshcd_cmd_log_entry {
+	char *str;	/* context like "send", "complete" */
+	char *cmd_type;	/* "scsi", "query", "nop", "dme" */
+	u8 lun;
+	u8 cmd_id;
+	sector_t lba;
+	int transfer_len;
+	u8 idn;		/* used only for query idn */
+	u32 doorbell;
+	u32 outstanding_reqs;
+	u32 seq_num;
+	unsigned int tag;
+	ktime_t tstamp;
+};
+
+struct ufshcd_cmd_log {
+	struct ufshcd_cmd_log_entry *entries;
+	int pos;
+	u32 seq_num;
+};
 
 /**
  * struct ufs_hba - per adapter private structure
@@ -813,7 +866,9 @@ struct ufs_hba {
 
 	/* Work Queues */
 	struct work_struct eh_work;
+	struct work_struct pr_work;
 	struct work_struct eeh_work;
+	struct work_struct rls_work;
 
 	/* HBA Errors */
 	u32 errors;
@@ -857,6 +912,7 @@ struct ufs_hba {
 
 	struct ufs_clk_gating clk_gating;
 	struct ufs_hibern8_on_idle hibern8_on_idle;
+	struct ufshcd_cmd_log cmd_log;
 
 	/* Control to enable/disable host capabilities */
 	u32 caps;
@@ -913,6 +969,9 @@ struct ufs_hba {
 	
 	int			latency_hist_enabled;
 	struct io_latency_state io_lat_s;
+	bool restore_needed;
+	bool need_recovery;
+	bool force_error;
 };
 
 static inline void ufshcd_mark_shutdown_ongoing(struct ufs_hba *hba)
@@ -1131,7 +1190,15 @@ static inline bool ufshcd_is_hs_mode(struct ufs_pa_layer_attr *pwr_info)
 #ifdef CONFIG_DEBUG_FS
 static inline void ufshcd_init_req_stats(struct ufs_hba *hba)
 {
-	memset(hba->ufs_stats.req_stats, 0, sizeof(hba->ufs_stats.req_stats));
+	memset(hba->ufs_stats.req_stats, 0, sizeof(struct ufshcd_req_stat)*TS_NUM_STATS);
+	memset(hba->ufs_stats.last_req_stats, 0, sizeof(struct ufshcd_req_stat)*TS_NUM_STATS);
+	memset(hba->ufs_stats.last_req_ktime, 0, sizeof(ktime_t));
+
+	hba->ufs_stats.rbytes_drv = 0;
+	hba->ufs_stats.wbytes_drv = 0;
+	hba->ufs_stats.lp_duration = 0;
+	hba->ufs_stats.wbytes_low_perf = 0;
+	hba->ufs_stats.wtime_low_perf = 0;
 }
 #else
 static inline void ufshcd_init_req_stats(struct ufs_hba *hba) {}
@@ -1384,5 +1451,13 @@ static inline void ufshcd_vops_pm_qos_req_end(struct ufs_hba *hba,
 	if (hba->var && hba->var->pm_qos_vops && hba->var->pm_qos_vops->req_end)
 		hba->var->pm_qos_vops->req_end(hba, req, lock);
 }
+
+#ifdef CONFIG_DEBUG_FS
+/* Get secure flag */
+extern unsigned int get_tamper_sf(void);
+/* definition of ufshcd statistic */
+#define UFSHCD_STATS_INTERVAL		5000	/* 5 secs */
+#define UFSHCD_STATS_LOG_INTERVAL		60000	/* 60 secs */
+#endif
 
 #endif /* End of Header */

@@ -693,7 +693,7 @@ static u32 bam_regmap[][BAM_MAX_REGS] = {
 	},
 };
 
-bool _BAM_HRESP_dump_register = false;
+bool _BAM_HRESP_dump = false;
 
 /* AHB buffer error control */
 enum bam_nonsecure_reset {
@@ -1216,7 +1216,7 @@ u32 bam_check_irq_source(void *base, u32 ee, u32 mask,
 			SPS_ERR(dev, "sps:bam %pa 0x%p(va);bam irq status="
 				"0x%x.\nsps: BAM_HRESP_ERR_IRQ\n",
 				BAM_ID(dev), dev->base, status);
-			_BAM_HRESP_dump_register = true;
+			_BAM_HRESP_dump = true;
 			bam_output_register_content(base, ee);
 			*cb_case = SPS_CALLBACK_BAM_HRESP_ERR_IRQ;
 #ifdef CONFIG_SPS_SUPPORT_NDP_BAM
@@ -2151,14 +2151,6 @@ void print_bam_pipe_selected_reg(void *virt_addr, u32 pipe_index)
 	SPS_DUMP("BAM_P_DESC_FIFO_ADDR_MSB: 0x%x\n", p_desc_fifo_addr_msb);
 	SPS_DUMP("BAM_P_DATA_FIFO_ADDR: 0x%x\n", p_data_fifo_addr);
 	SPS_DUMP("BAM_P_DATA_FIFO_ADDR_MSB: 0x%x\n", p_data_fifo_addr_msb);
-
-	if (_BAM_HRESP_dump_register) {
-		pr_err("BAM_P_DESC_FIFO_ADDR: 0x%x\n", p_desc_fifo_addr);
-		pr_err("BAM_P_DESC_FIFO_ADDR_MSB: 0x%x\n", p_desc_fifo_addr_msb);
-		pr_err("BAM_P_DATA_FIFO_ADDR: 0x%x\n", p_data_fifo_addr);
-		pr_err("BAM_P_DATA_FIFO_ADDR_MSB: 0x%x\n", p_data_fifo_addr_msb);
-	}
-
 	SPS_DUMP("BAM_P_FIFO_SIZES: 0x%x\n", p_fifo_sizes);
 	SPS_DUMP("    DESC_FIFO_SIZE: 0x%x (%d)\n", p_desc_fifo_size,
 							p_desc_fifo_size);
@@ -2167,12 +2159,6 @@ void print_bam_pipe_selected_reg(void *virt_addr, u32 pipe_index)
 
 	SPS_DUMP("BAM_P_EVNT_DEST_ADDR: 0x%x\n", p_evnt_dest);
 	SPS_DUMP("BAM_P_EVNT_DEST_ADDR_MSB: 0x%x\n", p_evnt_dest_msb);
-
-	if (_BAM_HRESP_dump_register) {
-		pr_err("BAM_P_EVNT_DEST_ADDR: 0x%x\n", p_evnt_dest);
-		pr_err("BAM_P_EVNT_DEST_ADDR_MSB: 0x%x\n", p_evnt_dest_msb);
-	}
-
 	SPS_DUMP("BAM_P_EVNT_GEN_TRSHLD: 0x%x\n", p_evnt_trd);
 	SPS_DUMP("    EVNT_GEN_TRSHLD: 0x%x (%d)\n", p_evnt_trd_val,
 							p_evnt_trd_val);

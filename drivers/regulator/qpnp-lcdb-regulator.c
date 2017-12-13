@@ -16,6 +16,7 @@
 #include <linux/delay.h>
 #include <linux/device.h>
 #include <linux/interrupt.h>
+#include <linux/ktime.h>
 #include <linux/module.h>
 #include <linux/of_irq.h>
 #include <linux/platform_device.h>
@@ -23,6 +24,7 @@
 #include <linux/regulator/driver.h>
 #include <linux/regulator/of_regulator.h>
 #include <linux/regulator/machine.h>
+#include <linux/qpnp/qpnp-revid.h>
 
 #define QPNP_LCDB_REGULATOR_DRIVER_NAME		"qcom,qpnp-lcdb-regulator"
 
@@ -31,6 +33,13 @@
 
 #define INT_RT_STATUS_REG		0x10
 #define VREG_OK_RT_STS_BIT		BIT(0)
+#define SC_ERROR_RT_STS_BIT		BIT(1)
+
+#define LCDB_STS3_REG			0x0A
+#define LDO_VREG_OK_BIT			BIT(7)
+
+#define LCDB_STS4_REG			0x0B
+#define NCP_VREG_OK_BIT			BIT(7)
 
 #define LCDB_AUTO_TOUCH_WAKE_CTL_REG	0x40
 #define EN_AUTO_TOUCH_WAKE_BIT		BIT(7)
@@ -138,6 +147,8 @@
 #define MIN_SOFT_START_US		0
 #define MAX_SOFT_START_US		2000
 
+#define BST_HEADROOM_DEFAULT_MV		200
+
 struct ldo_regulator {
 	struct regulator_desc		rdesc;
 	struct regulator_dev		*rdev;
@@ -178,13 +189,16 @@ struct bst_params {
 	int				soft_start_us;
 	int				vreg_ok_dbc_us;
 	int				voltage_mv;
+	u16				headroom_mv;
 };
 
 struct qpnp_lcdb {
 	struct device			*dev;
 	struct platform_device		*pdev;
 	struct regmap			*regmap;
+	struct pmic_revid_data		*pmic_rev_id;
 	u32				base;
+	int				sc_irq;
 
 	/* TTW params */
 	bool				ttw_enable;
@@ -196,6 +210,9 @@ struct qpnp_lcdb {
 	/* status parameters */
 	bool				lcdb_enabled;
 	bool				settings_saved;
+	bool				lcdb_sc_disable;
+	int				sc_count;
+	ktime_t				sc_module_enable_time;
 
 	struct mutex			lcdb_mutex;
 	struct mutex			read_write_mutex;
@@ -567,13 +584,75 @@ static int qpnp_lcdb_ttw_exit(struct qpnp_lcdb *lcdb)
 	return 0;
 }
 
+static int qpnp_lcdb_enable_wa(struct qpnp_lcdb *lcdb)
+{
+	int rc;
+	u8 val = 0;
+
+	/* required only for PM660L */
+	if (lcdb->pmic_rev_id->pmic_subtype != PM660L_SUBTYPE)
+		return 0;
+
+	val = MODULE_EN_BIT;
+	rc = qpnp_lcdb_write(lcdb, lcdb->base + LCDB_ENABLE_CTL1_REG,
+						&val, 1);
+	if (rc < 0) {
+		pr_err("Failed to enable lcdb rc= %d\n", rc);
+		return rc;
+	}
+
+	val = 0;
+	rc = qpnp_lcdb_write(lcdb, lcdb->base + LCDB_ENABLE_CTL1_REG,
+							&val, 1);
+	if (rc < 0) {
+		pr_err("Failed to disable lcdb rc= %d\n", rc);
+		return rc;
+	}
+
+	/* execute the below for rev1.1 */
+	if (lcdb->pmic_rev_id->rev3 == PM660L_V1P1_REV3 &&
+		lcdb->pmic_rev_id->rev4 == PM660L_V1P1_REV4) {
+		/*
+		 * delay to make sure that the MID pin – ie the
+		 * output of the LCDB boost – returns to 0V
+		 * after the module is disabled
+		 */
+		usleep_range(10000, 10100);
+
+		rc = qpnp_lcdb_masked_write(lcdb,
+				lcdb->base + LCDB_MISC_CTL_REG,
+				DIS_SCP_BIT, DIS_SCP_BIT);
+		if (rc < 0) {
+			pr_err("Failed to disable SC rc=%d\n", rc);
+			return rc;
+		}
+		/* delay for SC-disable to take effect */
+		usleep_range(1000, 1100);
+
+		rc = qpnp_lcdb_masked_write(lcdb,
+				lcdb->base + LCDB_MISC_CTL_REG,
+				DIS_SCP_BIT, 0);
+		if (rc < 0) {
+			pr_err("Failed to enable SC rc=%d\n", rc);
+			return rc;
+		}
+		/* delay for SC-enable to take effect */
+		usleep_range(1000, 1100);
+	}
+
+	return 0;
+}
+
 static int qpnp_lcdb_enable(struct qpnp_lcdb *lcdb)
 {
 	int rc = 0, timeout, delay;
 	u8 val = 0;
 
-	if (lcdb->lcdb_enabled)
+	if (lcdb->lcdb_enabled || lcdb->lcdb_sc_disable) {
+		pr_debug("lcdb_enabled=%d lcdb_sc_disable=%d\n",
+			lcdb->lcdb_enabled, lcdb->lcdb_sc_disable);
 		return 0;
+	}
 
 	if (lcdb->ttw_enable) {
 		rc = qpnp_lcdb_ttw_exit(lcdb);
@@ -583,11 +662,17 @@ static int qpnp_lcdb_enable(struct qpnp_lcdb *lcdb)
 		}
 	}
 
+	rc = qpnp_lcdb_enable_wa(lcdb);
+	if (rc < 0) {
+		pr_err("Failed to execute enable_wa rc=%d\n", rc);
+		return rc;
+	}
+
 	val = MODULE_EN_BIT;
 	rc = qpnp_lcdb_write(lcdb, lcdb->base + LCDB_ENABLE_CTL1_REG,
 							&val, 1);
 	if (rc < 0) {
-		pr_err("Failed to enable lcdb rc= %d\n", rc);
+		pr_err("Failed to disable lcdb rc= %d\n", rc);
 		goto fail_enable;
 	}
 
@@ -676,6 +761,111 @@ static int qpnp_lcdb_disable(struct qpnp_lcdb *lcdb)
 	return rc;
 }
 
+#define LCDB_SC_RESET_CNT_DLY_US	1000000
+#define LCDB_SC_CNT_MAX			10
+static int qpnp_lcdb_handle_sc_event(struct qpnp_lcdb *lcdb)
+{
+	int rc = 0;
+	s64 elapsed_time_us;
+
+	mutex_lock(&lcdb->lcdb_mutex);
+	rc = qpnp_lcdb_disable(lcdb);
+	if (rc < 0) {
+		pr_err("Failed to disable lcdb rc=%d\n", rc);
+		goto unlock_mutex;
+	}
+
+	/* Check if the SC re-occurred immediately */
+	elapsed_time_us = ktime_us_delta(ktime_get(),
+			lcdb->sc_module_enable_time);
+	if (elapsed_time_us > LCDB_SC_RESET_CNT_DLY_US) {
+		lcdb->sc_count = 0;
+	} else if (lcdb->sc_count > LCDB_SC_CNT_MAX) {
+		pr_err("SC trigged %d times, disabling LCDB forever!\n",
+						lcdb->sc_count);
+		lcdb->lcdb_sc_disable = true;
+		goto unlock_mutex;
+	}
+	lcdb->sc_count++;
+	lcdb->sc_module_enable_time = ktime_get();
+
+	/* delay for SC to clear */
+	usleep_range(10000, 10100);
+
+	rc = qpnp_lcdb_enable(lcdb);
+	if (rc < 0)
+		pr_err("Failed to enable lcdb rc=%d\n", rc);
+
+unlock_mutex:
+	mutex_unlock(&lcdb->lcdb_mutex);
+	return rc;
+}
+
+static irqreturn_t qpnp_lcdb_sc_irq_handler(int irq, void *data)
+{
+	struct qpnp_lcdb *lcdb = data;
+	int rc;
+	u8 val, val2[2] = {0};
+
+	rc = qpnp_lcdb_read(lcdb, lcdb->base + INT_RT_STATUS_REG, &val, 1);
+	if (rc < 0)
+		goto irq_handled;
+
+	if (val & SC_ERROR_RT_STS_BIT) {
+		rc = qpnp_lcdb_read(lcdb,
+			lcdb->base + LCDB_MISC_CTL_REG, &val, 1);
+		if (rc < 0)
+			goto irq_handled;
+
+		if (val & EN_TOUCH_WAKE_BIT) {
+			/* blanking time */
+			usleep_range(300, 310);
+			/*
+			 * The status registers need to written with any value
+			 * before reading
+			 */
+			rc = qpnp_lcdb_write(lcdb,
+				lcdb->base + LCDB_STS3_REG, val2, 2);
+			if (rc < 0)
+				goto irq_handled;
+
+			rc = qpnp_lcdb_read(lcdb,
+				lcdb->base + LCDB_STS3_REG, val2, 2);
+			if (rc < 0)
+				goto irq_handled;
+
+			if (!(val2[0] & LDO_VREG_OK_BIT) ||
+					!(val2[1] & NCP_VREG_OK_BIT)) {
+				rc = qpnp_lcdb_handle_sc_event(lcdb);
+				if (rc < 0) {
+					pr_err("Failed to handle SC rc=%d\n",
+								rc);
+					goto irq_handled;
+				}
+			}
+		} else {
+			/* blanking time */
+			usleep_range(2000, 2100);
+			/* Read the SC status again to confirm true SC */
+			rc = qpnp_lcdb_read(lcdb,
+				lcdb->base + INT_RT_STATUS_REG, &val, 1);
+			if (rc < 0)
+				goto irq_handled;
+
+			if (val & SC_ERROR_RT_STS_BIT) {
+				rc = qpnp_lcdb_handle_sc_event(lcdb);
+				if (rc < 0) {
+					pr_err("Failed to handle SC rc=%d\n",
+								rc);
+					goto irq_handled;
+				}
+			}
+		}
+	}
+irq_handled:
+	return IRQ_HANDLED;
+}
+
 #define MIN_BST_VOLTAGE_MV			4700
 #define MAX_BST_VOLTAGE_MV			6250
 #define MIN_VOLTAGE_MV				4000
@@ -686,28 +876,40 @@ static int qpnp_lcdb_disable(struct qpnp_lcdb *lcdb)
 #define VOLTAGE_STEP_50_MV			50
 #define VOLTAGE_STEP_50MV_OFFSET		0xA
 static int qpnp_lcdb_set_bst_voltage(struct qpnp_lcdb *lcdb,
-					int voltage_mv)
+					int voltage_mv, u8 type)
 {
 	int rc = 0;
 	u8 val = 0;
+	int bst_voltage_mv;
+	struct ldo_regulator *ldo = &lcdb->ldo;
+	struct ncp_regulator *ncp = &lcdb->ncp;
+	struct bst_params *bst = &lcdb->bst;
 
-	if (voltage_mv < MIN_BST_VOLTAGE_MV)
-		voltage_mv = MIN_BST_VOLTAGE_MV;
-	else if (voltage_mv > MAX_BST_VOLTAGE_MV)
-		voltage_mv = MAX_BST_VOLTAGE_MV;
+	/* Vout_Boost = headroom_mv + max( Vout_LDO, abs (Vout_NCP)) */
+	bst_voltage_mv = max(voltage_mv, max(ldo->voltage_mv, ncp->voltage_mv));
+	bst_voltage_mv += bst->headroom_mv;
 
-	val = DIV_ROUND_UP(voltage_mv - MIN_BST_VOLTAGE_MV,
-					VOLTAGE_STEP_50_MV);
+	if (bst_voltage_mv < MIN_BST_VOLTAGE_MV)
+		bst_voltage_mv = MIN_BST_VOLTAGE_MV;
+	else if (bst_voltage_mv > MAX_BST_VOLTAGE_MV)
+		bst_voltage_mv = MAX_BST_VOLTAGE_MV;
 
-	rc = qpnp_lcdb_masked_write(lcdb, lcdb->base +
-				LCDB_BST_OUTPUT_VOLTAGE_REG,
-				SET_OUTPUT_VOLTAGE_MASK, val);
-	if (rc < 0)
-		pr_err("Failed to set boost voltage %d mv rc=%d\n",
-			voltage_mv, rc);
-	else
-		pr_debug("Boost voltage set = %d mv (0x%02x = 0x%02x)\n",
-			voltage_mv, LCDB_BST_OUTPUT_VOLTAGE_REG, val);
+	if (bst_voltage_mv != bst->voltage_mv) {
+		val = DIV_ROUND_UP(bst_voltage_mv - MIN_BST_VOLTAGE_MV,
+						VOLTAGE_STEP_50_MV);
+
+		rc = qpnp_lcdb_masked_write(lcdb, lcdb->base +
+					LCDB_BST_OUTPUT_VOLTAGE_REG,
+					SET_OUTPUT_VOLTAGE_MASK, val);
+		if (rc < 0) {
+			pr_err("Failed to set boost voltage %d mv rc=%d\n",
+				bst_voltage_mv, rc);
+		} else {
+			pr_debug("Boost voltage set = %d mv (0x%02x = 0x%02x)\n",
+			      bst_voltage_mv, LCDB_BST_OUTPUT_VOLTAGE_REG, val);
+			bst->voltage_mv = bst_voltage_mv;
+		}
+	}
 
 	return rc;
 }
@@ -738,25 +940,16 @@ static int qpnp_lcdb_set_voltage(struct qpnp_lcdb *lcdb,
 	u16 offset = LCDB_LDO_OUTPUT_VOLTAGE_REG;
 	u8 val = 0;
 
-	if (type == BST)
-		return qpnp_lcdb_set_bst_voltage(lcdb, voltage_mv);
-
-	if (type == NCP)
-		offset = LCDB_NCP_OUTPUT_VOLTAGE_REG;
-
 	if (!is_between(voltage_mv, MIN_VOLTAGE_MV, MAX_VOLTAGE_MV)) {
 		pr_err("Invalid voltage %dmv (min=%d max=%d)\n",
 			voltage_mv, MIN_VOLTAGE_MV, MAX_VOLTAGE_MV);
 		return -EINVAL;
 	}
 
-	/* Change the BST voltage to LDO + 100mV */
-	if (type == LDO) {
-		rc = qpnp_lcdb_set_bst_voltage(lcdb, voltage_mv + 100);
-		if (rc < 0) {
-			pr_err("Failed to set boost voltage rc=%d\n", rc);
-			return rc;
-		}
+	rc = qpnp_lcdb_set_bst_voltage(lcdb, voltage_mv, type);
+	if (rc < 0) {
+		pr_err("Failed to set boost voltage rc=%d\n", rc);
+		return rc;
 	}
 
 	/* Below logic is only valid for LDO and NCP type */
@@ -768,6 +961,9 @@ static int qpnp_lcdb_set_voltage(struct qpnp_lcdb *lcdb,
 						VOLTAGE_STEP_50_MV);
 		val += VOLTAGE_STEP_50MV_OFFSET;
 	}
+
+	if (type == NCP)
+		offset = LCDB_NCP_OUTPUT_VOLTAGE_REG;
 
 	rc = qpnp_lcdb_masked_write(lcdb, lcdb->base + offset,
 				SET_OUTPUT_VOLTAGE_MASK, val);
@@ -891,6 +1087,8 @@ static int qpnp_lcdb_ldo_regulator_set_voltage(struct regulator_dev *rdev,
 	rc = qpnp_lcdb_set_voltage(lcdb, min_uV / 1000, LDO);
 	if (rc < 0)
 		pr_err("Failed to set LDO voltage rc=%c\n", rc);
+	else
+		lcdb->ldo.voltage_mv = min_uV / 1000;
 
 	return rc;
 }
@@ -962,6 +1160,8 @@ static int qpnp_lcdb_ncp_regulator_set_voltage(struct regulator_dev *rdev,
 	rc = qpnp_lcdb_set_voltage(lcdb, min_uV / 1000, NCP);
 	if (rc < 0)
 		pr_err("Failed to set LDO voltage rc=%c\n", rc);
+	else
+		lcdb->ncp.voltage_mv = min_uV / 1000;
 
 	return rc;
 }
@@ -1221,6 +1421,12 @@ static int qpnp_lcdb_bst_dt_init(struct qpnp_lcdb *lcdb)
 			lcdb->bst.ps_threshold, MIN_BST_PS_MA, MAX_BST_PS_MA);
 		return -EINVAL;
 	}
+
+	/* Boost head room configuration */
+	of_property_read_u16(node, "qcom,bst-headroom-mv",
+					&lcdb->bst.headroom_mv);
+	if (lcdb->bst.headroom_mv < BST_HEADROOM_DEFAULT_MV)
+		lcdb->bst.headroom_mv = BST_HEADROOM_DEFAULT_MV;
 
 	return 0;
 }
@@ -1528,6 +1734,9 @@ static int qpnp_lcdb_init_bst(struct qpnp_lcdb *lcdb)
 	}
 	lcdb->bst.soft_start_us = (val & SOFT_START_MASK) * 200	+ 200;
 
+	if (!lcdb->bst.headroom_mv)
+		lcdb->bst.headroom_mv = BST_HEADROOM_DEFAULT_MV;
+
 	return 0;
 }
 
@@ -1552,6 +1761,19 @@ static int qpnp_lcdb_hw_init(struct qpnp_lcdb *lcdb)
 	if (rc < 0) {
 		pr_err("Failed to initialize NCP rc=%d\n", rc);
 		return rc;
+	}
+
+	if (lcdb->sc_irq >= 0 &&
+		lcdb->pmic_rev_id->pmic_subtype != PM660L_SUBTYPE) {
+		lcdb->sc_count = 0;
+		rc = devm_request_threaded_irq(lcdb->dev, lcdb->sc_irq,
+				NULL, qpnp_lcdb_sc_irq_handler, IRQF_ONESHOT,
+				"qpnp_lcdb_sc_irq", lcdb);
+		if (rc < 0) {
+			pr_err("Unable to request sc(%d) irq rc=%d\n",
+						lcdb->sc_irq, rc);
+			return rc;
+		}
 	}
 
 	if (!is_lcdb_enabled(lcdb)) {
@@ -1582,7 +1804,23 @@ static int qpnp_lcdb_parse_dt(struct qpnp_lcdb *lcdb)
 {
 	int rc = 0;
 	const char *label;
-	struct device_node *temp, *node = lcdb->dev->of_node;
+	struct device_node *revid_dev_node, *temp, *node = lcdb->dev->of_node;
+
+	revid_dev_node = of_parse_phandle(node, "qcom,pmic-revid", 0);
+	if (!revid_dev_node) {
+		pr_err("Missing qcom,pmic-revid property - fail driver\n");
+		return -EINVAL;
+	}
+
+	lcdb->pmic_rev_id = get_revid_data(revid_dev_node);
+	if (IS_ERR(lcdb->pmic_rev_id)) {
+		pr_debug("Unable to get revid data\n");
+		/*
+		 * revid should to be defined, return -EPROBE_DEFER
+		 * until the revid module registers.
+		 */
+		return -EPROBE_DEFER;
+	}
 
 	for_each_available_child_of_node(node, temp) {
 		rc = of_property_read_string(temp, "label", &label);
@@ -1621,6 +1859,10 @@ static int qpnp_lcdb_parse_dt(struct qpnp_lcdb *lcdb)
 		}
 		lcdb->ttw_enable = true;
 	}
+
+	lcdb->sc_irq = platform_get_irq_byname(lcdb->pdev, "sc-irq");
+	if (lcdb->sc_irq < 0)
+		pr_debug("sc irq is not defined\n");
 
 	return rc;
 }

@@ -59,6 +59,7 @@ struct _htc_kernel_top {
 	unsigned int *prev_proc_stat;
 	int *curr_proc_delta;
 	int *curr_proc_pid;
+	long *cpu_time;
 	struct task_struct **task_ptr_array;
 	struct kernel_cpustat curr_cpustat;
 	struct kernel_cpustat prev_cpustat;
@@ -107,6 +108,44 @@ static struct process_monitor_statistic process_monitor_continuous_3_array[NUM_B
 static int statistic_monitor_period = 1;
 static struct process_monitor_statistic process_monitor_5_in_10_array[PROCESS_MONITOR_ARRAY_5_IN_10_SIZE];
 #endif /* USE_STATISTICS_STRATEGY_CONTINUOUS_3 */
+
+int get_kernel_cluster_info(int *cluster_id, cpumask_t *cluster_cpus)
+{
+	uint32_t _cpu, cluster_index, cluster_cnt;
+
+	for (_cpu = 0, cluster_cnt = 0; _cpu < num_possible_cpus(); _cpu++) {
+		if (topology_physical_package_id(_cpu) < 0) {
+			pr_err("CPU%d topology not initialized.\n", _cpu);
+			return -ENODEV;
+		}
+		/* Do not use the sibling cpumask from topology module.
+		** kernel topology module updates the sibling cpumask
+		** only when the cores are brought online for the first time.
+		** KTM figures out the sibling cpumask using the
+		** cluster and core ID mapping.
+		*/
+		for (cluster_index = 0; cluster_index < num_possible_cpus();
+			cluster_index++) {
+			if (cluster_id[cluster_index] == -1) {
+				cluster_id[cluster_index] =
+					topology_physical_package_id(_cpu);
+				cpumask_clear(&cluster_cpus[cluster_index]);
+				cpumask_set_cpu(_cpu,
+					&cluster_cpus[cluster_index]);
+				cluster_cnt++;
+				break;
+			}
+			if (cluster_id[cluster_index] ==
+				topology_physical_package_id(_cpu)) {
+				cpumask_set_cpu(_cpu,
+					&cluster_cpus[cluster_index]);
+				break;
+			}
+		}
+	}
+
+	return cluster_cnt;
+}
 
 bool is_commercial()
 {
@@ -602,6 +641,7 @@ static unsigned long htc_calculate_cpustat_time(struct kernel_cpustat curr_cpust
 static void htc_kernel_top_cal(struct _htc_kernel_top *ktop, int type)
 {
 	int pid_cnt = 0;
+	int pid_num = 0;
 	struct task_struct *process;
 	struct task_cputime cputime;
 	// audio problem:
@@ -611,29 +651,40 @@ static void htc_kernel_top_cal(struct _htc_kernel_top *ktop, int type)
 	if (ktop->task_ptr_array == NULL ||
 	    ktop->curr_proc_delta == NULL ||
 	    ktop->curr_proc_pid == NULL ||
-	    ktop->prev_proc_stat == NULL)
+	    ktop->prev_proc_stat == NULL ||
+	    ktop->cpu_time == NULL)
 	  return;
 	// audio problem
 	// spin_lock_irqsave(&ktop->lock, flags);
 
+	memset(ktop->cpu_time, 0, sizeof(long) * MAX_PID);
 	/* Calculate cpu time of each process */
+#ifndef CONFIG_ARCH_SDM630
 	rcu_read_lock();
+#endif
 	for_each_process(process) {
 		thread_group_cputime(process, &cputime);
 		if (process->pid < MAX_PID) {
-			long cpu_time = cputime.utime + cputime.stime;
-			ktop->curr_proc_delta[process->pid] =
-				cpu_time - ktop->prev_proc_stat[process->pid];
+			ktop->cpu_time[process->pid] = cputime.utime + cputime.stime;
 			ktop->task_ptr_array[process->pid] = process;
-			ktop->prev_proc_stat[process->pid] = cpu_time;
-
-			if (ktop->curr_proc_delta[process->pid] > 0) {
-				ktop->curr_proc_pid[pid_cnt] = process->pid;
-				pid_cnt++;
-			}
 		}
 	}
+#ifndef CONFIG_ARCH_SDM630
 	rcu_read_unlock();
+#endif
+
+	// accmulate cpu time
+	for(pid_num = 0; pid_num < MAX_PID; pid_num++) {
+		long cpu_time = ktop->cpu_time[pid_num];
+		ktop->curr_proc_delta[pid_num] =
+			cpu_time - ktop->prev_proc_stat[pid_num];
+		ktop->prev_proc_stat[pid_num] = cpu_time;
+
+		if (ktop->curr_proc_delta[pid_num] > 0) {
+			ktop->curr_proc_pid[pid_cnt] = pid_num;
+			pid_cnt++;
+		}
+	}
 	sort_cputime_by_pid(ktop->curr_proc_delta, ktop->curr_proc_pid, pid_cnt, ktop->top_loading_pid);
 
 	/* Calculate cpu time of cpus */
@@ -685,12 +736,12 @@ static void htc_kernel_top_show(struct _htc_kernel_top *ktop, int type)
 }
 
 extern int sensor_get_id(char *name);
-extern int sensor_get_temp(uint32_t sensor_id, long *temp);
+extern int sensor_get_temp(uint32_t sensor_id, int *temp);
 
 static void htc_show_sensor_temp(void)
 {
         int ret = 0, id, i;
-        long temp;
+        int temp = 0;
         char *sensors[] = {"emmc_therm", "quiet_therm", "msm_therm"};
         char piece[32];
         char output[256];
@@ -700,7 +751,7 @@ static void htc_show_sensor_temp(void)
                 id = sensor_get_id(sensors[i]);
                 ret = ((sensor_get_temp(id, &temp) != 0) ? 1 : 0) + (ret << 1);
                 memset(piece, 0, sizeof(piece));
-                snprintf(piece, sizeof(piece), "%s(%d,%s,%ld,%d)",
+                snprintf(piece, sizeof(piece), "%s(%d,%s,%d,%d)",
                         strlen(output)>0 ? "," : "",
                         id,
                         sensors[i],
@@ -752,11 +803,12 @@ static void htc_pm_monitor_work_func(struct work_struct *work)
 	htc_xo_vddmin_stat_show();
 	msm_rpm_dump_stat(true);
 
+#if 0 //FIX ME
 	/* Show timer stats */
 	htc_timer_stats_onoff('0');
 	htc_timer_stats_show(300); /*Show timer events which greater than 300 every 10 sec*/
 	htc_timer_stats_onoff('1');
-
+#endif
 	/* Show wakeup source */
 	htc_print_active_wakeup_sources();
 
@@ -824,11 +876,13 @@ void htc_monitor_init(void)
 			htc_kernel_top->curr_proc_delta = vmalloc(sizeof(long) * MAX_PID);
 			htc_kernel_top->task_ptr_array = vmalloc(sizeof(long) * MAX_PID);
 			htc_kernel_top->curr_proc_pid = vmalloc(sizeof(long) * MAX_PID);
+			htc_kernel_top->cpu_time = vmalloc(sizeof(long) * MAX_PID);
 
 			memset(htc_kernel_top->prev_proc_stat, 0, sizeof(long) * MAX_PID);
 			memset(htc_kernel_top->curr_proc_delta, 0, sizeof(long) * MAX_PID);
 			memset(htc_kernel_top->task_ptr_array, 0, sizeof(long) * MAX_PID);
 			memset(htc_kernel_top->curr_proc_pid, 0, sizeof(long) * MAX_PID);
+			memset(htc_kernel_top->cpu_time, 0, sizeof(long) * MAX_PID);
 
 			get_all_cpustat(&htc_kernel_top->curr_cpustat);
 			get_all_cpustat(&htc_kernel_top->prev_cpustat);
@@ -872,11 +926,13 @@ void htc_monitor_init(void)
 		htc_kernel_top_accu->curr_proc_delta = vmalloc(sizeof(long) * MAX_PID);
 		htc_kernel_top_accu->task_ptr_array = vmalloc(sizeof(long) * MAX_PID);
 		htc_kernel_top_accu->curr_proc_pid = vmalloc(sizeof(long) * MAX_PID);
+		htc_kernel_top_accu->cpu_time = vmalloc(sizeof(long) * MAX_PID);
 
 		memset(htc_kernel_top_accu->prev_proc_stat, 0, sizeof(long) * MAX_PID);
 		memset(htc_kernel_top_accu->curr_proc_delta, 0, sizeof(long) * MAX_PID);
 		memset(htc_kernel_top_accu->task_ptr_array, 0, sizeof(long) * MAX_PID);
 		memset(htc_kernel_top_accu->curr_proc_pid, 0, sizeof(long) * MAX_PID);
+		memset(htc_kernel_top_accu->cpu_time, 0, sizeof(long) * MAX_PID);
 
 		get_all_cpustat(&htc_kernel_top_accu->curr_cpustat);
 		get_all_cpustat(&htc_kernel_top_accu->prev_cpustat);

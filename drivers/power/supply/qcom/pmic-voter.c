@@ -18,9 +18,9 @@
 #include <linux/slab.h>
 #include <linux/string.h>
 
-#include "pmic-voter.h"
+#include <linux/pmic-voter.h>
 
-#define NUM_MAX_CLIENTS	16
+#define NUM_MAX_CLIENTS		16
 #define DEBUG_FORCE_CLIENT	"DEBUG_FORCE_CLIENT"
 
 static DEFINE_SPINLOCK(votable_list_slock);
@@ -185,6 +185,38 @@ void lock_votable(struct votable *votable)
 void unlock_votable(struct votable *votable)
 {
 	mutex_unlock(&votable->vote_lock);
+}
+
+/**
+ * is_client_vote_enabled() -
+ * is_client_vote_enabled_locked() -
+ *		The unlocked and locked variants of getting whether a client's
+		vote is enabled.
+ * @votable:	the votable object
+ * @client_str: client of interest
+ *
+ * Returns:
+ *	True if the client's vote is enabled; false otherwise.
+ */
+bool is_client_vote_enabled_locked(struct votable *votable,
+							const char *client_str)
+{
+	int client_id = get_client_id(votable, client_str);
+
+	if (client_id < 0)
+		return false;
+
+	return votable->votes[client_id].enabled;
+}
+
+bool is_client_vote_enabled(struct votable *votable, const char *client_str)
+{
+	bool enabled;
+
+	lock_votable(votable);
+	enabled = is_client_vote_enabled_locked(votable, client_str);
+	unlock_votable(votable);
+	return enabled;
 }
 
 /**
@@ -453,12 +485,14 @@ out:
 int rerun_election(struct votable *votable)
 {
 	int rc = 0;
+	int effective_result;
 
 	lock_votable(votable);
+	effective_result = get_effective_result_locked(votable);
 	if (votable->callback)
 		rc = votable->callback(votable,
-				votable->data,
-			votable->effective_result,
+			votable->data,
+			effective_result,
 			get_client_str(votable, votable->effective_client_id));
 	unlock_votable(votable);
 	return rc;
@@ -534,11 +568,10 @@ static int show_votable_clients(struct seq_file *m, void *data)
 
 	lock_votable(votable);
 
-	seq_printf(m, "Votable %s:\n", votable->name);
-	seq_puts(m, "clients:\n");
 	for (i = 0; i < votable->num_clients; i++) {
 		if (votable->client_strs[i]) {
-			seq_printf(m, "%-15s:\t\ten=%d\t\tv=%d\n",
+			seq_printf(m, "%s: %s:\t\t\ten=%d v=%d\n",
+					votable->name,
 					votable->client_strs[i],
 					votable->votes[i].enabled,
 					votable->votes[i].value);
@@ -557,11 +590,11 @@ static int show_votable_clients(struct seq_file *m, void *data)
 		break;
 	}
 
-	seq_printf(m, "type: %s\n", type_str);
-	seq_puts(m, "Effective:\n");
 	effective_client_str = get_effective_client_locked(votable);
-	seq_printf(m, "%-15s:\t\tv=%d\n",
+	seq_printf(m, "%s: effective=%s type=%s v=%d\n",
+			votable->name,
 			effective_client_str ? effective_client_str : "none",
+			type_str,
 			get_effective_result_locked(votable));
 	unlock_votable(votable);
 

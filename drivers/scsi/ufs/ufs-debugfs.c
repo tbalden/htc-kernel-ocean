@@ -1274,6 +1274,52 @@ static const struct file_operations ufsdbg_power_mode_desc = {
 	.write		= ufsdbg_power_mode_write,
 };
 
+static ssize_t ufsdbg_force_write(struct file *file,
+				const char __user *ubuf, size_t cnt,
+				loff_t *ppos)
+{
+	struct ufs_hba *hba = file->f_mapping->host->i_private;
+	char force_error[BUFF_LINE_SIZE] = {0};
+	loff_t buff_pos = 0;
+	int ret;
+	int idx = 0;
+
+	if (!hba) {
+		pr_err("hba is NULL\n");
+		return -EINVAL;
+	}
+
+	ret = simple_write_to_buffer(force_error, BUFF_LINE_SIZE,
+		&buff_pos, ubuf, cnt);
+
+	hba->force_error = force_error[idx] - '0';
+
+	return cnt;
+}
+
+
+static int ufsdbg_force_show(struct seq_file *file, void *data)
+{
+	/* Print usage */
+	seq_puts(file,
+		"FORCE test\n"
+		"\n");
+
+	return 0;
+}
+
+static int ufsdbg_force_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, ufsdbg_force_show, inode->i_private);
+}
+
+static const struct file_operations ufsdbg_force_mode = {
+	.open		= ufsdbg_force_open,
+	.read		= seq_read,
+	.write		= ufsdbg_force_write,
+};
+
+
 static int ufsdbg_dme_read(void *data, u64 *attr_val, bool peer)
 {
 	int ret;
@@ -1649,6 +1695,16 @@ void ufsdbg_add_debugfs(struct ufs_hba *hba)
 	if (!hba->debugfs_files.power_mode) {
 		dev_err(hba->dev,
 			"%s:  NULL power_mode_desc file, exiting", __func__);
+		goto err;
+	}
+
+	hba->debugfs_files.force_mode =
+		debugfs_create_file("force_mode", S_IRUSR | S_IWUSR,
+				    hba->debugfs_files.debugfs_root, hba,
+				    &ufsdbg_force_mode);
+	if (!hba->debugfs_files.force_mode) {
+		dev_err(hba->dev,
+			"%s:  NULL ufsdbg_force_mode file, exiting", __func__);
 		goto err;
 	}
 

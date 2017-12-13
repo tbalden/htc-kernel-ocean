@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -116,6 +116,7 @@ extern u8 debugfs_record_enabled;
 extern u8 logging_option;
 extern u8 debug_level_option;
 extern u8 print_limit_option;
+extern bool _BAM_HRESP_dump;
 
 #define SPS_IPC(idx, dev, msg, args...) do { \
 		if (dev) { \
@@ -140,15 +141,12 @@ extern u8 print_limit_option;
 	} while (0)
 #define SPS_DUMP(msg, args...) do {					\
 		SPS_IPC(4, sps, msg, args); \
+		if (_BAM_HRESP_dump) \
+			pr_err(msg, ##args);	\
 		if (sps) { \
 			if (sps->ipc_log4 == NULL) \
 				pr_info(msg, ##args);	\
 		} \
-	} while (0)
-#define SPS_DEBUGFS(msg, args...) do {					\
-		char buf[MAX_MSG_LEN];		\
-		snprintf(buf, MAX_MSG_LEN, msg"\n", ##args);	\
-		sps_debugfs_record(buf);	\
 	} while (0)
 #define SPS_ERR(dev, msg, args...) do {					\
 		if (logging_option != 1) {	\
@@ -157,22 +155,22 @@ extern u8 print_limit_option;
 			else	\
 				pr_err(msg, ##args);	\
 		}	\
-		if (unlikely(debugfs_record_enabled))	\
-			SPS_DEBUGFS(msg, ##args);	\
 		SPS_IPC(3, dev, msg, args); \
 	} while (0)
 #define SPS_INFO(dev, msg, args...) do {				\
+		if (_BAM_HRESP_dump) \
+			pr_err(msg, ##args);	\
 		if (logging_option != 1) {	\
 			if (unlikely(print_limit_option > 1))	\
 				pr_info_ratelimited(msg, ##args);	\
 			else	\
 				pr_info(msg, ##args);	\
 		}	\
-		if (unlikely(debugfs_record_enabled))	\
-			SPS_DEBUGFS(msg, ##args);	\
 		SPS_IPC(3, dev, msg, args); \
 	} while (0)
 #define SPS_DBG(dev, msg, args...) do {					\
+		if (_BAM_HRESP_dump) \
+			pr_err(msg, ##args);	\
 		if ((unlikely(logging_option > 1))	\
 			&& (unlikely(debug_level_option > 3))) {\
 			if (unlikely(print_limit_option > 0))	\
@@ -181,14 +179,14 @@ extern u8 print_limit_option;
 				pr_info(msg, ##args);	\
 		} else	\
 			pr_debug(msg, ##args);	\
-		if (unlikely(debugfs_record_enabled))	\
-			SPS_DEBUGFS(msg, ##args);	\
 		if (dev) { \
 			if ((dev)->ipc_loglevel <= 0)	\
 				SPS_IPC(0, dev, msg, args); \
 		}	\
 	} while (0)
 #define SPS_DBG1(dev, msg, args...) do {				\
+		if (_BAM_HRESP_dump) \
+			pr_err(msg, ##args);	\
 		if ((unlikely(logging_option > 1))	\
 			&& (unlikely(debug_level_option > 2))) {\
 			if (unlikely(print_limit_option > 0))	\
@@ -197,14 +195,14 @@ extern u8 print_limit_option;
 				pr_info(msg, ##args);	\
 		} else	\
 			pr_debug(msg, ##args);	\
-		if (unlikely(debugfs_record_enabled))	\
-			SPS_DEBUGFS(msg, ##args);	\
 		if (dev) { \
 			if ((dev)->ipc_loglevel <= 1)	\
 				SPS_IPC(1, dev, msg, args);	\
 		}	\
 	} while (0)
 #define SPS_DBG2(dev, msg, args...) do {				\
+		if (_BAM_HRESP_dump) \
+			pr_err(msg, ##args);	\
 		if ((unlikely(logging_option > 1))	\
 			&& (unlikely(debug_level_option > 1))) {\
 			if (unlikely(print_limit_option > 0))	\
@@ -213,14 +211,14 @@ extern u8 print_limit_option;
 				pr_info(msg, ##args);	\
 		} else	\
 			pr_debug(msg, ##args);	\
-		if (unlikely(debugfs_record_enabled))	\
-			SPS_DEBUGFS(msg, ##args);	\
 		if (dev) { \
 			if ((dev)->ipc_loglevel <= 2)	\
 				SPS_IPC(2, dev, msg, args); \
 		}	\
 	} while (0)
 #define SPS_DBG3(dev, msg, args...) do {				\
+		if (_BAM_HRESP_dump) \
+			pr_err(msg, ##args);	\
 		if ((unlikely(logging_option > 1))	\
 			&& (unlikely(debug_level_option > 0))) {\
 			if (unlikely(print_limit_option > 0))	\
@@ -229,8 +227,6 @@ extern u8 print_limit_option;
 				pr_info(msg, ##args);	\
 		} else	\
 			pr_debug(msg, ##args);	\
-		if (unlikely(debugfs_record_enabled))	\
-			SPS_DEBUGFS(msg, ##args);	\
 		if (dev) { \
 			if ((dev)->ipc_loglevel <= 3)	\
 				SPS_IPC(3, dev, msg, args); \
