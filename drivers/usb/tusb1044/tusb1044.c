@@ -13,6 +13,7 @@
  * GNU General Public License for more details.
  */
 
+#include <linux/delay.h>
 #include <linux/i2c.h>
 #include <linux/module.h>
 #include <linux/of_device.h>
@@ -44,16 +45,19 @@ struct tusb1044_chip {
 	struct pinctrl_state    *pinctrl_vdd_active_state;
 	struct pinctrl_state    *pinctrl_vdd_sleep_state;
 
-	struct work_struct	update_work;
+	struct delayed_work		update_work;
 	struct workqueue_struct	*tusb_wq;
 	struct mutex		state_lock;
 
 	bool			usb3_disable;
 	bool			probe_done;
-	//bool			vdd_state;
+	bool			vdd_state;
 	enum cc_state		cc_state;
 	enum cc_orientation	cc_orientation;
 	//atomic_t		pm_suspended;
+
+	u32			layout_type;
+	bool			chip_exist;
 };
 
 struct tusb1044_chip *tusb_chip = NULL;
@@ -64,12 +68,13 @@ void set_redriver_status(void)
 	struct tusb1044_chip *chip = tusb_chip;
 	bool temp = get_speed_lock();
 
-	if (chip->usb3_disable == temp)
+	if (!chip || chip->usb3_disable == temp)
 		return;
 
 	chip->usb3_disable = temp;
 
-	tusb1044_usb3_ui_update_state();
+	if (!chip->layout_type || chip->chip_exist)
+		tusb1044_usb3_ui_update_state();
 	return;
 }
 
@@ -108,6 +113,8 @@ static int tusb1044_vdd_switch(struct tusb1044_chip *chip, bool enabled)
 		return ret;
 	}
 
+	chip->vdd_state = enabled ? true : false;
+
 	dev_err(chip->device, "TUSB1044 %s - pinctrl vdd enable %s state done\n",
 		 __func__, enabled ? "active" : "sleep");
 	return ret;
@@ -145,14 +152,30 @@ static void tusb1044_dp_update_state(void)
 {
 	struct tusb1044_chip *chip = tusb_chip;
 	int ret = 0;
+	bool vdd_enabled = true;
 	bool switch_1v8_enabled = true;
 	bool aux_snoop_enabled = false;
 	u8 config_ctrl_value = 0;
+
+	if (!chip)
+		return;
+
+	if (chip->layout_type && !chip->chip_exist) {
+		dev_err(chip->device, "%s - not exist\n", __func__);
+		return;
+	}
 
 	if (chip->cc_orientation == CC_ORIENTATION_CC1)
 		config_ctrl_value = DP_ON_CC1;
 	else if (chip->cc_orientation == CC_ORIENTATION_CC2)
 		config_ctrl_value = DP_ON_CC2;
+
+	// power on the chip
+	if (chip->layout_type && chip->chip_exist) {
+		ret = tusb1044_vdd_switch(chip, vdd_enabled);
+		if (ret < 0)
+			return;
+	}
 
 	ret = tusb1044_1v8_switch(chip, switch_1v8_enabled);
 	if (ret < 0)
@@ -203,33 +226,57 @@ static void tusb1044_usb3_ui_update_state(void)
 {
 	struct tusb1044_chip *chip = tusb_chip;
 	int ret = 0;
+	bool vdd_enabled;
 	bool switch_1v8_enabled;
 	bool aux_snoop_enabled = true;
 	u8 config_ctrl_value = 0;
 
+	if (!chip)
+		return;
+
+	if (chip->layout_type && !chip->chip_exist) {
+		dev_err(chip->device, "%s - not exist\n", __func__);
+		return;
+	}
+
 	switch (chip->cc_state) {
 	case CC_STATE_USB3:
 		if (!chip->usb3_disable) {
+			vdd_enabled = true;
 			switch_1v8_enabled = true;
 			if (chip->cc_orientation == CC_ORIENTATION_CC1)
 				config_ctrl_value = USB3_ON_CC1;
 			else if (chip->cc_orientation == CC_ORIENTATION_CC2)
 				config_ctrl_value = USB3_ON_CC2;
 		} else {
+			vdd_enabled = false;
 			switch_1v8_enabled = false;
 			config_ctrl_value = DISABLE_TX_RX;
 		}
 		break;
 	case CC_STATE_OPEN:
 	default:
+		vdd_enabled = false;
 		switch_1v8_enabled = false;
 		config_ctrl_value = DISABLE_TX_RX;
 		break;
 	}
 
+	// power on/off the chip
+	if (chip->layout_type && chip->chip_exist) {
+		ret = tusb1044_vdd_switch(chip, vdd_enabled);
+		// if power off, return here
+		if (!vdd_enabled || ret < 0)
+			return;
+	}
+
 	ret = tusb1044_1v8_switch(chip, switch_1v8_enabled);
 	if (ret < 0)
 		return;
+
+	// delay 400ms to ensure that the power on sequence is finished
+	if (chip->layout_type)
+		msleep(400);
 
 	ret = tusb1044_aux_snoop(chip, aux_snoop_enabled);
 	if (ret < 0)
@@ -274,8 +321,9 @@ static void tusb1044_usb3_ui_update_state(void)
 
 static void tusb1044_usb3_update_state(struct work_struct *w)
 {
-	struct tusb1044_chip *chip = container_of(w, struct tusb1044_chip, update_work);
+	struct tusb1044_chip *chip = container_of(w, struct tusb1044_chip, update_work.work);
 	int ret = 0;
+	bool vdd_enabled;
 	bool switch_1v8_enabled;
 	bool aux_snoop_enabled = true;
 	u8 config_ctrl_value = 0;
@@ -283,26 +331,41 @@ static void tusb1044_usb3_update_state(struct work_struct *w)
 	switch (chip->cc_state) {
 	case CC_STATE_USB3:
 		if (!chip->usb3_disable) {
+			vdd_enabled = true;
 			switch_1v8_enabled = true;
 			if (chip->cc_orientation == CC_ORIENTATION_CC1)
 				config_ctrl_value = USB3_ON_CC1;
 			else if (chip->cc_orientation == CC_ORIENTATION_CC2)
 				config_ctrl_value = USB3_ON_CC2;
 		} else {
+			vdd_enabled = false;
 			switch_1v8_enabled = false;
 			config_ctrl_value = DISABLE_TX_RX;
 		}
 		break;
 	case CC_STATE_OPEN:
 	default:
+		vdd_enabled = false;
 		switch_1v8_enabled = false;
 		config_ctrl_value = DISABLE_TX_RX;
 		break;
 	}
 
+	// power on/off the chip
+	if (chip->layout_type && chip->chip_exist) {
+		ret = tusb1044_vdd_switch(chip, vdd_enabled);
+		// if power off, return here
+		if (!vdd_enabled || ret < 0)
+			return;
+	}
+
 	ret = tusb1044_1v8_switch(chip, switch_1v8_enabled);
 	if (ret < 0)
 		return;
+
+	// delay 400ms to ensure that the power on sequence is finished
+	if (chip->layout_type)
+		msleep(400);
 
 	ret = tusb1044_aux_snoop(chip, aux_snoop_enabled);
 	if (ret < 0)
@@ -349,28 +412,87 @@ void tusb1044_update_state(enum cc_state cc_state, enum cc_orientation cc_orient
 {
 	struct tusb1044_chip *chip = tusb_chip;
 
+	if (!chip)
+		return;
+
+	if (chip->layout_type && !chip->chip_exist) {
+		dev_err(chip->device, "%s - not exist\n", __func__);
+		return;
+	}
+
 	mutex_lock(&chip->state_lock);
 
 	chip->cc_state = cc_state;
 	chip->cc_orientation = cc_orientation;
 
 	if (!chip->probe_done) {
-		queue_work(chip->tusb_wq, &chip->update_work);
-	} else if (cc_state != CC_STATE_DP) {
-		tusb1044_usb3_ui_update_state();
+		queue_delayed_work(chip->tusb_wq, &chip->update_work, 0);
 	} else {
-		tusb1044_dp_update_state();
+		switch (cc_state) {
+		case CC_STATE_OPEN:
+		case CC_STATE_USB3:
+			tusb1044_usb3_ui_update_state();
+			break;
+		case CC_STATE_DP:
+			tusb1044_dp_update_state();
+			break;
+		case CC_STATE_RARA:
+			if (chip->layout_type)
+				tusb1044_vdd_switch(chip, true);
+			break;
+		default:
+			break;
+		}
 	}
 
 	mutex_unlock(&chip->state_lock);
 	return;
 }
 
+/*
+ * Report whether tusb544 exists or not.
+ * Return value:
+ *     1: exist
+ *     0: not exist
+ *     -EPROBE_DEFER: probe function has not finished.
+ */
+int tusb1044_exist(void)
+{
+	struct tusb1044_chip *chip = tusb_chip;
+
+	if (!chip)
+		return -ENODEV;
+
+	if (!chip->probe_done)
+		return -EPROBE_DEFER;
+
+	return chip->chip_exist;
+}
+EXPORT_SYMBOL(tusb1044_exist);
+
+static int tusb1044_probe_device(struct tusb1044_chip *chip)
+{
+	int i, ret;
+	u8 id[8];
+
+	for (i = 0; i < 4; i++) {
+		ret = i2c_smbus_read_byte_data(chip->i2c_client, REG_DEVICE_ID_BASE + i);
+		if (i == 0 && ret < 0)
+			return ret;
+		id[i] = ret;
+		dev_err(chip->device, "id[%d] = 0x%02X\n", i, id[i]);
+	}
+
+	return 0;
+}
+
 static int tusb1044_i2c_probe(struct i2c_client *client,
 			      const struct i2c_device_id *id)
 {
 	int ret = 0;
+	u32 layout_type = 0;
 	struct tusb1044_chip *chip;
+	struct device_node *node;
 	struct pinctrl *pinctrl;
 	struct pinctrl_state *pinctrl_sleep_state;
 	struct pinctrl_state *pinctrl_active_state;
@@ -438,11 +560,19 @@ static int tusb1044_i2c_probe(struct i2c_client *client,
 	chip->pinctrl_sleep_state = pinctrl_sleep_state;
 	chip->pinctrl_vdd_active_state = pinctrl_vdd_active_state;
 	chip->pinctrl_vdd_sleep_state = pinctrl_vdd_sleep_state;
-	INIT_WORK(&chip->update_work, tusb1044_usb3_update_state);
+	INIT_DELAYED_WORK(&chip->update_work, tusb1044_usb3_update_state);
 	chip->tusb_wq = alloc_ordered_workqueue("tusb_wq", 0);
 	chip->usb3_disable = get_speed_lock();
+	chip->chip_exist = true;
 
 	tusb_chip = chip;
+
+	if (client->dev.of_node) {
+		node = client->dev.of_node;
+		of_property_read_u32(node, "htc,layout-type", &layout_type);
+		dev_err(chip->device, "%s - type %d\n", __func__, layout_type);
+	}
+	chip->layout_type = layout_type;
 
 //	if (!chip->usb3_disable) {
 	ret = tusb1044_vdd_switch(chip, true);
@@ -450,6 +580,15 @@ static int tusb1044_i2c_probe(struct i2c_client *client,
 		dev_err(&client->dev,
 			"TUSB1044 %s - Error: TUSB1044 can't be powered:%d\n", __func__, ret);
 		return ret;
+	}
+
+	if (layout_type == 1) {
+		ret = tusb1044_probe_device(chip);
+		if (ret < 0) {
+			// retry here ?
+			chip->chip_exist = false;
+			ret = 0;
+		}
 	}
 
 	tusb1044_update_state(CC_STATE_OPEN, CC_ORIENTATION_NONE);
@@ -462,6 +601,7 @@ static int tusb1044_i2c_probe(struct i2c_client *client,
 		chip->vdd_state = false;
 	}
 */
+
 	chip->probe_done = true;
 
 	dev_err(&client->dev,

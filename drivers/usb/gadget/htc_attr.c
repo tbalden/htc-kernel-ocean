@@ -35,7 +35,9 @@ void htc_set_usbmode(bool on)
 	return;
 }
 
+#if defined(CONFIG_TUSB1044)
 extern void set_redriver_status(void);
+#if !IS_ENABLED(CONFIG_HTC_DEF_SSUSB)
 int usb_lock_speed = 1;
 static ssize_t show_lock_speed(struct device *dev,
 		struct device_attribute *attr, char *buf)
@@ -53,6 +55,9 @@ static ssize_t store_lock_speed(struct device *dev,
 	set_redriver_status();
 	return count;
 }
+#else
+int usb_lock_speed = 0;
+#endif //!IS_ENABLED(CONFIG_HTC_DEF_SSUSB)
 
 bool get_speed_lock(void)
 {
@@ -61,6 +66,7 @@ bool get_speed_lock(void)
 	else
 		return false;
 }
+#endif //defined(CONFIG_TUSB1044)
 
 #if defined(CONFIG_USB_CONFIGFS_UEVENT)
 int htc_usb_enable_function(char *name, int ebl)
@@ -190,22 +196,44 @@ static ssize_t show_pd_cap(struct device *dev,
 	return snprintf(buf, PAGE_SIZE, "%d\n", pd_cap);
 }
 
+extern int get_vendor_request(void);
+extern void clear_hcmd_cmd(void);
+static ssize_t show_hcmd_request(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	int ret = 0;
+	ret = get_vendor_request();
+
+	if (ret != 0)
+		pr_info("%s:%s(parent:%s): tgid=%d, result=%d\n", __func__,
+			current->comm, current->parent->comm, current->tgid, ret);
+
+	clear_hcmd_cmd();
+	return snprintf(buf, PAGE_SIZE, "%d\n", ret);
+}
+
 static DEVICE_ATTR(ats, 0664, show_ats, store_ats);
 static DEVICE_ATTR(usb_ac_cable_status, 0444, show_usb_ac_cable_status, NULL);
 static DEVICE_ATTR(usb_disable, 0664,show_usb_disable_setting, store_usb_disable_setting);
 static DEVICE_ATTR(usb_cable_connect, 0444, show_usb_cable_connect, NULL);
+#if defined(CONFIG_TUSB1044) && !IS_ENABLED(CONFIG_HTC_DEF_SSUSB)
 static DEVICE_ATTR(lock_speed, 0664, show_lock_speed, store_lock_speed);
+#endif
 static DEVICE_ATTR(pd_cap, 0444, show_pd_cap, NULL);
 static DEVICE_ATTR(os_type, 0444, show_os_type, NULL);
+static DEVICE_ATTR(hcmd, 0440, show_hcmd_request, NULL);
 
 static __maybe_unused struct attribute *android_htc_usb_attributes[] = {
 	&dev_attr_usb_ac_cable_status.attr,
 	&dev_attr_usb_disable.attr,
 	&dev_attr_usb_cable_connect.attr,
+#if defined(CONFIG_TUSB1044) && !IS_ENABLED(CONFIG_HTC_DEF_SSUSB)
 	&dev_attr_lock_speed.attr,
+#endif
 	&dev_attr_ats.attr,
 	&dev_attr_pd_cap.attr,
 	&dev_attr_os_type.attr,
+	&dev_attr_hcmd.attr,
 	NULL
 };
 

@@ -408,7 +408,11 @@ static int fsg_set_halt(struct fsg_dev *fsg, struct usb_ep *ep)
 /* Caller must hold fsg->lock */
 static void wakeup_thread(struct fsg_common *common)
 {
-	smp_wmb();	/* ensure the write of bh->state is complete */
+	/*
+	 * Ensure the reading of thread_wakeup_needed
+	 * and the writing of bh->state are completed
+	 */
+	smp_mb();
 	/* Tell the main thread that something has happened */
 	common->thread_wakeup_needed = 1;
 	if (common->thread_task)
@@ -664,7 +668,12 @@ static int sleep_thread(struct fsg_common *common, bool can_freeze)
 	spin_lock_irq(&common->lock);
 	common->thread_wakeup_needed = 0;
 	spin_unlock_irq(&common->lock);
-	smp_rmb();	/* ensure the latest bh->state is visible */
+
+	/*
+	 * Ensure the writing of thread_wakeup_needed
+	 * and the reading of bh->state are completed
+	 */
+	smp_mb();
 	return rc;
 }
 
@@ -2525,21 +2534,18 @@ reset:
 			fsg->bulk_out_enabled = 0;
 		}
 
+		/* allow usb LPM after eps are disabled */
+		usb_gadget_autopm_put_async(common->gadget);
 		common->fsg = NULL;
-		usb_gadget_autopm_put(common->gadget);
 		wake_up(&common->fsg_wait);
 	}
 
 	common->running = 0;
-	if (!new_fsg || rc) {
-		/* allow usb LPM after eps are disabled */
-		//usb_gadget_autopm_put_async(common->gadget);
+	if (!new_fsg || rc)
 		return rc;
-	}
 
 	common->fsg = new_fsg;
 	fsg = common->fsg;
-	usb_gadget_autopm_get(common->gadget);
 
 	/* Enable the endpoints */
 	rc = config_ep_by_speed(common->gadget, &(fsg->function), fsg->bulk_in);
@@ -2579,9 +2585,6 @@ reset:
 		bh->outreq->complete = bulk_out_complete;
 	}
 
-	/* prevents usb LPM until thread runs to completion */
-	//usb_gadget_autopm_get(common->gadget);
-
 	common->running = 1;
 	for (i = 0; i < ARRAY_SIZE(common->luns); ++i)
 		if (common->luns[i])
@@ -2597,6 +2600,10 @@ static int fsg_set_alt(struct usb_function *f, unsigned intf, unsigned alt)
 {
 	struct fsg_dev *fsg = fsg_from_func(f);
 	fsg->common->new_fsg = fsg;
+
+	/* prevents usb LPM until thread runs to completion */
+	usb_gadget_autopm_get_async(fsg->common->gadget);
+
 	raise_exception(fsg->common, FSG_STATE_CONFIG_CHANGE);
 	return USB_GADGET_DELAYED_STATUS;
 }
@@ -3765,6 +3772,19 @@ static struct usb_function_instance *fsg_alloc_inst(void)
 	config_group_init_type_name(&opts->lun0.group, "lun.0", &fsg_lun_type);
 	opts->default_groups[0] = &opts->lun0.group;
 	opts->func_inst.group.default_groups = opts->default_groups;
+
+#if defined(CONFIG_HTC_USB_SENSELINK)
+	rc = fsg_common_create_lun(opts->common, &config, 1, "lun.1",
+			(const char **)&opts->func_inst.group.cg_item.ci_name);
+	if (rc)
+		goto release_buffers;
+
+	opts->lun1.lun = opts->common->luns[1];
+	opts->lun1.lun_id = 1;
+	config_group_init_type_name(&opts->lun1.group, "lun.1", &fsg_lun_type);
+	opts->default_groups[1] = &opts->lun1.group;
+	opts->func_inst.group.default_groups = opts->default_groups;
+#endif
 
 	config_group_init_type_name(&opts->func_inst.group, "", &fsg_func_type);
 

@@ -14,6 +14,7 @@
  */
 
 /* General Registers */
+#define REG_DEVICE_ID_BASE	0x00
 #define REG_REVISION		0x08
 #define REG_CONFIG_CTRL		0x0A
 #define REG_CHANNEL_SWAP_SEL	0x0B
@@ -54,3 +55,4 @@ enum cc_orientation {
 };
 
 void tusb1044_update_state(enum cc_state cc_state, enum cc_orientation cc_orientation);
+int tusb1044_exist(void);
