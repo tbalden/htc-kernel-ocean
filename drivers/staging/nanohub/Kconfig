@@ -30,6 +30,12 @@ config NANOHUB_I2C
 
 	  If in doubt, say N here.
 
+config NANOHUB_STM32L4
+	bool "Nanohub STM32L4 series"
+	default N
+	help
+	  Use STM32L4 series as nanohub
+
 config NANOHUB_CONTEXTHUB_HAL
 	bool "Nanohub ContextHub HAL"
 	default N
@@ -49,16 +55,53 @@ config NANOHUB_SECOND_DISP
 	help
 	  Second Disp
 
+config NANOHUB_AOD
+	bool "Always on display"
+	default y
+	depends on NANOHUB_TP_SWITCH
+	help
+	  Always on display mode
+
 config NANOHUB_EDGE
 	bool "Edge sensor"
 	default n
 	help
 	  Edge sensor
 
+config NANOHUB_HTC_SENSTYPE_OFFSET
+	bool "HTC sensor type offset"
+	default n
+	help
+	  HTC sensor type offset
+
 config NANOHUB_HTC_LOG
 	bool "Trigger dump htc log"
 	default n
 	help
 	  Trigger dump htc log
+
+config NANOHUB_FLASH_GPIO_CONTROL
+	bool "Flash gpio control"
+	default n
+	help
+	  Flash gpio control
+
+config NANOHUB_FLASH_STATUS_CHECK
+	bool "Flash status check"
+	default n
+	help
+	  Flash status check
+
+config NANOHUB_FLASH_RETRY
+	bool "Flash firmware retry"
+	default n
+	help
+	  Flash firmware retry
+
+config NANOHUB_KTHREAD_RUN_PROBE_END
+	bool "Kthread_run at probe end"
+	default n
+	help
+	  Kthread_run at probe end
 
 endif # NANOHUB

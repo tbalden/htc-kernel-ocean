@@ -62,6 +62,8 @@ uint8_t nanohub_bl_lock(struct nanohub_data *);
 uint8_t nanohub_bl_unlock(struct nanohub_data *);
 uint8_t nanohub_bl_update_finished(struct nanohub_data *);
 
+uint8_t nanohub_bl_go(struct nanohub_data *data, uint32_t addr);
+
 /*
  * Bootloader commands
  * _NS versions are no-stretch. (Only valid on I2C)

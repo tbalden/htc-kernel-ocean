@@ -123,6 +123,9 @@ struct nanohub_data {
 	struct notifier_block fb_notifier;
 #endif
 #endif
+#ifdef CONFIG_NANOHUB_FLASH_GPIO_CONTROL
+	int flash_gpio_control;
+#endif
 /* HTC_END */
 };
 
@@ -151,6 +154,9 @@ int nanohub_reset(struct nanohub_data *data);
 int nanohub_remove(struct iio_dev *iio_dev);
 int nanohub_suspend(struct iio_dev *iio_dev);
 int nanohub_resume(struct iio_dev *iio_dev);
+#ifdef CONFIG_NANOHUB_KTHREAD_RUN_PROBE_END
+void nanohub_thread_run(struct nanohub_data *data);
+#endif
 
 static inline int nanohub_irq1_fired(struct nanohub_data *data)
 {

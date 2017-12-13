@@ -105,6 +105,9 @@ static uint8_t htc_ps_pocket_mode = 0;
 static struct class *htc_sensorhub_class;
 static struct device *htc_sensorhub_dev;
 static struct nanohub_data *s_data;
+#ifdef CONFIG_NANOHUB_EDGE
+static bool is_edge_i2c_switch_failed = 0;
+#endif
 
 static void nanohub_reset_event_handler(struct nanohub_data *data);
 static int nanohub_comms_write_cfg_data(struct nanohub_data *data,
@@ -265,11 +268,38 @@ int nanohub_is_switch_operating(void)
 	gpio = data->pdata->handshaking_gpio;
 	return gpio_is_valid(gpio) ? gpio_get_value(gpio) : -ENXIO;
 }
+#elif defined(CONFIG_NANOHUB_AOD)
+int nanohub_tp_mode(uint8_t mode)
+{
+	struct nanohub_data *data = s_data;
+
+	if (!data)
+		return -ENODEV;
+
+	pr_info("nanohub: [TP] tp_mode = 0x%x\n", mode);
+
+	data->tou_cfg.mode = mode;
+	nanohub_comms_write_cfg_data(data, SENS_TYPE_HTC_TOUCH,
+		(uint8_t *)&data->tou_cfg, sizeof(struct tou_cfg_data));
+
+	data->eza_cfg.lcd_mode = mode & 0x07;
+	nanohub_comms_write_cfg_data(data, SENS_TYPE_HTC_EASY_ACCESS,
+		(uint8_t *)&data->eza_cfg, sizeof(struct eza_cfg_data));
+
+	return 0;
+}
 #endif
 
 #ifdef CONFIG_NANOHUB_EDGE
 int nanohub_edge_i2c_switch(uint8_t mode) {
     struct nanohub_data *data = s_data;
+
+    if (data == NULL) {
+        pr_err("nanohub: [EDGE] data ==  NULL!!\n");
+        is_edge_i2c_switch_failed = 1;
+        return -1;
+    }
+
     data->edge_cfg.header = 0x69326340;
     data->edge_cfg.i2c_switch = mode;
     pr_info("nanohub: [EDGE] = [0x%X]%d\n",
@@ -418,6 +448,10 @@ int nanohub_notifier(uint8_t event_id, void *val)
 
 static void nanohub_reset_event_handler(struct nanohub_data *data)
 {
+	struct MsgCmd *cmd = (struct MsgCmd *)vmalloc(
+				sizeof(struct MsgCmd) + sizeof(uint8_t));
+	size_t ret;
+
 	pr_warn("nanohub: RESET_EVENT\n");
 
 	nanohub_comms_write_cfg_data(data, SENS_TYPE_HTC_EASY_ACCESS,
@@ -450,6 +484,30 @@ static void nanohub_reset_event_handler(struct nanohub_data *data)
         (uint8_t *)&data->edge_cfg, sizeof(struct edge_cfg_data));
 #endif
 
+	if (cmd) { // TODO check this
+		if (data->pdata->motion_sensor_placement != 0xFF) {
+			cmd->evtType = EVT_APP_FROM_HOST;
+			cmd->msg.appId = BMI160_APP_ID;
+			cmd->msg.dataLen = sizeof(uint8_t);
+
+			memcpy((uint8_t *)(cmd + 1),
+			       &data->pdata->motion_sensor_placement, sizeof(uint8_t));
+
+			ret = nanohub_comms_write(data, (const char *)cmd,
+						  sizeof(*cmd) + sizeof(uint8_t));
+			if (ret == (sizeof(*cmd) + sizeof(uint8_t)))
+				pr_info("nanohub: Restore placement = 0x%x\n",
+					data->pdata->motion_sensor_placement);
+			else
+				pr_err(
+					"nanohub: Restore Motion Sensor placement: failed to "
+					"send command: motion_sensor_placement = 0x%x\n",
+					data->pdata->motion_sensor_placement);
+		}
+		vfree(cmd);
+	} else {
+		pr_info("nanohub: Restore Motion Sensor placement: cmd malloc fails\n");
+	}
 }
 
 static void nanohub_restore_wq(struct work_struct *work)
@@ -772,6 +830,59 @@ static ssize_t dump_log(struct device *dev,
 }
 #endif
 
+#ifdef CONFIG_NANOHUB_FLASH_GPIO_CONTROL
+static int nanohub_gpio_contrl(struct nanohub_data *data, uint8_t val)
+{
+	const struct nanohub_platform_data *pdata = data->pdata;
+	int gpio1, gpio2;
+
+	if (pdata->gpio1 < 0) {
+		pr_info("%s:gpio1 not found\n", __func__);
+		return -1;
+	}
+	if (pdata->gpio2 < 0) {
+		pr_info("%s:gpio2 not found\n", __func__);
+		return -1;
+	}
+
+	pr_info("%s:%d\n", __func__, val);
+	gpio1 = gpio_get_value(pdata->gpio1);
+	gpio2 = gpio_get_value(pdata->gpio2);
+	pr_info("%s:1 (%d)=%d, (%d)=%d\n", __func__, pdata->gpio1, gpio1, pdata->gpio2, gpio2);
+	if (gpio1 != val)
+		gpio_direction_output(pdata->gpio1, val);
+	if (gpio2 != val)
+		gpio_direction_output(pdata->gpio2, val);
+
+	gpio1 = gpio_get_value(pdata->gpio1);
+	gpio2 = gpio_get_value(pdata->gpio2);
+	pr_info("%s:2 (%d)=%d, (%d)=%d\n", __func__, pdata->gpio1, gpio1, pdata->gpio2, gpio2);
+	return 0;
+}
+
+static ssize_t flash_gpio_contrl(struct device *dev,
+				struct device_attribute *attr,
+				const char *buf, size_t count)
+{
+	struct nanohub_data *data = dev_get_drvdata(dev);
+	uint32_t val;
+	int ret;
+
+	ret = kstrtou32(buf, 10, &val);
+	if (ret) {
+		return ret;
+	}
+	if ( (val!=0) && (val!=1) ) {
+		pr_info("nanohub:%s: wrong parameter\n", __func__);
+		return -1;
+	}
+	pr_info("nanohub:%s:%d\n", __func__, val);
+	data->flash_gpio_control = val;
+
+	return count;
+}
+#endif
+
 static struct device_attribute htc_sensorhub_attributes[] = {
 	__ATTR(firmware_version, 0440, get_firmware_version, NULL),
 	__ATTR(gesture_motion, 0220, NULL, set_gesture_motion),
@@ -781,6 +892,9 @@ static struct device_attribute htc_sensorhub_attributes[] = {
 #endif
 #ifdef CONFIG_NANOHUB_HTC_LOG
 	__ATTR(dump_log, 0220, NULL, dump_log),
+#endif
+#ifdef CONFIG_NANOHUB_FLASH_GPIO_CONTROL
+	__ATTR(flash_gpio_contrl, 0220, NULL, flash_gpio_contrl),
 #endif
 };
 /* HTC_END */
@@ -1395,6 +1509,17 @@ static ssize_t nanohub_erase_shared_bl(struct device *dev,
 	return ret < 0 ? ret : count;
 }
 
+#ifdef CONFIG_NANOHUB_FLASH_STATUS_CHECK
+static uint8_t nanohub_flash_status = 0;
+uint8_t nanohub_flash_status_check(void) {
+	if(nanohub_flash_status)
+		pr_info("%s++ %d\n", __func__,nanohub_flash_status);
+	return nanohub_flash_status;
+}
+EXPORT_SYMBOL(nanohub_flash_status_check);
+
+#endif
+
 static ssize_t nanohub_download_bl(struct device *dev,
 				   struct device_attribute *attr,
 				   const char *buf, size_t count)
@@ -1404,11 +1529,30 @@ static ssize_t nanohub_download_bl(struct device *dev,
 	const struct firmware *fw_entry;
 	int ret;
 	uint8_t status = CMD_ACK;
+#ifdef CONFIG_NANOHUB_FLASH_RETRY
+	int retry = 5;
+#endif
 
 	ret = nanohub_wakeup_lock(data, LOCK_MODE_IO);
 	if (ret < 0)
 		return ret;
 
+#ifdef CONFIG_NANOHUB_FLASH_STATUS_CHECK
+	nanohub_flash_status = 1;
+#endif
+#ifdef CONFIG_NANOHUB_FLASH_RETRY
+flash_start:
+#endif
+#ifdef CONFIG_NANOHUB_FLASH_GPIO_CONTROL
+	if (data->flash_gpio_control) {
+		nanohub_gpio_contrl(data, 1);
+	}
+#ifdef CONFIG_NANOHUB_FLASH_STATUS_CHECK
+	else if (nanohub_flash_status) {
+		nanohub_gpio_contrl(data, 1);
+	}
+#endif
+#endif
 	data->err_cnt = 0;
 	__nanohub_hw_reset(data, 1);
 
@@ -1423,6 +1567,22 @@ static ssize_t nanohub_download_bl(struct device *dev,
 	}
 
 	__nanohub_hw_reset(data, 0);
+#ifdef CONFIG_NANOHUB_FLASH_GPIO_CONTROL
+	if (data->flash_gpio_control) {
+		nanohub_gpio_contrl(data, 0);
+	}
+#endif
+#ifdef CONFIG_NANOHUB_FLASH_RETRY
+	if (status != CMD_ACK) {
+		if (--retry >= 0) {
+			pr_warn("nanohub: status=0x%x, need retry:%d\n", status, retry+1);
+			goto flash_start;
+		}
+	}
+#endif
+#ifdef CONFIG_NANOHUB_FLASH_STATUS_CHECK
+	nanohub_flash_status = 0;
+#endif
 	nanohub_wakeup_unlock(data);
 
 	return ret < 0 ? ret : count;
@@ -1779,6 +1939,7 @@ static ssize_t nanohub_read(struct file *file, char *buffer, size_t length,
 		ret = buf->length;
 
 	nanohub_io_put_buf(&data->free_pool, buf);
+
 	return ret;
 }
 
@@ -1796,6 +1957,7 @@ static ssize_t nanohub_write(struct file *file, const char *buffer,
 	ret = nanohub_comms_write(data, buffer, length);
 
 	release_wakeup(data);
+
 	return ret;
 }
 
@@ -1928,7 +2090,9 @@ static void nanohub_process_buffer(struct nanohub_data *data,
 		pr_info("nanohub: htc_easy_access triggered\n");
 	} else if (event_id == sensorGetMyEventType(SENS_TYPE_HTC_SECOND_DISP)) {
 		pr_info("nanohub: htc_second_disp triggered\n");
-	} 
+	} else if (event_id == sensorGetMyEventType(SENS_TYPE_GESTURE)) { // TODO check this!
+		pr_info("nanohub: pick_up triggered(SENS_TYPE_GESTURE)\n");
+	}
 #if 1
 	else if (event_id == sensorGetMyEventType(SENS_TYPE_HTC_EDGE)) {
 	} else if (event_id == sensorGetMyEventType(SENS_TYPE_HTC_EDWK)) {
@@ -2032,7 +2196,6 @@ static int nanohub_kthread(void *arg)
 			nanohub_set_state(data, ST_RUNNING);
 			break;
 		case ST_ERROR:
-			pr_info("%s nanohub ST_ERROR !!! \n", __func__);
 			get_monotonic_boottime(&curr_ts);
 			if (curr_ts.tv_sec - first_err_ts.tv_sec > ERR_RESET_TIME_SEC
 				&& data->err_cnt > ERR_RESET_COUNT) {
@@ -2173,6 +2336,10 @@ static struct nanohub_platform_data *nanohub_parse_dt(struct device *dev)
 	/* optional (stm32f bootloader) */
 	of_property_read_u32(dt, "sensorhub,bl-addr", &pdata->bl_addr);
 
+	/* optional (stm32l bootloader) */
+	of_property_read_u32(dt, "sensorhub,flash-page-size", &pdata->flash_page_size);
+	pr_info("nanohub: DT: flash_page_size = %d\n", pdata->flash_page_size);
+
 	/* optional (stm32f bootloader) */
 	tmp = of_get_property(dt, "sensorhub,num-flash-banks", NULL);
 	if (tmp) {
@@ -2248,6 +2415,20 @@ static struct nanohub_platform_data *nanohub_parse_dt(struct device *dev)
 	ret = of_property_read_u32(dt, "sensorhub,gesture-vibrate-ms", &pdata->vibrate_ms);
 	if (ret < 0)
 		pr_err("nanohub: missing sensorhub,gesture-vibrate-ms in device tree\n");
+
+	ret = of_property_read_u8(dt, "sensorhub,motion-sensor-placement",
+				  &pdata->motion_sensor_placement);
+	if (ret < 0) {
+		pdata->motion_sensor_placement = 0xFF;
+		pr_info("nanohub: NO placement in DT\n");
+	} else {
+		pr_info("nanohub: placement = 0x%x\n", pdata->motion_sensor_placement);
+	}
+#ifdef CONFIG_NANOHUB_FLASH_GPIO_CONTROL
+	/* optional (gpio) */
+	pdata->gpio1 = of_get_named_gpio(dt, "sensorhub,gpio1", 0);
+	pdata->gpio2 = of_get_named_gpio(dt, "sensorhub,gpio2", 0);
+#endif
 /* HTC_END */
 
 	return pdata;
@@ -2462,6 +2643,9 @@ struct iio_dev *nanohub_probe(struct device *dev, struct iio_dev *iio_dev)
 	}
 	INIT_WORK(&data->work_restore, nanohub_restore_wq);
 	INIT_WORK(&data->work_vbus, nanohub_vbus_wq);
+#ifdef CONFIG_NANOHUB_FLASH_GPIO_CONTROL
+	data->flash_gpio_control = 0;
+#endif
 #ifdef CONFIG_NANOHUB_EDGE
 	data->edge_cfg.header = 0x69326340;
 	data->edge_cfg.usb_status = 255;
@@ -2474,10 +2658,13 @@ struct iio_dev *nanohub_probe(struct device *dev, struct iio_dev *iio_dev)
 	ret = input_register_handler(&data->input_handler);
 #endif
 /* HTC_END */
-
+#ifdef CONFIG_NANOHUB_KTHREAD_RUN_PROBE_END
+	/* Move to spi_probe end */
+#else
 	data->thread = kthread_run(nanohub_kthread, data, "nanohub");
 
 	udelay(30);
+#endif
 
 /* HTC_START */
 	dev_set_drvdata(htc_sensorhub_dev, data);
@@ -2495,6 +2682,19 @@ struct iio_dev *nanohub_probe(struct device *dev, struct iio_dev *iio_dev)
 #endif
 
 	s_data = data;
+
+#ifdef CONFIG_NANOHUB_EDGE
+	if (is_edge_i2c_switch_failed) {
+		ret = nanohub_edge_i2c_switch(I2C_TO_SHUB);
+		if (ret)
+			pr_info("nanohub: recall nanohub_edge_i2c_switch success, ret = %d\n", ret);
+		else
+			pr_err("nanohub: nanohub_edge_i2c_switch failed, ret = %d\n", ret);
+	} else {
+		pr_info("nanohub: nanohub_edge_i2c_switch is not called before probe, not a problem\n");
+	}
+#endif
+
 /* HTC_END */
 
 	return iio_dev;
@@ -2515,6 +2715,16 @@ fail_vma:
 
 	return ERR_PTR(ret);
 }
+
+#ifdef CONFIG_NANOHUB_KTHREAD_RUN_PROBE_END
+void nanohub_thread_run(struct nanohub_data *data)
+{
+	pr_info("%s++\n", __func__);
+
+	data->thread = kthread_run(nanohub_kthread, data, "nanohub");
+	udelay(30);
+}
+#endif
 
 int nanohub_reset(struct nanohub_data *data)
 {

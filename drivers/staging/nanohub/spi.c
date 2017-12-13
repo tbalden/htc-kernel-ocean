@@ -265,6 +265,37 @@ int nanohub_spi_write(void *data, uint8_t *tx, int length, int timeout)
 		return ERROR_NACK;
 }
 
+#ifdef CONFIG_NANOHUB_STM32L4
+/* nanohub_spi_dummy() function
+   This function allows to generate a minimal dummy SPI transaction to
+   guarantee that the last potential remaining 0xFF bytes expected by the
+   STM32 L4 SPI TX FIFO are fetched after the detection of a complete
+   nanohub frame.
+*/
+static void nanohub_spi_dummy(void *data)
+{
+    struct nanohub_spi_data *spi_data = data;
+
+    uint8_t tx[SPI_MIN_DMA], rx[SPI_MIN_DMA];
+
+    struct spi_message msg;
+    struct spi_transfer xfer = {
+        .len = SPI_MIN_DMA,
+        .tx_buf = tx,
+        .rx_buf = rx,
+        .cs_change = 1,
+    };
+
+    memset(tx, 0xFF, SPI_MIN_DMA);
+    memset(rx, 0xFF, SPI_MIN_DMA);
+
+    spi_message_init_with_transfers(&msg, &xfer, 1);
+
+    if (spi_sync_locked(spi_data->device, &msg) != 0)
+        pr_err("nanohub: ERROR Dummy SPI transaction failed\n");
+}
+#endif
+
 int nanohub_spi_read(void *data, uint8_t *rx, int max_length, int timeout)
 {
 	struct nanohub_spi_data *spi_data = data;
@@ -314,6 +345,9 @@ int nanohub_spi_read(void *data, uint8_t *rx, int max_length, int timeout)
 						       min_size + packet->len);
 						spi_data->rx_offset = i +
 						     min_size + packet->len;
+#ifdef CONFIG_NANOHUB_STM32L4
+						nanohub_spi_dummy(data);
+#endif
 						return min_size + packet->len;
 					}
 				}
@@ -384,8 +418,12 @@ int nanohub_spi_read(void *data, uint8_t *rx, int max_length, int timeout)
 		return ret;
 	else if (!packet)
 		return 0;
-	else
+	else {
+#ifdef CONFIG_NANOHUB_STM32L4
+		nanohub_spi_dummy(data);
+#endif
 		return min_size + packet->len;
+	}
 }
 
 static int nanohub_spi_open(void *data)
@@ -459,7 +497,7 @@ static int nanohub_spi_probe(struct spi_device *spi)
 	struct iio_dev *iio_dev;
 	int error;
 
-	pr_info("%s++:\n", __func__);
+	pr_info("%s++: [v02-Flash FW retry when != CMD_ACK]\n", __func__);
 
 	iio_dev = iio_device_alloc(sizeof(struct nanohub_spi_data));
 
@@ -517,6 +555,9 @@ static int nanohub_spi_probe(struct spi_device *spi)
 	print_count = 0;
 	LEN_PROTECT = 1;
 
+#ifdef CONFIG_NANOHUB_KTHREAD_RUN_PROBE_END
+	nanohub_thread_run(&spi_data->data);
+#endif
 	pr_info("%s--:\n", __func__);
 
 	return 0;

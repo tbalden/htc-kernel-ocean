@@ -377,6 +377,9 @@ int nanohub_comms_rx_retrans_boottime(struct nanohub_data *data, uint32_t cmd,
 
 		data->comms.close(data);
 
+#ifdef CONFIG_NANOHUB_STM32L4
+		usleep_range(200, 250);
+#endif
 		if (ret == ERROR_NACK) {
 			retrans_cnt--;
 			delay += retrans_delay;
@@ -426,6 +429,9 @@ int nanohub_comms_tx_rx_retrans(struct nanohub_data *data, uint32_t cmd,
 
 		data->comms.close(data);
 
+#ifdef CONFIG_NANOHUB_STM32L4
+		usleep_range(200, 250);
+#endif
 		if (ret == ERROR_NACK) {
 			retrans_cnt--;
 			delay += retrans_delay;
