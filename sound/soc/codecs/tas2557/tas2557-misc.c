@@ -498,6 +498,10 @@ static ssize_t tas2557_file_write(struct file *file, const char *buf, size_t cou
 	{
 		if (count == 1) {
 /* HTC_AUD_START */
+#if 0
+			ret = request_firmware_nowait(THIS_MODULE, 1, TAS2557_FW_NAME,
+				pTAS2557->dev, GFP_KERNEL, pTAS2557, tas2557_fw_ready);
+#else
 			switch (pTAS2557->mnLPGID) {
 				case TAS2557_PG_VERSION_2P1:
 					ret = request_firmware_nowait(THIS_MODULE, 1, TAS2557_PG21_FW_NAME,
@@ -512,12 +516,26 @@ static ssize_t tas2557_file_write(struct file *file, const char *buf, size_t cou
 				break;
 
 			}
+#endif
 /* HTC_AUD_END */
 
 			if (g_logEnable)
 				dev_info(pTAS2557->dev,
 					"TIAUDIO_CMD_FW_RELOAD: ret = %d\n",
 					ret);
+		}
+	}
+	break;
+
+	case TIAUDIO_CMD_SUSPEND:
+	{
+		if (count == 2) {
+			bool bSuspend = (p_kBuf[1] != 0);
+
+			if (bSuspend)
+				pTAS2557->runtime_suspend(pTAS2557);
+			else
+				pTAS2557->runtime_resume(pTAS2557);
 		}
 	}
 	break;

@@ -818,6 +818,32 @@ static bool tavil_hph_register_recovery(struct wcd_mbhc *mbhc)
 	return wcd934x_mbhc->is_hph_recover;
 }
 
+static void tavil_update_anc_state(struct snd_soc_codec *codec, bool enable,
+				   int anc_num)
+{
+	if (enable)
+		snd_soc_update_bits(codec, WCD934X_CDC_RX1_RX_PATH_CFG0 +
+				(20 * anc_num), 0x10, 0x10);
+	else
+		snd_soc_update_bits(codec, WCD934X_CDC_RX1_RX_PATH_CFG0 +
+				(20 * anc_num), 0x10, 0x00);
+}
+
+static bool tavil_is_anc_on(struct wcd_mbhc *mbhc)
+{
+	bool anc_on = false;
+	u16 ancl, ancr;
+
+	ancl =
+	(snd_soc_read(mbhc->codec, WCD934X_CDC_RX1_RX_PATH_CFG0)) & 0x10;
+	ancr =
+	(snd_soc_read(mbhc->codec, WCD934X_CDC_RX2_RX_PATH_CFG0)) & 0x10;
+
+	anc_on = !!(ancl | ancr);
+
+	return anc_on;
+}
+
 static const struct wcd_mbhc_cb mbhc_cb = {
 	.request_irq = tavil_mbhc_request_irq,
 	.irq_control = tavil_mbhc_irq_control,
@@ -841,6 +867,8 @@ static const struct wcd_mbhc_cb mbhc_cb = {
 	.hph_pull_down_ctrl = tavil_mbhc_hph_pull_down_ctrl,
 	.mbhc_moisture_config = tavil_mbhc_moisture_config,
 	.hph_register_recovery = tavil_hph_register_recovery,
+	.update_anc_state = tavil_update_anc_state,
+	.is_anc_on = tavil_is_anc_on,
 };
 
 static struct regulator *tavil_codec_find_ondemand_regulator(
@@ -1080,17 +1108,3 @@ void tavil_mbhc_deinit(struct snd_soc_codec *codec)
 	}
 }
 EXPORT_SYMBOL(tavil_mbhc_deinit);
-
-/* HTC_AUD_START - AS HS 2.0 */
-int tavil_mbhc_get_hs_type(struct wcd934x_mbhc *wcd934x_mbhc)
-{
-	if (wcd934x_mbhc) {
-		pr_info("%s: current_plug = %u\n", __func__, wcd934x_mbhc->wcd_mbhc.current_plug);
-		return (int)wcd934x_mbhc->wcd_mbhc.current_plug;
-	} else {
-		pr_err("%s: wcd934x_mbhc is null\n", __func__);
-		return -EINVAL;
-	}
-}
-EXPORT_SYMBOL(tavil_mbhc_get_hs_type);
-/* HTC_AUD_END */

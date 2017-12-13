@@ -106,6 +106,11 @@ enum pa_dac_ack_flags {
 	WCD_MBHC_HPHR_PA_OFF_ACK,
 };
 
+enum anc_ack_flags {
+	WCD_MBHC_ANC0_OFF_ACK = 0,
+	WCD_MBHC_ANC1_OFF_ACK,
+};
+
 enum wcd_mbhc_btn_det_mem {
 	WCD_MBHC_BTN_DET_V_BTN_LOW,
 	WCD_MBHC_BTN_DET_V_BTN_HIGH
@@ -158,23 +163,6 @@ enum wcd_mbhc_event_state {
 	WCD_MBHC_EVENT_PA_HPHL,
 	WCD_MBHC_EVENT_PA_HPHR,
 };
-
-/* HTC_AUD_START - AS HS */
-enum htc_id_type {
-	TYPEC_ID1,
-	TYPEC_ID2,
-	TYPEC_POSITION,
-	TYPEC_ID_MAX,
-};
-
-enum htc_switch_type {
-	HEADSET_S3_0,
-	HEADSET_S3_1,
-	HEADSET_S4,
-	HEADSET_S5,
-	HEADSET_SWITCH_MAX,
-};
-/* HTC_AUD_END */
 
 struct wcd_mbhc_general_cfg {
 	u8 t_ldoh;
@@ -285,25 +273,6 @@ enum mbhc_moisture_rref {
 	R_184_KOHM,
 };
 
-/* HTC_AUD_START - AS HS */
-struct htc_headset_config {
-	unsigned int id_gpio[TYPEC_ID_MAX];
-	unsigned int switch_gpio[HEADSET_SWITCH_MAX];
-	unsigned int ext_micbias;
-	unsigned int adc_channel;
-	int (*get_adc_value) (int *, unsigned int);
-	unsigned int adc_35mm_min;
-	unsigned int adc_35mm_max;
-	unsigned int adc_25mm_min;
-	unsigned int adc_25mm_max;
-	bool htc_headset_init;
-	unsigned int aud_3v3_en;
-/*	unsigned int mbhc_det_pin; */
-	unsigned int fsa3030_sel0;
-	unsigned int fsa3030_sel1;
-	unsigned int fsa3030_sel2;
-};
-/* HTC_AUD_END */
 struct usbc_ana_audio_config {
 	int usbc_en1_gpio;
 	int usbc_en2n_gpio;
@@ -327,7 +296,6 @@ struct wcd_mbhc_config {
 	int mbhc_micbias;
 	int anc_micbias;
 	bool enable_anc_mic_detect;
-	struct htc_headset_config htc_headset_cfg; /* HTC_AUD - AS HS */
 	u32 enable_usbc_analog;
 	struct usbc_ana_audio_config usbc_analog_cfg;
 };
@@ -441,6 +409,9 @@ struct wcd_mbhc_cb {
 	void (*hph_pull_down_ctrl)(struct snd_soc_codec *, bool);
 	void (*mbhc_moisture_config)(struct wcd_mbhc *);
 	bool (*hph_register_recovery)(struct wcd_mbhc *);
+	void (*update_anc_state)(struct snd_soc_codec *codec,
+				 bool enable, int anc_num);
+	bool (*is_anc_on)(struct wcd_mbhc *mbhc);
 };
 
 struct wcd_mbhc {
@@ -482,6 +453,7 @@ struct wcd_mbhc {
 
 	/* track PA/DAC state to sync with userspace */
 	unsigned long hph_pa_dac_state;
+	unsigned long hph_anc_state;
 	unsigned long event_state;
 	unsigned long jiffies_atreport;
 
@@ -511,18 +483,6 @@ struct wcd_mbhc {
 
 	unsigned long intr_status;
 	bool is_hph_ocp_pending;
-/* HTC_AUD_START */
-	/* Add attribute on sysfs for debugging */
-	struct class *htc_accessory_class;
-	struct device *headset_dev;
-	struct device *debug_dev;
-	u16 debug_reg[50];
-	int debug_reg_count;
-/* HTC_AUD_START - AS HS */
-/* report unsupport if it's non HTC analog adapter */
-	struct switch_dev unsupported_type;
-/* HTC_AUD_END */
-/* HTC_AUD_END */
 	bool usbc_force_pr_mode;
 	int usbc_mode;
 	struct notifier_block psy_nb;
@@ -580,16 +540,6 @@ struct wcd_mbhc {
 	sizeof(struct wcd_mbhc_imped_detect_cfg) + \
 	(cfg_ptr->_n_rload * \
 	(sizeof(cfg_ptr->_rload[0]) + sizeof(cfg_ptr->_alpha[0]))))
-
-/* HTC_AUD_START */
-#define DEVICE_HEADSET_ATTR(_name, _mode, _show, _store) \
-	struct device_attribute dev_attr_headset_##_name = \
-	__ATTR(_name, _mode, _show, _store)
-
-#define DEVICE_ACCESSORY_ATTR(_name, _mode, _show, _store) \
-	struct device_attribute dev_attr_##_name = \
-	__ATTR(flag, _mode, _show, _store)
-/* HTC_AUD_END */
 
 #ifdef CONFIG_SND_SOC_WCD_MBHC
 int wcd_mbhc_set_keycode(struct wcd_mbhc *mbhc);

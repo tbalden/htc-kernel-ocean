@@ -123,6 +123,7 @@ static const struct snd_kcontrol_new name##_mux = \
 #define WCD934X_DEC_PWR_LVL_DF 0x00
 #define WCD934X_STRING_LEN 100
 
+#define WCD934X_CDC_SIDETONE_IIR_COEFF_MAX 5
 #define WCD934X_DIG_CORE_REG_MIN  WCD934X_CDC_ANC0_CLK_RESET_CTL
 #define WCD934X_DIG_CORE_REG_MAX  0xFFF
 
@@ -670,9 +671,10 @@ struct tavil_priv {
 	struct tavil_idle_detect_config idle_det_cfg;
 
 	int power_active_ref;
-	int nr; /*HTC_AUD*/
 
 	unsigned short slim_tx_of_uf_cnt[WCD934X_TX_MAX][SB_PORT_ERR_MAX];
+	int sidetone_coeff_array[IIR_MAX][BAND_MAX]
+		[WCD934X_CDC_SIDETONE_IIR_COEFF_MAX];
 };
 
 static const struct tavil_reg_mask_val tavil_spkr_default[] = {
@@ -2760,10 +2762,11 @@ static int __tavil_codec_enable_swr(struct snd_soc_dapm_widget *w, int event)
 
 	tavil = snd_soc_codec_get_drvdata(codec);
 
-/*HTC_AUD_START*/
-	if (!tavil->nr)
+/* HTC_AUD_START */
+	if (!tavil->swr.ctrl_data)
 		return 0;
-/*HTC_AUD_END*/
+/* HTC_AUD_END */
+
 	switch (event) {
 	case SND_SOC_DAPM_PRE_PMU:
 		if (((strnstr(w->name, "INT7_", sizeof("RX INT7_"))) ||
@@ -5282,10 +5285,12 @@ static int tavil_iir_band_audio_mixer_put(struct snd_kcontrol *kcontrol,
 					struct snd_ctl_elem_value *ucontrol)
 {
 	struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
+	struct tavil_priv *tavil = snd_soc_codec_get_drvdata(codec);
 	int iir_idx = ((struct soc_multi_mixer_control *)
 					kcontrol->private_value)->reg;
 	int band_idx = ((struct soc_multi_mixer_control *)
 					kcontrol->private_value)->shift;
+	int coeff_idx;
 
 	/*
 	 * Mask top bit it is reserved
@@ -5295,16 +5300,15 @@ static int tavil_iir_band_audio_mixer_put(struct snd_kcontrol *kcontrol,
 		(WCD934X_CDC_SIDETONE_IIR0_IIR_COEF_B1_CTL + 16 * iir_idx),
 		(band_idx * BAND_MAX * sizeof(uint32_t)) & 0x7F);
 
-	set_iir_band_coeff(codec, iir_idx, band_idx,
-				ucontrol->value.integer.value[0]);
-	set_iir_band_coeff(codec, iir_idx, band_idx,
-				ucontrol->value.integer.value[1]);
-	set_iir_band_coeff(codec, iir_idx, band_idx,
-				ucontrol->value.integer.value[2]);
-	set_iir_band_coeff(codec, iir_idx, band_idx,
-				ucontrol->value.integer.value[3]);
-	set_iir_band_coeff(codec, iir_idx, band_idx,
-				ucontrol->value.integer.value[4]);
+	/* Store the coefficients in sidetone coeff array */
+	for (coeff_idx = 0; coeff_idx < WCD934X_CDC_SIDETONE_IIR_COEFF_MAX;
+		coeff_idx++) {
+		tavil->sidetone_coeff_array[iir_idx][band_idx][coeff_idx] =
+			ucontrol->value.integer.value[coeff_idx];
+		set_iir_band_coeff(codec, iir_idx, band_idx,
+			tavil->sidetone_coeff_array[iir_idx][band_idx]
+							[coeff_idx]);
+	}
 
 	pr_debug("%s: IIR #%d band #%d b0 = 0x%x\n"
 		"%s: IIR #%d band #%d b1 = 0x%x\n"
@@ -5322,6 +5326,26 @@ static int tavil_iir_band_audio_mixer_put(struct snd_kcontrol *kcontrol,
 		__func__, iir_idx, band_idx,
 		get_iir_band_coeff(codec, iir_idx, band_idx, 4));
 	return 0;
+}
+
+static void tavil_restore_iir_coeff(struct tavil_priv *tavil, int iir_idx)
+{
+	int band_idx = 0, coeff_idx = 0;
+	struct snd_soc_codec *codec = tavil->codec;
+
+	for (band_idx = 0; band_idx < BAND_MAX; band_idx++) {
+		snd_soc_write(codec,
+		(WCD934X_CDC_SIDETONE_IIR0_IIR_COEF_B1_CTL + 16 * iir_idx),
+		(band_idx * BAND_MAX * sizeof(uint32_t)) & 0x7F);
+
+		for (coeff_idx = 0;
+			coeff_idx < WCD934X_CDC_SIDETONE_IIR_COEFF_MAX;
+			coeff_idx++) {
+			set_iir_band_coeff(codec, iir_idx, band_idx,
+				tavil->sidetone_coeff_array[iir_idx][band_idx]
+								[coeff_idx]);
+		}
+	}
 }
 
 static int tavil_compander_get(struct snd_kcontrol *kcontrol,
@@ -5596,7 +5620,7 @@ static int tavil_mad_input_put(struct snd_kcontrol *kcontrol,
 	u32 adc, i, mic_bias_found = 0;
 	int ret = 0;
 	char *mad_input;
-	bool is_adc2_input = false;
+	bool is_adc_input = false;
 
 	tavil_mad_input = ucontrol->value.integer.value[0];
 
@@ -5644,8 +5668,7 @@ static int tavil_mad_input_put(struct snd_kcontrol *kcontrol,
 		snprintf(mad_amic_input_widget, 6, "%s%u", "AMIC", adc);
 
 		mad_input_widget = mad_amic_input_widget;
-		if (adc == 2)
-			is_adc2_input = true;
+		is_adc_input = true;
 	} else {
 		/* DMIC type input widget*/
 		mad_input_widget = tavil_conn_mad_text[tavil_mad_input];
@@ -5653,7 +5676,7 @@ static int tavil_mad_input_put(struct snd_kcontrol *kcontrol,
 
 	dev_dbg(codec->dev,
 		"%s: tavil input widget = %s, adc_input = %s\n", __func__,
-		mad_input_widget, is_adc2_input ? "true" : "false");
+		mad_input_widget, is_adc_input ? "true" : "false");
 
 	for (i = 0; i < card->num_of_dapm_routes; i++) {
 		if (!strcmp(card->of_dapm_routes[i].sink, mad_input_widget)) {
@@ -5698,8 +5721,8 @@ static int tavil_mad_input_put(struct snd_kcontrol *kcontrol,
 			    0x0F, tavil_mad_input);
 	snd_soc_update_bits(codec, WCD934X_ANA_MAD_SETUP,
 			    0x07, mic_bias_found);
-	/* for adc2 input, mad should be in micbias mode with BG enabled */
-	if (is_adc2_input)
+	/* for all adc inputs, mad should be in micbias mode with BG enabled */
+	if (is_adc_input)
 		snd_soc_update_bits(codec, WCD934X_ANA_MAD_SETUP,
 				    0x88, 0x88);
 	else
@@ -8277,6 +8300,8 @@ static int tavil_dig_core_remove_power_collapse(struct tavil_priv *tavil)
 			     WCD934X_DIG_CORE_REG_MIN,
 			     WCD934X_DIG_CORE_REG_MAX);
 
+	tavil_restore_iir_coeff(tavil, IIR0);
+	tavil_restore_iir_coeff(tavil, IIR1);
 	return 0;
 }
 
@@ -9226,11 +9251,9 @@ static int tavil_device_down(struct wcd9xxx *wcd9xxx)
 
 	codec = (struct snd_soc_codec *)(wcd9xxx->ssr_priv);
 	priv = snd_soc_codec_get_drvdata(codec);
-/*HTC_AUD_START*/
-    if (priv->nr)
+	if (priv->swr.ctrl_data)
 		swrm_wcd_notify(priv->swr.ctrl_data[0].swr_pdev,
 				SWR_DEVICE_DOWN, NULL);
-/*HTC_AUD_END*/
 	tavil_dsd_reset(priv->dsd_config);
 	snd_soc_card_change_online_state(codec->component.card, 0);
 	for (count = 0; count < NUM_CODEC_DAIS; count++)
@@ -9964,7 +9987,6 @@ static void tavil_add_child_devices(struct work_struct *work)
 			dev_dbg(&pdev->dev,
 				"%s: Added soundwire ctrl device(s)\n",
 				__func__);
-			tavil->nr = ctrl_num; /*HTC_AUD*/
 			tavil->swr.ctrl_data = swr_ctrl_data;
 		}
 	}
@@ -10070,16 +10092,6 @@ struct wcd_dsp_cntl *tavil_get_wcd_dsp_cntl(struct device *dev)
 	return tavil->wdsp_cntl;
 }
 EXPORT_SYMBOL(tavil_get_wcd_dsp_cntl);
-
-/* HTC_AUD_START - AS HS 2.0 */
-int tavil_get_headsetType(struct snd_soc_codec *codec)
-{
-	struct tavil_priv *tavil = snd_soc_codec_get_drvdata(codec);
-
-	return tavil_mbhc_get_hs_type(tavil->mbhc);
-}
-EXPORT_SYMBOL(tavil_get_headsetType);
-/* HTC_AUD_END */
 
 static int tavil_probe(struct platform_device *pdev)
 {

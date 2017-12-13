@@ -5274,7 +5274,7 @@ static int afe_sidetone(u16 tx_port_id, u16 rx_port_id, bool enable)
 					AFE_API_VERSION_LOOPBACK_CONFIG;
 	cmd_sidetone.cfg_data.dst_port_id = rx_port_id;
 	cmd_sidetone.cfg_data.routing_mode = LB_MODE_SIDETONE;
-	cmd_sidetone.cfg_data.enable = ((enable == 1) ? sidetone_enable : 0);
+	cmd_sidetone.cfg_data.enable = enable;
 
 	pr_debug("%s rx(0x%x) tx(0x%x) enable(%d) mid(0x%x) gain(%d) sidetone_enable(%d)\n",
 		  __func__, rx_port_id, tx_port_id,
@@ -5897,6 +5897,11 @@ int afe_set_lpass_clk_cfg(int index, struct afe_clk_set *cfg)
 	if (!ret) {
 		pr_err("%s: wait_event timeout\n", __func__);
 		ret = -EINVAL;
+/* HTC_AUD_START */
+#ifdef CONFIG_HTC_DEBUG_DSP
+		BUG();
+#endif
+/* HTC_AUD_END */
 		goto fail_cmd;
 	} else {
 		/* set ret to 0 as no timeout happened */
@@ -6773,8 +6778,6 @@ static int afe_set_cal_fb_spkr_prot(int32_t cal_type, size_t data_size,
 	mutex_lock(&this_afe.cal_data[AFE_FB_SPKR_PROT_CAL]->lock);
 	memcpy(&this_afe.prot_cfg, &cal_data->cal_info,
 		sizeof(this_afe.prot_cfg));
-	this_afe.th_ftm_cfg.mode = this_afe.prot_cfg.mode;
-	this_afe.ex_ftm_cfg.mode = this_afe.prot_cfg.mode;
 	mutex_unlock(&this_afe.cal_data[AFE_FB_SPKR_PROT_CAL]->lock);
 done:
 	return ret;
@@ -6916,8 +6919,6 @@ static int afe_get_cal_fb_spkr_prot(int32_t cal_type, size_t data_size,
 		cal_data->cal_info.r0[SP_V2_SPKR_1] = -1;
 		cal_data->cal_info.r0[SP_V2_SPKR_2] = -1;
 	}
-	this_afe.th_ftm_cfg.mode = this_afe.prot_cfg.mode;
-	this_afe.ex_ftm_cfg.mode = this_afe.prot_cfg.mode;
 	mutex_unlock(&this_afe.cal_data[AFE_FB_SPKR_PROT_CAL]->lock);
 	__pm_relax(&wl.ws);
 done:

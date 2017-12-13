@@ -240,4 +240,10 @@ config HTC_DEBUG_DSP
 	default n
 	help
 	 Say Y to enable HTC DEBUG DSP.
+
+config HTC_AUD_OCM
+	bool "OCM flag for HTC Audio customize"
+	default n
+	help
+	 Say Y to enable HTC AUD OCM.
 endmenu

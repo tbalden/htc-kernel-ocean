@@ -55,6 +55,8 @@ static struct hs_notify_t hs_plug_nt[HS_N_MAX] = {{0, NULL, NULL}};
 static DEFINE_MUTEX(hs_nt_lock);
 #endif
 
+extern int htc_typec_hs_get_headset_type(void);
+
 void htc_acoustic_register_ops(struct acoustic_ops *ops)
 {
 	D("acoustic_register_ops \n");
@@ -283,7 +285,7 @@ acoustic_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 				if ((atomic_read(&this_avcs.ref_cnt) == 0) ||
 					(this_avcs.apr == NULL)) {
 					this_avcs.apr = apr_register("ADSP", "CORE", avcs_callback,
-						0xFFFFFFFF, NULL);
+						0x101, NULL);
 
 					if (this_avcs.apr == NULL) {
 						pr_err("%s: Unable to register apr\n", __func__);
@@ -306,14 +308,10 @@ acoustic_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		}
 /* HTC_AUD_START - AS20 */
 		case ACOUSTIC_GET_HEADSET_TYPE: {
-			if (the_ops && the_ops->get_headsetType)
-				s32_value = the_ops->get_headsetType();
-			else
-				s32_value = 0;
+			s32_value = htc_typec_hs_get_headset_type();
 
 			if (sizeof(s32_value) <= us32_size) {
-				memcpy((void *)buf, (void *)&s32_value,
-					sizeof(s32_value));
+				memcpy((void *)buf, (void *)&s32_value, sizeof(s32_value));
 			} else {
 				E("%s %d: ACOUSTIC_GET_HEADSET_TYPE error.\n",
 					__func__, __LINE__);
@@ -357,17 +355,17 @@ acoustic_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 static ssize_t beats_print_name(struct switch_dev *sdev, char *buf)
 {
-	return sprintf(buf, "Beats\n");
+	return snprintf(buf, PAGE_SIZE, "Beats\n");
 }
 
 static ssize_t dq_print_name(struct switch_dev *sdev, char *buf)
 {
-	return sprintf(buf, "DQ\n");
+	return snprintf(buf, PAGE_SIZE, "DQ\n");
 }
 
 static ssize_t fm_print_name(struct switch_dev *sdev, char *buf)
 {
-	return sprintf(buf, "FM\n");
+	return snprintf(buf, PAGE_SIZE, "FM\n");
 }
 
 static struct file_operations acoustic_fops = {
@@ -404,7 +402,7 @@ static int __init acoustic_init(void)
 	sdev_beats.print_name = beats_print_name;
 
 	ret = switch_dev_register(&sdev_beats);
-	if (ret < 0) {
+	if (ret) {
 		pr_err("failed to register beats switch device!\n");
 		return ret;
 	}
@@ -413,7 +411,7 @@ static int __init acoustic_init(void)
 	sdev_dq.print_name = dq_print_name;
 
 	ret = switch_dev_register(&sdev_dq);
-	if (ret < 0) {
+	if (ret) {
 		pr_err("failed to register DQ switch device!\n");
 		return ret;
 	}
@@ -422,7 +420,7 @@ static int __init acoustic_init(void)
 	sdev_fm.print_name = fm_print_name;
 
 	ret = switch_dev_register(&sdev_fm);
-	if (ret < 0) {
+	if (ret) {
 		pr_err("failed to register FM switch device!\n");
 		return ret;
 	}

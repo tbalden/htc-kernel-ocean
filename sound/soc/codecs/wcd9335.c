@@ -152,6 +152,24 @@ MODULE_PARM_DESC(cpe_debug_mode, "boot cpe in debug mode");
 
 #define MAX_ON_DEMAND_SUPPLY_NAME_LENGTH    64
 
+/*HTC_AUD_START - HPKB29557 ANC feature for wcd9335*/
+static int anc0_ff_a_gain;
+static int anc1_ff_a_gain;
+#define WCD9335_ANC_RAMP_UP_STEP_SIZE  1
+#define WCD9335_ANC_RAMP_DWN_STEP_SIZE 1
+
+#define WCD9335_HPH_ANC_EN_DELAY_MS 500
+static int hph_anc_en_delay = WCD9335_HPH_ANC_EN_DELAY_MS;
+module_param(hph_anc_en_delay, int, S_IRUGO | S_IWUSR | S_IWGRP);
+MODULE_PARM_DESC(hph_anc_en_delay, "delay to enable anc in headphone path");
+
+struct hph_anc_wrk {
+	struct tasha_priv *tasha;
+	struct delayed_work dwork;
+	bool anc_work_stop;
+};
+/*HTC_AUD_END - HPKB29557 ANC feature for wcd9335*/
+
 static char on_demand_supply_name[][MAX_ON_DEMAND_SUPPLY_NAME_LENGTH] = {
 	"cdc-vdd-mic-bias",
 };
@@ -352,7 +370,6 @@ enum {
 	AUDIO_NOMINAL,
 	CPE_NOMINAL,
 	HPH_PA_DELAY,
-	SB_CLK_GEAR,
 	ANC_MIC_AMIC1,
 	ANC_MIC_AMIC2,
 	ANC_MIC_AMIC3,
@@ -774,6 +791,7 @@ struct tasha_priv {
 	bool spkr_pa_widget_on;
 	struct regulator *spkdrv_reg;
 	struct regulator *spkdrv2_reg;
+	struct hph_anc_wrk hph_anc_dwrk; //HTC_AUD - HPKB29557 ANC feature for wcd9335
 
 	bool mbhc_started;
 	/* class h specific data */
@@ -854,7 +872,10 @@ struct tasha_priv {
 	int rx_8_count;
 	bool clk_mode;
 	bool clk_internal;
-
+	/* Lock to prevent multiple functions voting at same time */
+	struct mutex sb_clk_gear_lock;
+	/* Count for functions voting or un-voting */
+	u32 ref_count;
 	/* Lock to protect mclk enablement */
 	struct mutex mclk_lock;
 };
@@ -2217,6 +2238,34 @@ static void tasha_mbhc_moisture_config(struct wcd_mbhc *mbhc)
 	tasha_mbhc_hph_l_pull_up_control(codec, mbhc->moist_iref);
 }
 
+/*HTC_AUD_START - HPKB29557 ANC feature for wcd9335*/
+static void tasha_update_anc_state(struct snd_soc_codec *codec, bool enable,
+				   int anc_num)
+{
+	if (enable)
+		snd_soc_update_bits(codec, WCD9335_CDC_RX1_RX_PATH_CFG0 +
+				(20 * anc_num), 0x10, 0x10);
+	else
+		snd_soc_update_bits(codec, WCD9335_CDC_RX1_RX_PATH_CFG0 +
+				(20 * anc_num), 0x10, 0x00);
+}
+
+static bool tasha_is_anc_on(struct wcd_mbhc *mbhc)
+{
+	bool anc_on = false;
+	u16 ancl, ancr;
+
+	ancl =
+	(snd_soc_read(mbhc->codec, WCD9335_CDC_RX1_RX_PATH_CFG0)) & 0x10;
+	ancr =
+	(snd_soc_read(mbhc->codec, WCD9335_CDC_RX2_RX_PATH_CFG0)) & 0x10;
+
+	anc_on = !!(ancl | ancr);
+
+	return anc_on;
+}
+/*HTC_AUD_END - HPKB29557 ANC feature for wcd9335*/
+
 static const struct wcd_mbhc_cb mbhc_cb = {
 	.request_irq = tasha_mbhc_request_irq,
 	.irq_control = tasha_mbhc_irq_control,
@@ -2239,6 +2288,10 @@ static const struct wcd_mbhc_cb mbhc_cb = {
 	.mbhc_gnd_det_ctrl = tasha_mbhc_gnd_det_ctrl,
 	.hph_pull_down_ctrl = tasha_mbhc_hph_pull_down_ctrl,
 	.mbhc_moisture_config = tasha_mbhc_moisture_config,
+/*HTC_AUD_START - HPKB29557 ANC feature for wcd9335*/
+	.update_anc_state = tasha_update_anc_state,
+	.is_anc_on = tasha_is_anc_on,
+/*HTC_AUD_END - HPKB29557 ANC feature for wcd9335*/
 };
 
 static int tasha_get_anc_slot(struct snd_kcontrol *kcontrol,
@@ -3153,10 +3206,7 @@ static int tasha_codec_enable_slimrx(struct snd_soc_dapm_widget *w,
 					      &dai->grph);
 		break;
 	case SND_SOC_DAPM_PRE_PMD:
-		if (!test_bit(SB_CLK_GEAR, &tasha_p->status_mask)) {
-			tasha_codec_vote_max_bw(codec, true);
-			set_bit(SB_CLK_GEAR, &tasha_p->status_mask);
-		}
+		tasha_codec_vote_max_bw(codec, true);
 		break;
 	case SND_SOC_DAPM_POST_PMD:
 		ret = wcd9xxx_disconnect_port(core, &dai->wcd9xxx_ch_list,
@@ -3706,6 +3756,49 @@ static int tasha_codec_enable_rx_bias(struct snd_soc_dapm_widget *w,
 	return 0;
 }
 
+/*HTC_AUD_START - HPKB29557 ANC feature for wcd9335*/
+static void tasha_hph_anc_update_callback(struct work_struct *work)
+{
+	struct hph_anc_wrk *hph_anc_dwrk;
+	struct tasha_priv *tasha;
+	struct delayed_work *delayed_work;
+	struct snd_soc_codec *codec;
+	int gain;
+
+	delayed_work = to_delayed_work(work);
+	hph_anc_dwrk = container_of(delayed_work, struct hph_anc_wrk, dwork);
+	tasha = hph_anc_dwrk->tasha;
+	codec = tasha->codec;
+
+	/* Ramp gain from 0 to anc0_ff_a_gain and anc1_ff_a_gain */
+	gain = WCD9335_ANC_RAMP_UP_STEP_SIZE;
+
+	while ((gain <= anc0_ff_a_gain) || (gain <= anc1_ff_a_gain)) {
+
+		if(hph_anc_dwrk->anc_work_stop)
+		{
+			return;
+		}
+
+		if (gain >= anc0_ff_a_gain)
+			snd_soc_write(codec, WCD9335_CDC_ANC0_FF_A_GAIN_CTL,
+				 anc0_ff_a_gain);
+		else
+			snd_soc_write(codec, WCD9335_CDC_ANC0_FF_A_GAIN_CTL,
+				gain);
+		if (gain >= anc1_ff_a_gain)
+			snd_soc_write(codec, WCD9335_CDC_ANC1_FF_A_GAIN_CTL,
+				anc1_ff_a_gain);
+		else
+			snd_soc_write(codec, WCD9335_CDC_ANC1_FF_A_GAIN_CTL,
+				gain);
+		usleep_range(5000, 5500);
+		gain += WCD9335_ANC_RAMP_UP_STEP_SIZE;
+
+	}
+}
+/*HTC_AUD_END - HPKB29557 ANC feature for wcd9335*/
+
 static void tasha_realign_anc_coeff(struct snd_soc_codec *codec,
 				    u16 reg1, u16 reg2)
 {
@@ -3874,6 +3967,9 @@ static int tasha_codec_enable_anc(struct snd_soc_dapm_widget *w,
 			TASHA_CODEC_UNPACK_ENTRY(anc_ptr[i], reg, mask, val);
 			snd_soc_write(codec, reg, (val & mask));
 		}
+
+/*HTC_AUD_START - HPKB29557 ANC feature for wcd9335*/
+#if 0
 		if (!strcmp(w->name, "RX INT1 DAC") ||
 			!strcmp(w->name, "RX INT3 DAC")) {
 			snd_soc_update_bits(codec,
@@ -3882,17 +3978,37 @@ static int tasha_codec_enable_anc(struct snd_soc_dapm_widget *w,
 				!strcmp(w->name, "RX INT4 DAC")) {
 			snd_soc_update_bits(codec,
 				WCD9335_CDC_ANC1_CLK_RESET_CTL, 0x08, 0x08);
+#else
+		if (snd_soc_read(codec, WCD9335_CDC_ANC0_FF_A_GAIN_CTL )) {
+			anc0_ff_a_gain = snd_soc_read(codec,
+				WCD9335_CDC_ANC0_FF_A_GAIN_CTL );
+			snd_soc_write(codec,
+				WCD9335_CDC_ANC0_FF_A_GAIN_CTL , 0x00);
 		}
+		if (snd_soc_read(codec, WCD9335_CDC_ANC1_FF_A_GAIN_CTL )) {
+			anc1_ff_a_gain = snd_soc_read(codec,
+				WCD9335_CDC_ANC1_FF_A_GAIN_CTL );
+			snd_soc_write(codec,
+				WCD9335_CDC_ANC1_FF_A_GAIN_CTL , 0x00);
+		}
+#endif
+/*HTC_AUD_END - HPKB29557 ANC feature for wcd9335*/
 
 		if (!hwdep_cal)
 			release_firmware(fw);
 		break;
 	case SND_SOC_DAPM_POST_PMU:
+/*HTC_AUD_START - HPKB29557 ANC feature for wcd9335*/
+#if 0
 		/* Remove ANC Rx from reset */
 		snd_soc_update_bits(codec, WCD9335_CDC_ANC0_CLK_RESET_CTL,
 				    0x08, 0x00);
 		snd_soc_update_bits(codec, WCD9335_CDC_ANC1_CLK_RESET_CTL,
 				    0x08, 0x00);
+#else
+
+#endif
+/*HTC_AUD_END - HPKB29557 ANC feature for wcd9335*/
 		break;
 	case SND_SOC_DAPM_POST_PMD:
 		if (!strcmp(w->name, "ANC HPHL PA") ||
@@ -4036,6 +4152,7 @@ static int tasha_codec_enable_hphr_pa(struct snd_soc_dapm_widget *w,
 	struct tasha_priv *tasha = snd_soc_codec_get_drvdata(codec);
 	int hph_mode = tasha->hph_mode;
 	int ret = 0;
+	int ramp_gain, anc0_gain, anc1_gain;//HTC_AUD - HPKB29557 ANC feature for wcd9335
 
 	dev_dbg(codec->dev, "%s %s %d\n", __func__, w->name, event);
 
@@ -4089,6 +4206,11 @@ static int tasha_codec_enable_hphr_pa(struct snd_soc_dapm_widget *w,
 						0x10, 0x00);
 			/* Remove ANC Rx from reset */
 			ret = tasha_codec_enable_anc(w, kcontrol, event);
+/*HTC_AUD_START - HPKB29557 ANC feature for wcd9335*/
+			tasha->hph_anc_dwrk.anc_work_stop = false;
+			schedule_delayed_work(&tasha->hph_anc_dwrk.dwork,
+				msecs_to_jiffies(hph_anc_en_delay));
+/*HTC_AUD_END - HPKB29557 ANC feature for wcd9335*/
 		}
 		tasha_codec_override(codec, hph_mode, event);
 		break;
@@ -4098,8 +4220,48 @@ static int tasha_codec_enable_hphr_pa(struct snd_soc_dapm_widget *w,
 					WCD_EVENT_PRE_HPHR_PA_OFF,
 					&tasha->mbhc);
 		tasha_codec_hph_post_pa_config(tasha, hph_mode, event);
+/*HTC_AUD_START - HPKB29557 ANC feature for wcd9335*/
+		snd_soc_update_bits(codec, WCD9335_CDC_RX2_RX_PATH_CTL,
+				0x10, 0x10);
+		snd_soc_update_bits(codec,
+				WCD9335_CDC_RX2_RX_PATH_MIX_CTL,
+				0x10, 0x10);
+/*HTC_AUD_END - HPKB29557 ANC feature for wcd9335*/
 		if (!(strcmp(w->name, "ANC HPHR PA")))
+		{
+/*HTC_AUD_START - HPKB29557 ANC feature for wcd9335*/
+			snd_soc_update_bits(codec, WCD9335_CDC_RX1_RX_PATH_CTL,
+				0x10, 0x10);
+			snd_soc_update_bits(codec,
+				WCD9335_CDC_RX1_RX_PATH_MIX_CTL,
+				0x10, 0x10);
+			//Ramp down anc gain
+			tasha->hph_anc_dwrk.anc_work_stop = true;
+			cancel_delayed_work_sync(&tasha->hph_anc_dwrk.dwork);
+
+			anc0_gain = snd_soc_read(codec, WCD9335_CDC_ANC0_FF_A_GAIN_CTL);
+			anc1_gain = snd_soc_read(codec, WCD9335_CDC_ANC1_FF_A_GAIN_CTL);
+
+			ramp_gain = (anc0_gain > anc1_gain ? anc0_gain : anc1_gain);
+			ramp_gain -= WCD9335_ANC_RAMP_DWN_STEP_SIZE;
+
+			while (ramp_gain >= 0) {
+				if (ramp_gain < anc0_gain)
+					snd_soc_write(codec, WCD9335_CDC_ANC0_FF_A_GAIN_CTL,
+						ramp_gain);
+				if (ramp_gain < anc1_gain)
+					snd_soc_write(codec, WCD9335_CDC_ANC1_FF_A_GAIN_CTL,
+						ramp_gain);
+				usleep_range(1000, 1500);
+
+				if(ramp_gain < WCD9335_ANC_RAMP_DWN_STEP_SIZE && ramp_gain > 0)
+					ramp_gain = 0;
+				else
+					ramp_gain -= WCD9335_ANC_RAMP_DWN_STEP_SIZE;
+			}
+/*HTC_AUD_END - HPKB29557 ANC feature for wcd9335*/
 			snd_soc_update_bits(codec, WCD9335_ANA_HPH, 0x40, 0x00);
+		}
 		break;
 	case SND_SOC_DAPM_POST_PMD:
 		/* 5ms sleep is required after PA is disabled as per
@@ -4130,7 +4292,7 @@ static int tasha_codec_enable_hphl_pa(struct snd_soc_dapm_widget *w,
 	struct tasha_priv *tasha = snd_soc_codec_get_drvdata(codec);
 	int hph_mode = tasha->hph_mode;
 	int ret = 0;
-
+	int ramp_gain, anc0_gain, anc1_gain; //HTC_AUD - HPKB29557 ANC feature for wcd9335
 	dev_dbg(codec->dev, "%s %s %d\n", __func__, w->name, event);
 
 	switch (event) {
@@ -4185,6 +4347,11 @@ static int tasha_codec_enable_hphl_pa(struct snd_soc_dapm_widget *w,
 
 			/* Remove ANC Rx from reset */
 			ret = tasha_codec_enable_anc(w, kcontrol, event);
+/*HTC_AUD_START - HPKB29557 ANC feature for wcd9335*/
+			tasha->hph_anc_dwrk.anc_work_stop = false;
+			schedule_delayed_work(&tasha->hph_anc_dwrk.dwork,
+				msecs_to_jiffies(hph_anc_en_delay));
+/*HTC_AUD_END - HPKB29557 ANC feature for wcd9335*/
 		}
 		tasha_codec_override(codec, hph_mode, event);
 		break;
@@ -4193,8 +4360,49 @@ static int tasha_codec_enable_hphl_pa(struct snd_soc_dapm_widget *w,
 					WCD_EVENT_PRE_HPHL_PA_OFF,
 					&tasha->mbhc);
 		tasha_codec_hph_post_pa_config(tasha, hph_mode, event);
+/*HTC_AUD_START - HPKB29557 ANC feature for wcd9335*/
+		snd_soc_update_bits(codec, WCD9335_CDC_RX1_RX_PATH_CTL,
+				0x10, 0x10);
+		snd_soc_update_bits(codec,
+				WCD9335_CDC_RX1_RX_PATH_MIX_CTL,
+				0x10, 0x10);
+/*HTC_AUD_END - HPKB29557 ANC feature for wcd9335*/
 		if (!(strcmp(w->name, "ANC HPHL PA")))
+		{
+/*HTC_AUD_START - HPKB29557 ANC feature for wcd9335*/
+			snd_soc_update_bits(codec, WCD9335_CDC_RX2_RX_PATH_CTL,
+				0x10, 0x10);
+			snd_soc_update_bits(codec,
+				WCD9335_CDC_RX2_RX_PATH_MIX_CTL,
+				0x10, 0x10);
+
+			//Ramp down anc gain
+			tasha->hph_anc_dwrk.anc_work_stop = true;
+			cancel_delayed_work_sync(&tasha->hph_anc_dwrk.dwork);
+
+			anc0_gain = snd_soc_read(codec, WCD9335_CDC_ANC0_FF_A_GAIN_CTL);
+			anc1_gain = snd_soc_read(codec, WCD9335_CDC_ANC1_FF_A_GAIN_CTL);
+
+			ramp_gain = (anc0_gain > anc1_gain ? anc0_gain : anc1_gain);
+			ramp_gain -= WCD9335_ANC_RAMP_DWN_STEP_SIZE;
+
+			while (ramp_gain >= 0) {
+				if (ramp_gain < anc0_gain)
+					snd_soc_write(codec, WCD9335_CDC_ANC0_FF_A_GAIN_CTL,
+						ramp_gain);
+				if (ramp_gain < anc1_gain)
+					snd_soc_write(codec, WCD9335_CDC_ANC1_FF_A_GAIN_CTL,
+						ramp_gain);
+				usleep_range(1000, 1500);
+
+				if(ramp_gain < WCD9335_ANC_RAMP_DWN_STEP_SIZE && ramp_gain > 0)
+					ramp_gain = 0;
+				else
+					ramp_gain -= WCD9335_ANC_RAMP_DWN_STEP_SIZE;
+			}
+/*HTC_AUD_END - HPKB29557 ANC feature for wcd9335*/
 			snd_soc_update_bits(codec, WCD9335_ANA_HPH, 0x80, 0x00);
+		}
 		break;
 	case SND_SOC_DAPM_POST_PMD:
 		/* 5ms sleep is required after PA is disabled as per
@@ -4945,13 +5153,7 @@ static int tasha_codec_enable_spline_src(struct snd_soc_codec *codec,
 					 int src_num,
 					 int event)
 {
-/* HTC_AUD_START Fix Klockwork */
-#if 0
-	u16 src_paired_reg;
-#else
 	u16 src_paired_reg = 0;
-#endif
-/* HTC_AUD_END */
 	struct tasha_priv *tasha;
 	u16 rx_path_cfg_reg = WCD9335_CDC_RX1_RX_PATH_CFG0;
 	u16 rx_path_ctl_reg = WCD9335_CDC_RX1_RX_PATH_CTL;
@@ -5474,10 +5676,7 @@ static int tasha_codec_enable_interpolator(struct snd_soc_dapm_widget *w,
 
 	switch (event) {
 	case SND_SOC_DAPM_PRE_PMU:
-		if (!test_bit(SB_CLK_GEAR, &tasha->status_mask)) {
-			tasha_codec_vote_max_bw(codec, true);
-			set_bit(SB_CLK_GEAR, &tasha->status_mask);
-		}
+		tasha_codec_vote_max_bw(codec, true);
 		/* Reset if needed */
 		tasha_codec_enable_prim_interpolator(codec, reg, event);
 		break;
@@ -5912,8 +6111,6 @@ static int tasha_codec_enable_dec(struct snd_soc_dapm_widget *w,
 					    CF_MIN_3DB_150HZ << 5);
 		/* Enable TX PGA Mute */
 		snd_soc_update_bits(codec, tx_vol_ctl_reg, 0x10, 0x10);
-		/* Enable APC */
-		snd_soc_update_bits(codec, dec_cfg_reg, 0x08, 0x08);
 		break;
 	case SND_SOC_DAPM_POST_PMU:
 		snd_soc_update_bits(codec, hpf_gate_reg, 0x01, 0x00);
@@ -5940,7 +6137,6 @@ static int tasha_codec_enable_dec(struct snd_soc_dapm_widget *w,
 		hpf_cut_off_freq =
 			tasha->tx_hpf_work[decimator].hpf_cut_off_freq;
 		snd_soc_update_bits(codec, tx_vol_ctl_reg, 0x10, 0x10);
-		snd_soc_update_bits(codec, dec_cfg_reg, 0x08, 0x00);
 		if (cancel_delayed_work_sync(
 		    &tasha->tx_hpf_work[decimator].dwork)) {
 			if (hpf_cut_off_freq != CF_MIN_3DB_150HZ) {
@@ -11341,11 +11537,8 @@ static void tasha_shutdown(struct snd_pcm_substream *substream,
 	if (tasha->intf_type == WCD9XXX_INTERFACE_TYPE_I2C)
 		return;
 
-	if ((substream->stream == SNDRV_PCM_STREAM_PLAYBACK) &&
-	    test_bit(SB_CLK_GEAR, &tasha->status_mask)) {
+	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
 		tasha_codec_vote_max_bw(dai->codec, false);
-		clear_bit(SB_CLK_GEAR, &tasha->status_mask);
-	}
 }
 
 static int tasha_set_decimator_rate(struct snd_soc_dai *dai,
@@ -11580,15 +11773,11 @@ prim_rate:
 static int tasha_prepare(struct snd_pcm_substream *substream,
 			 struct snd_soc_dai *dai)
 {
-	struct tasha_priv *tasha = snd_soc_codec_get_drvdata(dai->codec);
-
 	pr_debug("%s(): substream = %s  stream = %d\n" , __func__,
 		 substream->name, substream->stream);
-	if ((substream->stream == SNDRV_PCM_STREAM_PLAYBACK) &&
-	    test_bit(SB_CLK_GEAR, &tasha->status_mask)) {
+
+	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
 		tasha_codec_vote_max_bw(dai->codec, false);
-		clear_bit(SB_CLK_GEAR, &tasha->status_mask);
-	}
 	return 0;
 }
 
@@ -12119,8 +12308,10 @@ static int tasha_dig_core_power_collapse(struct tasha_priv *tasha,
 		goto unlock_mutex;
 
 	if (tasha->power_active_ref < 0) {
-		dev_dbg(tasha->dev, "%s: power_active_ref is negative\n",
+		dev_info(tasha->dev,
+			"%s: power_active_ref is negative, resetting it\n",
 			__func__);
+		tasha->power_active_ref = 0;
 		goto unlock_mutex;
 	}
 
@@ -13296,13 +13487,29 @@ static int tasha_codec_vote_max_bw(struct snd_soc_codec *codec,
 	if (tasha->intf_type == WCD9XXX_INTERFACE_TYPE_I2C)
 		return 0;
 
-	if (vote)
-		bw_ops = SLIM_BW_CLK_GEAR_9;
-	else
-		bw_ops = SLIM_BW_UNVOTE;
+	mutex_lock(&tasha->sb_clk_gear_lock);
+	if (vote) {
+		tasha->ref_count++;
+		if (tasha->ref_count == 1) {
+			bw_ops = SLIM_BW_CLK_GEAR_9;
+			tasha_codec_slim_reserve_bw(codec,
+				bw_ops, true);
+		}
+	} else if (!vote && tasha->ref_count > 0) {
+		tasha->ref_count--;
+		if (tasha->ref_count == 0) {
+			bw_ops = SLIM_BW_UNVOTE;
+			tasha_codec_slim_reserve_bw(codec,
+				bw_ops, true);
+		}
+	};
 
-	return tasha_codec_slim_reserve_bw(codec,
-			bw_ops, true);
+	dev_dbg(codec->dev, "%s Value of counter after vote or un-vote is %d\n",
+		__func__, tasha->ref_count);
+
+	mutex_unlock(&tasha->sb_clk_gear_lock);
+
+	return 0;
 }
 
 static int tasha_cpe_err_irq_control(struct snd_soc_codec *codec,
@@ -13485,6 +13692,8 @@ static int tasha_post_reset_cb(struct wcd9xxx *wcd9xxx)
 	if (IS_ERR_VALUE(ret))
 		dev_err(codec->dev, "%s: invalid pdata\n", __func__);
 
+	/* Reset reference counter for voting for max bw */
+	tasha->ref_count = 0;
 	/* MBHC Init */
 	wcd_mbhc_deinit(&tasha->mbhc);
 	tasha->mbhc_started = false;
@@ -13723,6 +13932,11 @@ static int tasha_codec_probe(struct snd_soc_codec *codec)
 		INIT_DELAYED_WORK(&tasha->tx_mute_dwork[i].dwork,
 			  tasha_tx_mute_update_callback);
 	}
+/*HTC_AUD_START - HPKB29557 ANC feature for wcd9335*/
+      tasha->hph_anc_dwrk.tasha = tasha;
+      INIT_DELAYED_WORK(&tasha->hph_anc_dwrk.dwork,
+              tasha_hph_anc_update_callback);
+/*HTC_AUD_END - HPKB29557 ANC feature for wcd9335*/
 
 	tasha->spk_anc_dwork.tasha = tasha;
 	INIT_DELAYED_WORK(&tasha->spk_anc_dwork.dwork,
@@ -14271,6 +14485,7 @@ static int tasha_probe(struct platform_device *pdev)
 	mutex_init(&tasha->swr_read_lock);
 	mutex_init(&tasha->swr_write_lock);
 	mutex_init(&tasha->swr_clk_lock);
+	mutex_init(&tasha->sb_clk_gear_lock);
 	mutex_init(&tasha->mclk_lock);
 
 	cdc_pwr = devm_kzalloc(&pdev->dev, sizeof(struct wcd9xxx_power_region),
@@ -14375,6 +14590,7 @@ static int tasha_remove(struct platform_device *pdev)
 	mutex_destroy(&tasha->mclk_lock);
 	devm_kfree(&pdev->dev, tasha);
 	snd_soc_unregister_codec(&pdev->dev);
+	mutex_destroy(&tasha->sb_clk_gear_lock);
 	return 0;
 }
 

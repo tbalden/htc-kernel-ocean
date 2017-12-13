@@ -30,8 +30,8 @@
 #include <sound/jack.h>
 #include "wcd-mbhc-v2.h"
 #include "wcdcal-hwdep.h"
-/* HTC_AUD_START */
-#include <linux/mfd/wcd934x/registers.h>
+/* HTC_AUD_START - AS HS */
+#include "htc-mbhc-headset.h"
 /* HTC_AUD_END */
 
 #define WCD_MBHC_JACK_MASK (SND_JACK_HEADSET | SND_JACK_OC_HPHL | \
@@ -62,12 +62,11 @@
 
 #define WCD_MBHC_BTN_PRESS_COMPL_TIMEOUT_MS  50
 #define ANC_DETECT_RETRY_CNT 7
-#define WCD_MBHC_SPL_HS_CNT  2
+#define WCD_MBHC_SPL_HS_CNT  1
 
-/* HTC_AUD_START - AS HS */
-#define HTC_AS_HEADSET_DEBOUNCE_TIME 50000
-#define HTC_AS_HEADSET_DETECT_RETRY 30
-#define MIC_BIAS_2V85 2850
+/* HTC_AUD_START - HPKB29557 */
+/* add debounce for LR-Mic switch to avoid pop from ANC feature*/
+#define HTC_ANC_SWITCH5_DEBOUNCE_TIME 250000
 /* HTC_AUD_END */
 
 static int det_extn_cable_en;
@@ -81,458 +80,6 @@ enum wcd_mbhc_cs_mb_en_flag {
 	WCD_MBHC_EN_PULLUP,
 	WCD_MBHC_EN_NONE,
 };
-
-/* HTC_AUD_START - for simulate */
-struct wcd_mbhc* __MBHC = NULL;
-
-static int __CTOI(char s)
-{
-	int ret = 0;
-	if (s >= 'a' && s <= 'f') {
-		ret = 10 + s - 'a';
-	} else if (s >= 'A' && s <= 'F') {
-		ret = 10 + s - 'A';
-	} else if (s >= '0' && s <= '9') {
-		ret = s - '0';
-	}
-	return ret;
-}
-static int __ATOI(char *s)
-{
-	int ret = 0;
-	if (strlen(s) == 3) {
-		ret += __CTOI(s[0]) * 256;
-		ret += __CTOI(s[1]) * 16;
-		ret += __CTOI(s[2]);
-	}
-	pr_info("[AUD][HS] ATOI ret = %d\n", ret);
-	return ret;
-}
-static void dump_register(u16 reg)
-{
-	int i = 0;
-
-	if (__MBHC == NULL) {
-		pr_err("[AUD][HS] __MBHC is NULL\n");
-		return;
-	}
-
-	if (reg == 0 || reg > 0x6FF) {
-		pr_err("[AUD][HS] wrong register\n");
-		return;
-	}
-
-	if (__MBHC->debug_reg_count >= 50) {
-		pr_err("[AUD][HS] debug count more than 50\n");
-		return;
-	}
-
-	for (i = 0; i < __MBHC->debug_reg_count; i ++) {
-		if (__MBHC->debug_reg[i] == reg) break;
-	}
-
-	if (i == __MBHC->debug_reg_count) {
-		__MBHC->debug_reg[__MBHC->debug_reg_count] = reg;
-		__MBHC->debug_reg_count ++;
-	}
-	pr_info("[AUD][HS] dump reg %x, current dump count = %d\n",
-			reg, __MBHC->debug_reg_count);
-/*
-	for (i = 0; i < __MBHC->debug_reg_count; i ++)
-		pr_info("[AUD][HS] reg %x will be dumpped\n", __MBHC->debug_reg[i]);
-*/
-}
-
-static void undump_register(u16 reg)
-{
-	int i = 0;
-
-	if (__MBHC == NULL) {
-		pr_err("[AUD][HS] __MBHC is NULL\n");
-		return;
-	}
-
-	if (reg == 0 || reg > 0x6FF) {
-		pr_err("[AUD][HS] wrong register\n");
-		return;
-	}
-
-	for (i = 0; i < __MBHC->debug_reg_count; i ++)
-		if (__MBHC->debug_reg[i] == reg) break;
-
-	if (i < __MBHC->debug_reg_count) {
-		for (; i < __MBHC->debug_reg_count; i ++)
-			if (i + 1 < __MBHC->debug_reg_count)
-				__MBHC->debug_reg[i] = __MBHC->debug_reg[i + 1];
-		__MBHC->debug_reg_count --;
-	}
-
-	pr_info("[AUD][HS] undump reg %x, current dump count = %d\n",
-			reg, __MBHC->debug_reg_count);
-/*
-	for (i = 0; i < __MBHC->debug_reg_count; i ++)
-		pr_info("[AUD][HS] reg %x will be dumpped\n", __MBHC->debug_reg[i]);
-*/
-}
-
-/* Add attribute on sysfs for debugging */
-static ssize_t debug_flag_show(struct device *dev,
-			       struct device_attribute *attr, char *buf)
-{
-	struct snd_soc_codec *codec;
-	int len = 0, i;
-	char *s;
-	s = buf;
-	if (__MBHC == NULL) {
-		return (buf - s);
-	}
-
-	codec = __MBHC->codec;
-
-	len =  scnprintf(buf, PAGE_SIZE - 1, "HP_DET = %d\n", (__MBHC->current_plug != MBHC_PLUG_TYPE_NONE) ? 0 : 1);
-	buf += len;
-
-	for (i = 0; i < __MBHC->debug_reg_count; i ++) {
-		len =  scnprintf(buf, PAGE_SIZE - 1, "reg 0x%x value 0x%x\n", __MBHC->debug_reg[i],
-					   snd_soc_read(codec, __MBHC->debug_reg[i]));
-		buf += len;
-	}
-
-	return (buf - s);
-}
-
-static ssize_t debug_flag_store(struct device *dev,
-				struct device_attribute *attr,
-				const char *buf, size_t count)
-{
-	u16 reg;
-	char s[4] = {'\0'};
-//	pr_info("%s %s %d\n", __func__, buf, count);
-	if (strncmp(buf, "enable", count - 1) == 0) {
-		pr_info("[AUD][HS] debug enable\n");
-	} else if (strncmp(buf, "disable", count - 1) == 0) {
-		pr_info("[AUD][HS] debug disable\n");
-	} else if (strncmp(buf, "dump 0x", count - 4) == 0) {
-		s[0] = buf[7]; s[1] = buf[8]; s[2] = buf[9];
-		reg = __ATOI(s);
-		dump_register(reg);
-	} else if (strncmp(buf, "undump 0x", count - 4) == 0) {
-		s[0] = buf[9]; s[1] = buf[10]; s[2] = buf[11];
-		reg = __ATOI(s);
-		undump_register(reg);
-	} else if (strncmp(buf, "no_headset", count - 1) == 0) {
-		pr_info("[AUD][HS] set no headset status\n");
-	} else {
-		pr_err("[AUD][HS] Invalid parameter");
-		return count;
-	}
-
-	return count;
-}
-
-static DEVICE_ACCESSORY_ATTR(debug, 0644, debug_flag_show, debug_flag_store);
-
-/* HTC_AUD_START - AS HS */
-
-static int disable_anc_mic(struct wcd_mbhc *mbhc)
-{
-	struct snd_soc_codec *codec = mbhc->codec;
-	pr_info("%s disable anc mic to avoid pop\n", __func__);
-	snd_soc_update_bits(codec, WCD934X_CDC_RX1_RX_PATH_CFG0, 0x10, 0x00);
-	snd_soc_update_bits(codec, WCD934X_CDC_RX2_RX_PATH_CFG0, 0x10, 0x00);
-	return 0;
-}
-
-static ssize_t headset_switch_show(struct device *dev,
-			       struct device_attribute *attr, char *buf)
-{
-	struct htc_headset_config hs_cfg = __MBHC->mbhc_cfg->htc_headset_cfg;
-
-	pr_info("%s headset switch S3 status [PMI8998 GPIO%d: %d, GPIO%d: %d]\n", __func__,
-		hs_cfg.switch_gpio[HEADSET_S3_0],
-		gpio_get_value(hs_cfg.switch_gpio[HEADSET_S3_0]),
-		hs_cfg.switch_gpio[HEADSET_S3_1],
-		gpio_get_value(hs_cfg.switch_gpio[HEADSET_S3_1]));
-	pr_info("%s headset switch S4 status [GPIO%d: %d]\n", __func__,
-		hs_cfg.switch_gpio[HEADSET_S4],
-		gpio_get_value(hs_cfg.switch_gpio[HEADSET_S4]));
-	pr_info("%s headset switch S5 status [PM8998 GPIO%d: %d]\n", __func__,
-		hs_cfg.switch_gpio[HEADSET_S5],
-		gpio_get_value(hs_cfg.switch_gpio[HEADSET_S5]));
-	pr_info("%s headset ID1 status [GPIO%d: %d]\n", __func__,
-		hs_cfg.id_gpio[TYPEC_ID1],
-		gpio_get_value(hs_cfg.id_gpio[TYPEC_ID1]));
-	pr_info("%s headset ID2 status [GPIO%d: %d]\n", __func__,
-		hs_cfg.id_gpio[TYPEC_ID2],
-		gpio_get_value(hs_cfg.id_gpio[TYPEC_ID2]));
-	pr_info("%s headset USB Position status [GPIO%d: %d]\n", __func__,
-		hs_cfg.id_gpio[TYPEC_POSITION],
-		gpio_get_value(hs_cfg.id_gpio[TYPEC_POSITION]));
-	pr_info("%s headset external micbias status [PM8998 GPIO%d: %d]\n", __func__,
-		hs_cfg.ext_micbias,
-		gpio_get_value(hs_cfg.ext_micbias));
-/*
-	pr_info("%s headset MBHC det pin status [GPIO%d: %d]\n", __func__,
-		hs_cfg.mbhc_det_pin,
-		gpio_get_value(hs_cfg.mbhc_det_pin));
-*/
-	pr_info("%s headset USB FSA3030 Sel0 status [GPIO%d: %d]\n", __func__,
-		hs_cfg.fsa3030_sel0,
-		gpio_get_value(hs_cfg.fsa3030_sel0));
-	pr_info("%s headset  USB FSA3030 Sel1 status [GPIO%d: %d]\n", __func__,
-		hs_cfg.fsa3030_sel1,
-		gpio_get_value(hs_cfg.fsa3030_sel1));
-	pr_info("%s headset USB FSA3030 Sel2 status [GPIO%d: %d]\n", __func__,
-		hs_cfg.fsa3030_sel2,
-		gpio_get_value(hs_cfg.fsa3030_sel2));
-	return 0;
-}
-
-static ssize_t headset_switch_store(struct device *dev,
-				struct device_attribute *attr,
-				const char *buf, size_t count)
-{
-	struct htc_headset_config hs_cfg = __MBHC->mbhc_cfg->htc_headset_cfg;
-	pr_info("%s ++\n", __func__);
-	if (strncmp(buf, "s3_h", count - 1) == 0) {
-		gpio_set_value(hs_cfg.switch_gpio[HEADSET_S3_0], 1);
-		gpio_set_value(hs_cfg.switch_gpio[HEADSET_S3_1], 1);
-	} else if (strncmp(buf, "s3_l", count - 1) == 0) {
-		gpio_set_value(hs_cfg.switch_gpio[HEADSET_S3_0], 0);
-		gpio_set_value(hs_cfg.switch_gpio[HEADSET_S3_1], 0);
-	} else if (strncmp(buf, "s4_h", count - 1) == 0) {
-		gpio_set_value(hs_cfg.switch_gpio[HEADSET_S4], 1);
-	} else if (strncmp(buf, "s4_l", count - 1) == 0) {
-		gpio_set_value(hs_cfg.switch_gpio[HEADSET_S4], 0);
-	} else if (strncmp(buf, "s5_h", count - 1) == 0) {
-		gpio_set_value(hs_cfg.switch_gpio[HEADSET_S5], 1);
-	} else if (strncmp(buf, "s5_l", count - 1) == 0) {
-		gpio_set_value(hs_cfg.switch_gpio[HEADSET_S5], 0);
-	} else if (strncmp(buf, "id1_l", count - 1) == 0) {
-		gpio_set_value(hs_cfg.id_gpio[TYPEC_ID1], 0);
-	} else if (strncmp(buf, "id1_h", count - 1) == 0) {
-		gpio_set_value(hs_cfg.id_gpio[TYPEC_ID1], 1);
-	} else if (strncmp(buf, "id2_l", count - 1) == 0) {
-		gpio_set_value(hs_cfg.id_gpio[TYPEC_ID2], 0);
-	} else if (strncmp(buf, "id2_h", count - 1) == 0) {
-		gpio_set_value(hs_cfg.id_gpio[TYPEC_ID2], 1);
-	} else if (strncmp(buf, "usb_pos_l", count - 1) == 0) {
-		gpio_set_value(hs_cfg.id_gpio[TYPEC_POSITION], 0);
-	} else if (strncmp(buf, "usb_pos_h", count - 1) == 0) {
-		gpio_set_value(hs_cfg.id_gpio[TYPEC_POSITION], 1);
-	} else if (strncmp(buf, "ext_micb_l", count - 1) == 0) {
-		gpio_set_value(hs_cfg.ext_micbias, 0);
-	} else if (strncmp(buf, "ext_micb_h", count - 1) == 0) {
-		gpio_set_value(hs_cfg.ext_micbias, 1);
-/*
-	} else if (strncmp(buf, "hs_det_h", count - 1) == 0) {
-		gpio_set_value(hs_cfg.mbhc_det_pin, 1);
-	} else if (strncmp(buf, "hs_det_l", count - 1) == 0) {
-		gpio_set_value(hs_cfg.mbhc_det_pin, 0);
-*/
-	} else if (strncmp(buf, "fsa_usb", count - 1) == 0) {
-		gpio_set_value(hs_cfg.fsa3030_sel0, 0);
-		gpio_set_value(hs_cfg.fsa3030_sel1, 1);
-	} else if (strncmp(buf, "fsa_aud", count - 1) == 0) {
-		gpio_set_value(hs_cfg.fsa3030_sel0, 1);
-		gpio_set_value(hs_cfg.fsa3030_sel1, 0);
-	} else {
-		pr_err("%s: error setting\n", __func__);
-	}
-	pr_info("%s --\n", __func__);
-	return count;
-}
-
-static DEVICE_HEADSET_ATTR(switch, 0644, headset_switch_show,
-			   headset_switch_store);
-/* HTC_AUD_END */
-
-static ssize_t headset_state_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
-{
-	int length = 0;
-	char *state = NULL;
-
-	switch (__MBHC->current_plug) {
-	case MBHC_PLUG_TYPE_NONE:
-		state = "headset_unplug";
-		break;
-	case MBHC_PLUG_TYPE_HEADSET:
-		state = "headset_mic";
-		break;
-	case MBHC_PLUG_TYPE_HEADPHONE:
-		state = "headset_no_mic";
-		break;
-	case MBHC_PLUG_TYPE_HIGH_HPH:
-		state = "headset_tv_out";
-		break;
-	case MBHC_PLUG_TYPE_GND_MIC_SWAP:
-		state = "headset_gnd_mic_swap";
-		break;
-/* HTC_AUD_START - AS HS */
-	case MBHC_PLUG_TYPE_AS_HEADSET:
-		state = "AS_headset_mic";
-		break;
-	case MBHC_PLUG_TYPE_35MM_HEADSET:
-		state = "35mm_headset";
-		break;
-	case MBHC_PLUG_TYPE_25MM_HEADSET:
-		state = "25mm_headset";
-		break;
-/* HTC_AUD_END */
-	default:
-		state = "error_state";
-	}
-
-	length = scnprintf(buf, PAGE_SIZE - 1, "%s\n", state);
-
-	return length;
-}
-
-static ssize_t headset_state_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	pr_info("[AUD][HS] %s\n", __func__);
-	return 0;
-}
-
-static DEVICE_HEADSET_ATTR(state, 0644, headset_state_show,
-			   headset_state_store);
-
-static ssize_t headset_simulate_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE - 1, "Command is not supported\n");
-}
-
-static ssize_t headset_simulate_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	if (strncmp(buf, "headset_unplug", count - 1) == 0) {
-		pr_info("Headset simulation: headset_unplug\n");
-		__MBHC->current_plug = MBHC_PLUG_TYPE_NONE;
-		__MBHC->hph_status &= ~WCD_MBHC_JACK_MASK;
-	} else if (strncmp(buf, "headset_no_mic", count - 1) == 0) {
-		pr_info("Headset simulation: headset_no_mic\n");
-		__MBHC->current_plug = MBHC_PLUG_TYPE_HEADPHONE;
-		__MBHC->hph_status &= ~WCD_MBHC_JACK_MASK;
-		__MBHC->hph_status |= SND_JACK_HEADPHONE;
-	} else if (strncmp(buf, "headset_mic", count - 1) == 0) {
-		pr_info("Headset simulation: headset_mic\n");
-		__MBHC->current_plug = MBHC_PLUG_TYPE_HEADSET;
-		__MBHC->hph_status &= ~WCD_MBHC_JACK_MASK;
-		__MBHC->hph_status |= SND_JACK_HEADSET;
-/* HTC_AUD_START - AS HS */
-	} else if (strncmp(buf, "as_headset_mic", count - 1) == 0) {
-		pr_info("Headset simulation: as_headset_mic\n");
-		__MBHC->current_plug = MBHC_PLUG_TYPE_AS_HEADSET;
-		__MBHC->hph_status &= ~WCD_MBHC_JACK_MASK;
-		__MBHC->hph_status |= SND_JACK_HEADSET;
-	} else if (strncmp(buf, "25mm_headset", count - 1) == 0) {
-		pr_info("Headset simulation: 25mm_headset\n");
-		__MBHC->current_plug = MBHC_PLUG_TYPE_25MM_HEADSET;
-		__MBHC->hph_status &= ~WCD_MBHC_JACK_MASK;
-		__MBHC->hph_status |= SND_JACK_HEADSET;
-/* HTC_AUD_END */
-	} else {
-		pr_info("Invalid parameter\n");
-		return count;
-	}
-
-	snd_soc_jack_report(&__MBHC->headset_jack, __MBHC->hph_status, WCD_MBHC_JACK_MASK);
-
-	return count;
-}
-
-static DEVICE_HEADSET_ATTR(simulate, 0644, headset_simulate_show,
-			   headset_simulate_store);
-
-static int register_attributes(struct wcd_mbhc *mbhc)
-{
-	int ret = 0;
-	pr_info("[AUD][HS] %s\n", __func__);
-	mbhc->htc_accessory_class = class_create(THIS_MODULE, "htc_accessory");
-	if (IS_ERR(mbhc->htc_accessory_class)) {
-		ret = PTR_ERR(mbhc->htc_accessory_class);
-		mbhc->htc_accessory_class = NULL;
-		goto err_create_class;
-	}
-
-	/* Register headset attributes */
-	mbhc->headset_dev = device_create(mbhc->htc_accessory_class,
-					NULL, 0, "%s", "headset");
-	if (unlikely(IS_ERR(mbhc->headset_dev))) {
-		ret = PTR_ERR(mbhc->headset_dev);
-		mbhc->headset_dev = NULL;
-		goto err_create_headset_device;
-	}
-
-	ret = device_create_file(mbhc->headset_dev, &dev_attr_headset_state);
-	if (ret) {
-		goto err_create_headset_state_device_file;
-	}
-
-	ret = device_create_file(mbhc->headset_dev, &dev_attr_headset_simulate);
-	if (ret) {
-		goto err_create_headset_simulate_device_file;
-	}
-
-/* HTC_AUD_START - AS HS */
-	ret = device_create_file(mbhc->headset_dev, &dev_attr_headset_switch);
-	if (ret) {
-		goto err_create_headset_switch_device_file;
-	}
-/* HTC_AUD_END */
-
-	/* Register debug attributes */
-	mbhc->debug_dev = device_create(mbhc->htc_accessory_class,
-				      NULL, 0, "%s", "debug");
-	if (unlikely(IS_ERR(mbhc->debug_dev))) {
-		ret = PTR_ERR(mbhc->debug_dev);
-		mbhc->debug_dev = NULL;
-		goto err_create_debug_device;
-	}
-
-	ret = device_create_file(mbhc->debug_dev, &dev_attr_debug);
-	if (ret)
-		goto err_create_debug_device_file;
-
-	return 0;
-
-err_create_debug_device_file:
-	device_unregister(mbhc->debug_dev);
-
-err_create_debug_device:
-	device_remove_file(mbhc->headset_dev, &dev_attr_headset_switch); /* HTC_AUD - AS HS */
-
-err_create_headset_switch_device_file:
-	device_remove_file(mbhc->headset_dev, &dev_attr_headset_simulate);
-
-err_create_headset_simulate_device_file:
-	device_remove_file(mbhc->headset_dev, &dev_attr_headset_state);
-
-err_create_headset_state_device_file:
-	device_unregister(mbhc->headset_dev);
-
-err_create_headset_device:
-	class_destroy(mbhc->htc_accessory_class);
-
-err_create_class:
-	pr_err("[AUD][HS] %s error\n", __func__);
-	return ret;
-}
-
-static void unregister_attributes(struct wcd_mbhc *mbhc)
-{
-	device_remove_file(mbhc->headset_dev, &dev_attr_headset_switch);/* HTC_AUD - AS HS */
-	device_remove_file(mbhc->headset_dev, &dev_attr_headset_simulate);
-	device_remove_file(mbhc->headset_dev, &dev_attr_headset_state);
-	device_remove_file(mbhc->debug_dev, &dev_attr_debug);
-	device_unregister(mbhc->headset_dev);
-	device_unregister(mbhc->debug_dev);
-	class_destroy(mbhc->htc_accessory_class);
-}
-/* HTC_AUD_END */
 
 static void wcd_mbhc_jack_report(struct wcd_mbhc *mbhc,
 				struct snd_soc_jack *jack, int status, int mask)
@@ -828,6 +375,7 @@ out_micb_en:
 			/* Disable micbias, pullup & enable cs */
 			wcd_enable_curr_micbias(mbhc, WCD_MBHC_EN_CS);
 		mutex_unlock(&mbhc->hphl_pa_lock);
+		clear_bit(WCD_MBHC_ANC0_OFF_ACK, &mbhc->hph_anc_state);
 		break;
 	case WCD_EVENT_PRE_HPHR_PA_OFF:
 		mutex_lock(&mbhc->hphr_pa_lock);
@@ -845,6 +393,7 @@ out_micb_en:
 			/* Disable micbias, pullup & enable cs */
 			wcd_enable_curr_micbias(mbhc, WCD_MBHC_EN_CS);
 		mutex_unlock(&mbhc->hphr_pa_lock);
+		clear_bit(WCD_MBHC_ANC1_OFF_ACK, &mbhc->hph_anc_state);
 		break;
 	case WCD_EVENT_PRE_HPHL_PA_ON:
 		set_bit(WCD_MBHC_EVENT_PA_HPHL, &mbhc->event_state);
@@ -938,6 +487,33 @@ static void wcd_mbhc_clr_and_turnon_hph_padac(struct wcd_mbhc *mbhc)
 	WCD_MBHC_REG_READ(WCD_MBHC_HPH_CNP_WG_TIME, wg_time);
 	wg_time += 1;
 
+/* HTC_AUD_START - HPKB29557 ANC feature */
+	if (test_and_clear_bit(WCD_MBHC_ANC0_OFF_ACK,
+				&mbhc->hph_anc_state)) {
+		/* only add debounce for ANC temp disable */
+		if (strncmp(mbhc->codec->component.name, "tasha_codec",
+			strlen("tasha_codec")) == 0) {
+			usleep_range(HTC_ANC_SWITCH5_DEBOUNCE_TIME * 10,
+			HTC_ANC_SWITCH5_DEBOUNCE_TIME * 10);
+		} else {
+			usleep_range(HTC_ANC_SWITCH5_DEBOUNCE_TIME,
+			HTC_ANC_SWITCH5_DEBOUNCE_TIME);
+		}
+		pr_debug("%s: HPHL ANC clear flag and enable ANC_EN\n",
+			__func__);
+		if (mbhc->mbhc_cb->update_anc_state)
+			mbhc->mbhc_cb->update_anc_state(mbhc->codec, true, 0);
+	}
+
+	if (test_and_clear_bit(WCD_MBHC_ANC1_OFF_ACK,
+				&mbhc->hph_anc_state)) {
+		pr_debug("%s: HPHR ANC clear flag and enable ANC_EN\n",
+			__func__);
+		if (mbhc->mbhc_cb->update_anc_state)
+			mbhc->mbhc_cb->update_anc_state(mbhc->codec, true, 1);
+	}
+/* HTC_AUD_END - HPKB29557 ANC feature */
+
 	mutex_lock(&mbhc->hphr_pa_lock);
 	if (test_and_clear_bit(WCD_MBHC_HPHR_PA_OFF_ACK,
 			       &mbhc->hph_pa_dac_state)) {
@@ -962,6 +538,30 @@ static void wcd_mbhc_clr_and_turnon_hph_padac(struct wcd_mbhc *mbhc)
 			 __func__);
 		usleep_range(wg_time * 1000, wg_time * 1000 + 50);
 	}
+
+/* HTC_AUD_START - HPKB29557 ANC feature */
+/* process anc first due to pop issue for HTC design */
+#if 0
+	if (test_and_clear_bit(WCD_MBHC_ANC0_OFF_ACK,
+				&mbhc->hph_anc_state)) {
+		usleep_range(20000, 20100);
+		pr_debug("%s: HPHL ANC clear flag and enable ANC_EN\n",
+			__func__);
+		if (mbhc->mbhc_cb->update_anc_state)
+			mbhc->mbhc_cb->update_anc_state(mbhc->codec, true, 0);
+	}
+
+	if (test_and_clear_bit(WCD_MBHC_ANC1_OFF_ACK,
+				&mbhc->hph_anc_state)) {
+		usleep_range(20000, 20100);
+		pr_debug("%s: HPHR ANC clear flag and enable ANC_EN\n",
+			__func__);
+		if (mbhc->mbhc_cb->update_anc_state)
+			mbhc->mbhc_cb->update_anc_state(mbhc->codec, true, 1);
+	}
+#endif
+/* HTC_AUD_END - HPKB29557 ANC feature */
+
 }
 
 static bool wcd_mbhc_is_hph_pa_on(struct wcd_mbhc *mbhc)
@@ -993,6 +593,19 @@ static void wcd_mbhc_set_and_turnoff_hph_padac(struct wcd_mbhc *mbhc)
 	}
 	WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_HPH_PA_EN, 0);
 	usleep_range(wg_time * 1000, wg_time * 1000 + 50);
+
+	if (mbhc->mbhc_cb->is_anc_on && mbhc->mbhc_cb->is_anc_on(mbhc)) {
+		usleep_range(20000, 20100);
+		pr_debug("%s ANC is on, setting ANC_OFF_ACK\n", __func__);
+		set_bit(WCD_MBHC_ANC0_OFF_ACK, &mbhc->hph_anc_state);
+		set_bit(WCD_MBHC_ANC1_OFF_ACK, &mbhc->hph_anc_state);
+		if (mbhc->mbhc_cb->update_anc_state) {
+			mbhc->mbhc_cb->update_anc_state(mbhc->codec, false, 0);
+			mbhc->mbhc_cb->update_anc_state(mbhc->codec, false, 1);
+		} else {
+			pr_debug("%s ANC is off\n", __func__);
+		}
+	}
 }
 
 int wcd_mbhc_get_impedance(struct wcd_mbhc *mbhc, uint32_t *zl,
@@ -1107,7 +720,8 @@ static void wcd_mbhc_report_plug(struct wcd_mbhc *mbhc, int insertion,
 		    jack_type == SND_JACK_LINEOUT) &&
 		    (mbhc->hph_status && mbhc->hph_status != jack_type)) {
 
-			if (mbhc->micbias_enable) {
+			if (mbhc->micbias_enable &&
+			    mbhc->hph_status == SND_JACK_HEADSET) {
 				if (mbhc->mbhc_cb->mbhc_micbias_control)
 					mbhc->mbhc_cb->mbhc_micbias_control(
 						codec, MIC_BIAS_2,
@@ -1619,7 +1233,9 @@ static void wcd_mbhc_update_fsm_source(struct wcd_mbhc *mbhc,
 		break;
 	case MBHC_PLUG_TYPE_HEADSET:
 	case MBHC_PLUG_TYPE_ANC_HEADPHONE:
-	case MBHC_PLUG_TYPE_AS_HEADSET: /* HTC_AUD - AS HS */
+/* HTC_AUD_START - AS HS */
+	case MBHC_PLUG_TYPE_AS_HEADSET:
+/* HTC_AUD_END */
 		if (!mbhc->is_hs_recording && !micbias2)
 			WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_BTN_ISRC_CTL, 3);
 		break;
@@ -1739,7 +1355,7 @@ static void wcd_correct_swch_plug(struct work_struct *work)
 	bool wrk_complete = false;
 	int pt_gnd_mic_swap_cnt = 0;
 	int no_gnd_mic_swap_cnt = 0;
-	bool is_pa_on = false, spl_hs = false;
+	bool is_pa_on = false, spl_hs = false, spl_hs_reported = false;
 	bool micbias2 = false;
 	bool micbias1 = false;
 	int ret = 0;
@@ -2061,6 +1677,16 @@ Set micbias_enable to faled if type is MBHC_PLUG_TYPE_HIGH_HPH to fix issue.
 /* HTC_AUD_END */
 			if (!(plug_type == MBHC_PLUG_TYPE_GND_MIC_SWAP)) {
 				plug_type = MBHC_PLUG_TYPE_HEADSET;
+				if (!spl_hs_reported &&
+				    spl_hs_count == WCD_MBHC_SPL_HS_CNT) {
+					spl_hs_reported = true;
+					WCD_MBHC_RSC_LOCK(mbhc);
+					wcd_mbhc_find_plug_and_report(mbhc,
+								    plug_type);
+					WCD_MBHC_RSC_UNLOCK(mbhc);
+					continue;
+				} else if (spl_hs_reported)
+					continue;
 				/*
 				 * Report headset only if not already reported
 				 * and if there is not button press without
@@ -2170,6 +1796,29 @@ exit:
 	    !mbhc->micbias_enable)
 		mbhc->mbhc_cb->mbhc_micbias_control(codec, MIC_BIAS_2,
 						    MICB_DISABLE);
+
+	/*
+	 * If plug type is corrected from special headset to headphone,
+	 * clear the micbias enable flag, set micbias back to 1.8V and
+	 * disable micbias.
+	 */
+	if (plug_type == MBHC_PLUG_TYPE_HEADPHONE &&
+	    mbhc->micbias_enable) {
+		if (mbhc->mbhc_cb->mbhc_micbias_control)
+			mbhc->mbhc_cb->mbhc_micbias_control(
+					codec, MIC_BIAS_2,
+					MICB_DISABLE);
+		if (mbhc->mbhc_cb->mbhc_micb_ctrl_thr_mic)
+			mbhc->mbhc_cb->mbhc_micb_ctrl_thr_mic(
+					codec,
+					MIC_BIAS_2, false);
+		if (mbhc->mbhc_cb->set_micbias_value) {
+			mbhc->mbhc_cb->set_micbias_value(codec);
+			WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_MICB_CTRL, 0);
+		}
+		mbhc->micbias_enable = false;
+	}
+
 	if (mbhc->mbhc_cb->micbias_enable_status) {
 		micbias1 = mbhc->mbhc_cb->micbias_enable_status(mbhc,
 								MIC_BIAS_1);
@@ -2366,251 +2015,10 @@ static void wcd_mbhc_swch_irq_handler(struct wcd_mbhc *mbhc)
 	pr_debug("%s: leave\n", __func__);
 }
 
-/* HTC_AUD_START - AS HS */
-static void htc_button_detection(struct wcd_mbhc *mbhc, bool enable)
-{
-	pr_info("%s: enable %d\n", __func__, enable);
-	if(enable) {
-		/* Enable HW FSM */
-		WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_FSM_EN, 1);
-	} else {
-		/* Disable HW FSM */
-		WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_FSM_EN, 0);
-	}
-
-	if (mbhc->mbhc_cb->mbhc_micbias_control) {
-		wcd_mbhc_update_fsm_source(mbhc, mbhc->current_plug);
-	} else {
-		wcd_enable_mbhc_supply(mbhc, mbhc->current_plug);
-	}
-}
-
-static int htc_headset_irq_handler(struct wcd_mbhc *mbhc){
-	struct htc_headset_config hs_cfg = mbhc->mbhc_cfg->htc_headset_cfg;
-	int retry = 0, insert = 0, ret = 0;
-
-	WCD_MBHC_RSC_LOCK(mbhc);
-
-	/* cancel pending button press */
-	if (wcd_cancel_btn_work(mbhc))
-		pr_info("%s: button press is canceled\n", __func__);
-
-	pr_info("%s: enter, current_plug=%d\n", __func__, mbhc->current_plug);
-	insert = !wcd_swch_level_remove(mbhc);
-	if (mbhc->current_plug == MBHC_PLUG_TYPE_NONE && insert) {
-		while(retry < HTC_AS_HEADSET_DETECT_RETRY) {
-			if (!gpio_get_value(hs_cfg.id_gpio[TYPEC_POSITION])) {
-				gpio_set_value(hs_cfg.switch_gpio[HEADSET_S3_0], 1);
-				gpio_set_value(hs_cfg.switch_gpio[HEADSET_S3_1], 1);
-				gpio_set_value(hs_cfg.switch_gpio[HEADSET_S4], 0);
-				usleep_range(HTC_AS_HEADSET_DEBOUNCE_TIME, HTC_AS_HEADSET_DEBOUNCE_TIME);
-				pr_info("%s: position flip\n", __func__);
-			}
-
-			if (gpio_get_value(hs_cfg.id_gpio[TYPEC_POSITION])) {
-				pr_info("%s headset switch status S3_0=%d S3_1=%d S4=%d S5=%d\n", __func__,
-					gpio_get_value(hs_cfg.switch_gpio[HEADSET_S3_0]),
-					gpio_get_value(hs_cfg.switch_gpio[HEADSET_S3_1]),
-					gpio_get_value(hs_cfg.switch_gpio[HEADSET_S4]),
-					gpio_get_value(hs_cfg.switch_gpio[HEADSET_S5]));
-				break;
-			}
-
-			gpio_set_value(hs_cfg.switch_gpio[HEADSET_S3_0], 0);
-			gpio_set_value(hs_cfg.switch_gpio[HEADSET_S3_1], 0);
-			gpio_set_value(hs_cfg.switch_gpio[HEADSET_S4], 1);
-			usleep_range(HTC_AS_HEADSET_DEBOUNCE_TIME, HTC_AS_HEADSET_DEBOUNCE_TIME);
-			pr_info("%s: retry=%d ID1=%d ID2=%d POSITION=%d\n",
-				__func__, retry++,
-				gpio_get_value(hs_cfg.id_gpio[TYPEC_ID1]),
-				gpio_get_value(hs_cfg.id_gpio[TYPEC_ID2]),
-				gpio_get_value(hs_cfg.id_gpio[TYPEC_POSITION]));
-		}
-
-		if (gpio_get_value(hs_cfg.id_gpio[TYPEC_POSITION])) {
-			mbhc->hph_status |= SND_JACK_HEADSET;
-			wcd_mbhc_jack_report(mbhc, &mbhc->headset_jack,
-					(mbhc->hph_status | SND_JACK_MECHANICAL),
-					WCD_MBHC_JACK_MASK);
-			pr_info("%s: Reporting insertion (%x)\n",
-				__func__, mbhc->hph_status);
-			mbhc->current_plug = MBHC_PLUG_TYPE_AS_HEADSET;
-			htc_button_detection(mbhc, true);
-		} else {
-			ret = -1;
-			pr_err("%s retry count = %d",__func__, retry);
-		}
-	} else if (mbhc->current_plug == MBHC_PLUG_TYPE_AS_HEADSET && !insert) {
-		mbhc->hph_status &= ~SND_JACK_HEADSET;
-		wcd_mbhc_jack_report(mbhc, &mbhc->headset_jack,
-				mbhc->hph_status, WCD_MBHC_JACK_MASK);
-		pr_info("%s: Reporting removal (%x)\n",
-				 __func__, mbhc->hph_status);
-		mbhc->current_plug = MBHC_PLUG_TYPE_NONE;
-		htc_button_detection(mbhc, false);
-	} else {
-		pr_err("%s: unknown mbhc->current_plug : %d insert %d hph_status %x\n",
-			__func__, mbhc->current_plug, insert, mbhc->hph_status);
-	}
-
-	if (!insert) {
-		gpio_set_value(hs_cfg.switch_gpio[HEADSET_S5],0);
-	}
-
-	/* Set the detection type appropriately */
-	WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_MECH_DETECTION_TYPE,
-				 !insert);
-
-	WCD_MBHC_RSC_UNLOCK(mbhc);
-
-	return ret;
-}
-
-static void htc_adapter_irq_handler(struct wcd_mbhc *mbhc){
-	struct htc_headset_config hs_cfg = mbhc->mbhc_cfg->htc_headset_cfg;
-	int adc = 0, insert = 0;
-
-	pr_info("%s: enter, current_plug=%d\n", __func__, mbhc->current_plug);
-
-	WCD_MBHC_RSC_LOCK(mbhc);
-
-	/* cancel pending button press */
-	if (wcd_cancel_btn_work(mbhc))
-		pr_info("%s: button press is canceled\n", __func__);
-
-	insert = !wcd_swch_level_remove(mbhc);
-	if (mbhc->current_plug == MBHC_PLUG_TYPE_NONE && insert) {
-		if (!gpio_get_value(hs_cfg.id_gpio[TYPEC_ID1])) {
-			gpio_set_value(hs_cfg.switch_gpio[HEADSET_S3_0], 1);
-			gpio_set_value(hs_cfg.switch_gpio[HEADSET_S3_1], 1);
-			gpio_set_value(hs_cfg.switch_gpio[HEADSET_S4], 0);
-			usleep_range(HTC_AS_HEADSET_DEBOUNCE_TIME, HTC_AS_HEADSET_DEBOUNCE_TIME);
-			pr_info("%s: position flip\n", __func__);
-		}
-		if (gpio_get_value(hs_cfg.id_gpio[TYPEC_ID1])) {
-			hs_cfg.get_adc_value(&adc, hs_cfg.adc_channel);
-#if 0 /* HTC_AUD - disable 3.5mm adapter */
-			if (adc > hs_cfg.adc_25mm_min) {
-				mbhc->current_plug = MBHC_PLUG_TYPE_25MM_HEADSET;
-				mbhc->hph_status |= SND_JACK_HEADSET;
-				wcd9xxx_jack_report(mbhc, &mbhc->headset_jack, mbhc->hph_status,
-						    WCD9XXX_JACK_MASK);
-				pr_info("%s: Reporting insertion (%x)\n",
-					__func__, mbhc->hph_status);
-			} else if (adc > hs_cfg.adc_35mm_min && adc < hs_cfg.adc_35mm_max) {
-				mbhc->current_plug = MBHC_PLUG_TYPE_35MM_HEADSET;
-			}
-			else {
-				pr_err("%s: adc is not in range (%d)\n", __func__, adc);
-			}
-#else
-			mbhc->current_plug = MBHC_PLUG_TYPE_25MM_HEADSET;
-			mbhc->hph_status |= SND_JACK_HEADSET;
-			wcd_mbhc_jack_report(mbhc, &mbhc->headset_jack,
-					mbhc->hph_status, WCD_MBHC_JACK_MASK);
-			pr_info("%s: Reporting insertion (%x)\n",
-						    __func__, mbhc->hph_status);
-#endif
-		} else {
-			pr_err("%s: should not be here: ID1=%d ID2=%d\n", __func__,
-				gpio_get_value(hs_cfg.id_gpio[TYPEC_ID1]),
-				gpio_get_value(hs_cfg.id_gpio[TYPEC_ID2]));
-		}
-#if 0 /* HTC_AUD - disable 3.5mm adapter */
-	} else if ((mbhc->current_plug == MBHC_PLUG_TYPE_25MM_HEADSET || mbhc->current_plug == MBHC_PLUG_TYPE_35MM_HEADSET) && !insert) {
-#else
-	} else if (mbhc->current_plug == MBHC_PLUG_TYPE_25MM_HEADSET && !insert) {
-#endif
-		mbhc->hph_status &= ~SND_JACK_HEADSET;
-		wcd_mbhc_jack_report(mbhc, &mbhc->headset_jack,
-				mbhc->hph_status, WCD_MBHC_JACK_MASK);
-		pr_info("%s: Reporting removal (%x)\n",
-				 __func__, mbhc->hph_status);
-		mbhc->current_plug = MBHC_PLUG_TYPE_NONE;
-	} else {
-		pr_err("%s: unknown mbhc->current_plug : %d insert %d hph_status %x\n",__func__, mbhc->current_plug, insert, mbhc->hph_status);
-	}
-
-	/* Set the detection type appropriately */
-	WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_MECH_DETECTION_TYPE,
-				 !insert);
-	WCD_MBHC_RSC_UNLOCK(mbhc);
-}
-
-static void enable_mic_bias(struct wcd_mbhc *mbhc, bool en)
-{
-	int rc = -1;
-
-	pr_info("%s: en %d\n", __func__, en);
-
-	if (en) {
-		if (mbhc->mbhc_cb->mbhc_micbias_control) {
-			mbhc->mbhc_cb->mbhc_micbias_control(mbhc->codec, MIC_BIAS_2, MICB_ENABLE);
-			if (mbhc->mbhc_cb->mbhc_micb_ctrl_thr_mic) {
-				rc = mbhc->mbhc_cb->mbhc_micb_ctrl_thr_mic(mbhc->codec,
-								MIC_BIAS_2, true);
-				if (rc) {
-					pr_err("%s: Micbias control for thr mic failed, rc: %d\n",
-						__func__, rc);
-				}
-			} else {
-				pr_err("%s: no mbhc_micb_ctrl_thr_mic\n", __func__);
-			}
-		} else {
-			pr_err("%s: no mbhc_micbias_control\n", __func__);
-		}
-	} else {
-		if (mbhc->mbhc_cb->mbhc_micbias_control) {
-			mbhc->mbhc_cb->mbhc_micbias_control(mbhc->codec, MIC_BIAS_2, MICB_DISABLE);
-			if (mbhc->mbhc_cb->mbhc_micb_ctrl_thr_mic) {
-				rc = mbhc->mbhc_cb->mbhc_micb_ctrl_thr_mic(mbhc->codec,
-								MIC_BIAS_2, false);
-				if (rc) {
-					pr_err("%s: Micbias control for thr mic failed, rc: %d\n",
-						__func__, rc);
-				}
-			} else {
-				pr_err("%s: no mbhc_micb_ctrl_thr_mic\n", __func__);
-			}
-		} else {
-			pr_err("%s: no mbhc_micbias_control\n", __func__);
-		}
-	}
-}
-
-void set_fsa3030_accessory(struct wcd_mbhc *mbhc, bool en)
-{
-	struct htc_headset_config hs_cfg;
-
-	if(!mbhc) {
-		pr_err("%s: mbhc is NULL\n", __func__);
-		return;
-	}
-
-	pr_info("%s: rara mode %d\n", __func__, en);
-
-	hs_cfg = mbhc->mbhc_cfg->htc_headset_cfg;
-
-	if (en) {
-		/* accessory mode */
-		gpio_set_value(hs_cfg.fsa3030_sel0, 1);
-		gpio_set_value(hs_cfg.fsa3030_sel1, 0);
-	} else{
-		/* USB mode */
-		gpio_set_value(hs_cfg.fsa3030_sel0, 0);
-		gpio_set_value(hs_cfg.fsa3030_sel1, 1);
-	}
-}
-/* HTC_AUD_END */
-
 static irqreturn_t wcd_mbhc_mech_plug_detect_irq(int irq, void *data)
 {
 	int r = IRQ_HANDLED;
 	struct wcd_mbhc *mbhc = data;
-/* HTC_AUD_START - AS HS */
-	int insert = -1, ret = 0;
-	struct htc_headset_config hs_cfg = mbhc->mbhc_cfg->htc_headset_cfg;
-/* HTC_AUD_END */
 
 //HTC_AUD_START - debug purpose
 #if 0
@@ -2627,148 +2035,7 @@ static irqreturn_t wcd_mbhc_mech_plug_detect_irq(int irq, void *data)
 #if 0
 		wcd_mbhc_swch_irq_handler(mbhc);
 #else
-		if (hs_cfg.htc_headset_init) {
-			WCD_MBHC_RSC_LOCK(mbhc);
-			if (wcd_cancel_btn_work(mbhc)) {
-				pr_err("%s: button press is canceled\n", __func__);
-			}
-			WCD_MBHC_RSC_UNLOCK(mbhc);
-
-			insert = !wcd_swch_level_remove(mbhc);
-			if (insert) {
-				gpio_set_value(hs_cfg.switch_gpio[HEADSET_S5], 1);
-				gpio_set_value(hs_cfg.ext_micbias, 1);
-				gpio_set_value(hs_cfg.switch_gpio[HEADSET_S3_0], 0);
-				gpio_set_value(hs_cfg.switch_gpio[HEADSET_S3_1], 0);
-				gpio_set_value(hs_cfg.switch_gpio[HEADSET_S4], 1);
-				enable_mic_bias(mbhc, true);
-				usleep_range(HTC_AS_HEADSET_DEBOUNCE_TIME, HTC_AS_HEADSET_DEBOUNCE_TIME);
-				pr_info("%s: ID1=%d ID2=%d POSITION=%d\n", __func__,
-					gpio_get_value(hs_cfg.id_gpio[TYPEC_ID1]),
-					gpio_get_value(hs_cfg.id_gpio[TYPEC_ID2]),
-					gpio_get_value(hs_cfg.id_gpio[TYPEC_POSITION]));
-
-				if (gpio_get_value(hs_cfg.id_gpio[TYPEC_ID1]) & gpio_get_value(hs_cfg.id_gpio[TYPEC_ID2]) || mbhc->current_plug == MBHC_PLUG_TYPE_AS_HEADSET) {
-					ret = htc_headset_irq_handler(mbhc);
-					enable_mic_bias(mbhc, false);
-#if 0 /* HTC_AUD - disable 3.5mm adapter */
-				} else if (gpio_get_value(hs_cfg.id_gpio[TYPEC_ID1]) ^ gpio_get_value(hs_cfg.id_gpio[TYPEC_ID2]) || mbhc->current_plug == MBHC_PLUG_TYPE_25MM_HEADSET || mbhc->current_plug == MBHC_PLUG_TYPE_35MM_HEADSET){
-#else
-				} else if (gpio_get_value(hs_cfg.id_gpio[TYPEC_ID1]) ^ gpio_get_value(hs_cfg.id_gpio[TYPEC_ID2]) || mbhc->current_plug == MBHC_PLUG_TYPE_25MM_HEADSET) {
-#endif
-					htc_adapter_irq_handler(mbhc);
-					gpio_set_value(hs_cfg.switch_gpio[HEADSET_S5],0);
-					enable_mic_bias(mbhc, false);
-				} else {
-					pr_info("%s: mbhc->current_plug : %d insert %d hph_status %x\n",__func__, mbhc->current_plug, insert, mbhc->hph_status);
-					enable_mic_bias(mbhc, false);
-					gpio_set_value(hs_cfg.switch_gpio[HEADSET_S5],0);
-				}
-				gpio_set_value(hs_cfg.ext_micbias,0);
-
-				/* set switch to accessory mode */
-				set_fsa3030_accessory(mbhc, true);
-
-				if (ret < 0) {
-					pr_err("AS headset can't be identified during 3 seconds "); // Plug in AS headset when pressing button
-					mbhc->mbhc_cb->lock_sleep(mbhc, false);
-					return IRQ_HANDLED;
-				}
-			} else {
-				/* set switch to usb mode */
-				set_fsa3030_accessory(mbhc, false);
-
-				pr_info("%s: Remove mbhc->current_plug : %d insert %d hph_status %x\n",__func__, mbhc->current_plug, insert, mbhc->hph_status);
-				/* set switch gpio to default value */
-				gpio_set_value(hs_cfg.switch_gpio[HEADSET_S5], 0);
-				gpio_set_value(hs_cfg.ext_micbias, 0);
-				gpio_set_value(hs_cfg.switch_gpio[HEADSET_S3_0], 0);
-				gpio_set_value(hs_cfg.switch_gpio[HEADSET_S3_1], 1);
-				gpio_set_value(hs_cfg.switch_gpio[HEADSET_S4], 0);
-
-				if (mbhc->current_plug == MBHC_PLUG_TYPE_25MM_HEADSET) {
-					WCD_MBHC_RSC_LOCK(mbhc);
-					mbhc->hph_status &= ~SND_JACK_HEADSET;
-					wcd_mbhc_jack_report(mbhc, &mbhc->headset_jack,
-						mbhc->hph_status, WCD_MBHC_JACK_MASK);
-					pr_info("%s: Reporting removal (%x)\n",
-						__func__, mbhc->hph_status);
-					mbhc->current_plug = MBHC_PLUG_TYPE_NONE;
-					/* Set the detection type appropriately */
-					WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_MECH_DETECTION_TYPE,
-										!insert);
-					WCD_MBHC_RSC_UNLOCK(mbhc);
-					mbhc->mbhc_cb->lock_sleep(mbhc, false);
-					return IRQ_HANDLED;
-				} else if (mbhc->current_plug == MBHC_PLUG_TYPE_AS_HEADSET) {
-					WCD_MBHC_RSC_LOCK(mbhc);
-					mbhc->hph_status &= ~SND_JACK_HEADSET;
-					wcd_mbhc_jack_report(mbhc, &mbhc->headset_jack,
-						mbhc->hph_status, WCD_MBHC_JACK_MASK);
-					pr_info("%s: Reporting removal (%x)\n",
-							 __func__, mbhc->hph_status);
-					mbhc->current_plug = MBHC_PLUG_TYPE_NONE;
-					htc_button_detection(mbhc, false);
-					gpio_set_value(hs_cfg.switch_gpio[HEADSET_S5],0);
-					/* Set the detection type appropriately */
-					WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_MECH_DETECTION_TYPE,
-										!insert);
-					WCD_MBHC_RSC_UNLOCK(mbhc);
-					mbhc->mbhc_cb->lock_sleep(mbhc, false);
-/* HTC_AUD_START */
-					disable_anc_mic(mbhc);
-/* HTC_AUD_END */
-					return IRQ_HANDLED;
-				}
-			}
-
-/* HTC_AUD_START - disable 3.5mm adapter */
-			if (0) {
-				if (mbhc->current_plug != MBHC_PLUG_TYPE_25MM_HEADSET && mbhc->current_plug != MBHC_PLUG_TYPE_AS_HEADSET) {
-					pr_info("%s: call mbhc swch%d\n", __func__, r);
-					wcd_mbhc_swch_irq_handler(mbhc);
-				}
-			}
-/* HTC_AUD_END */
-
-/* HTC_AUD_START - report unsupport if it's non HTC analog adapter */
-			if (mbhc->current_plug != MBHC_PLUG_TYPE_25MM_HEADSET && mbhc->current_plug != MBHC_PLUG_TYPE_AS_HEADSET) {
-				if (insert) {
-					switch_set_state(&mbhc->unsupported_type, 1);
-					pr_info("%s: Reporting insertion unsupported device \n", __func__);
-				} else {
-					switch_set_state(&mbhc->unsupported_type, 0);
-					pr_info("%s: Reporting removal unsupported device \n", __func__);
-
-					/* set switch gpio to default value */
-					gpio_set_value(hs_cfg.switch_gpio[HEADSET_S5], 0);
-					gpio_set_value(hs_cfg.ext_micbias, 0);
-					gpio_set_value(hs_cfg.switch_gpio[HEADSET_S3_0], 0);
-					gpio_set_value(hs_cfg.switch_gpio[HEADSET_S3_1], 1);
-					gpio_set_value(hs_cfg.switch_gpio[HEADSET_S4], 0);
-				}
-				WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_MECH_DETECTION_TYPE, !insert);
-			}
-/* HTC_AUD_END */
-
-			if (insert >= 0) {
-				if (!insert && mbhc->current_plug != MBHC_PLUG_TYPE_NONE) {
-					WCD_MBHC_RSC_LOCK(mbhc);
-					pr_err("%s: force remove hph_status=%d, current_plug=%d\n",
-						__func__, mbhc->hph_status, mbhc->current_plug);
-					mbhc->current_plug = MBHC_PLUG_TYPE_NONE;
-					mbhc->hph_status = 0;
-					wcd_mbhc_jack_report(mbhc, &mbhc->headset_jack,
-						mbhc->hph_status, WCD_MBHC_JACK_MASK);
-					pr_info("%s %d: Reporting removal (%x)\n",
-						__func__, __LINE__, mbhc->hph_status);
-					htc_button_detection(mbhc, false);
-					/* Set the detection type appropriately */
-					WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_MECH_DETECTION_TYPE, !insert);
-					WCD_MBHC_RSC_UNLOCK(mbhc);
-				}
-			}
-		}
+		r = htc_typec_hs_plug_detect_irq(mbhc);
 #endif
 /* HTC_AUD_END */
 		mbhc->mbhc_cb->lock_sleep(mbhc, false);
@@ -2829,7 +2096,7 @@ static irqreturn_t wcd_mbhc_hs_ins_irq(int irq, void *data)
 	struct wcd_mbhc *mbhc = data;
 	bool detection_type = 0, hphl_sch = 0, mic_sch = 0;
 	u16 elect_result = 0;
-/* HTC_AUD_START - fix klockwork */
+/* HTC_AUD_START - fix klocwork */
 #if 0
 	static u16 hphl_trigerred;
 	static u16 mic_trigerred;
@@ -2938,7 +2205,7 @@ static irqreturn_t wcd_mbhc_hs_rem_irq(int irq, void *data)
 {
 	struct wcd_mbhc *mbhc = data;
 	u8 hs_comp_result = 0, hphl_sch = 0, mic_sch = 0;
-/* HTC_AUD_START - klockwork */
+/* HTC_AUD_START - klocwork */
 #if 0
 	static u16 hphl_trigerred;
 	static u16 mic_trigerred;
@@ -3523,7 +2790,7 @@ static int wcd_mbhc_initialise(struct wcd_mbhc *mbhc)
 
 	INIT_WORK(&mbhc->correct_plug_swch, wcd_correct_swch_plug);
 
-	init_completion(&mbhc->btn_press_compl);
+	reinit_completion(&mbhc->btn_press_compl);
 
 	WCD_MBHC_RSC_UNLOCK(mbhc);
 	pr_debug("%s: leave\n", __func__);
@@ -4039,10 +3306,35 @@ void wcd_mbhc_stop(struct wcd_mbhc *mbhc)
 EXPORT_SYMBOL(wcd_mbhc_stop);
 
 /* HTC_AUD_START - AS HS */
-/* report unsupport if it's non HTC analog adapter */
-static ssize_t headset_print_name(struct switch_dev *sdev, char *buf)
+void __wcd_mbhc_update_fsm_source(struct wcd_mbhc *mbhc,
+				enum wcd_mbhc_plug_type plug_type)
 {
-	return snprintf(buf, 20, "Unsupported_device\n");
+	wcd_mbhc_update_fsm_source(mbhc, plug_type);
+}
+void __wcd_enable_mbhc_supply(struct wcd_mbhc *mbhc,
+				enum wcd_mbhc_plug_type plug_type)
+{
+	wcd_enable_mbhc_supply(mbhc, plug_type);
+}
+int __wcd_cancel_btn_work(struct wcd_mbhc *mbhc)
+{
+	return wcd_cancel_btn_work(mbhc);
+}
+void __wcd_mbhc_jack_report(struct wcd_mbhc *mbhc, int status, int mask)
+{
+	wcd_mbhc_jack_report(mbhc, &mbhc->headset_jack, status, mask);
+}
+void __wcd_mbhc_clr_and_turnon_hph_padac(struct wcd_mbhc *mbhc)
+{
+	wcd_mbhc_clr_and_turnon_hph_padac(mbhc);
+}
+void __wcd_mbhc_set_and_turnoff_hph_padac(struct wcd_mbhc *mbhc)
+{
+	wcd_mbhc_set_and_turnoff_hph_padac(mbhc);
+}
+void __wcd_mbhc_swch_irq_handler(struct wcd_mbhc *mbhc)
+{
+	wcd_mbhc_swch_irq_handler(mbhc);
 }
 /* HTC_AUD_END */
 
@@ -4169,6 +3461,7 @@ int wcd_mbhc_init(struct wcd_mbhc *mbhc, struct snd_soc_codec *codec,
 	}
 	mutex_init(&mbhc->hphl_pa_lock);
 	mutex_init(&mbhc->hphr_pa_lock);
+	init_completion(&mbhc->btn_press_compl);
 
 	/* Register event notifier */
 	mbhc->nblock.notifier_call = wcd_event_notify;
@@ -4259,27 +3552,10 @@ int wcd_mbhc_init(struct wcd_mbhc *mbhc, struct snd_soc_codec *codec,
 		goto err_hphr_ocp_irq;
 	}
 
-/* HTC_AUD_START - AS HS */
-/* report unsupport if it's non HTC analog adapter */
-        mbhc->unsupported_type.name = "Unsupported_device";
-        mbhc->unsupported_type.print_name = headset_print_name;
-
-        ret = switch_dev_register(&mbhc->unsupported_type);
-        if (ret < 0) {
-            pr_err("failed to register headset switch device!\n");
-        }
+/* HTC_AUD_START */
+	htc_typec_hs_set_mbhc(mbhc);
 /* HTC_AUD_END */
 
-/* HTC_AUD_START - for simulate */
-	ret = register_attributes(mbhc);
-	if (ret)
-		pr_err("%s: register debug attributes fail errcode = %d\n", __func__, ret);
-
-	__MBHC = mbhc;
-	__MBHC->debug_reg_count = 0;
-/* HTC_AUD_END */
-
-	pr_err("%s: ret %d --\n", __func__, ret); /* HTC_AUD */
 	pr_debug("%s: leave ret %d\n", __func__, ret);
 	return ret;
 
@@ -4323,7 +3599,6 @@ void wcd_mbhc_deinit(struct wcd_mbhc *mbhc)
 	if (mbhc->mbhc_cb && mbhc->mbhc_cb->register_notifier)
 		mbhc->mbhc_cb->register_notifier(mbhc, &mbhc->nblock, false);
 	wcd_cancel_hs_detect_plug(mbhc, &mbhc->correct_plug_swch);
-	unregister_attributes(mbhc); /* HTC_AUD */
 	mutex_destroy(&mbhc->codec_resource_lock);
 	mutex_destroy(&mbhc->hphl_pa_lock);
 	mutex_destroy(&mbhc->hphr_pa_lock);

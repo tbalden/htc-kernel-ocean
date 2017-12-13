@@ -775,7 +775,7 @@ config SND_SOC_WCD_DSP_MGR
 	tristate
 
 config SND_SOC_WCD_SPI
-	depends on CONFIG_SPI
+	depends on SPI
 	tristate
 
 config SND_SOC_WL1273
@@ -995,6 +995,24 @@ config SND_SOC_MSM_HDMI_CODEC_RX
         supports hdmi panel.
 
 #HTC_AUD_START
+config SND_SOC_TAS2557
+	tristate "Texas Instruments TAS2557 SmartAmp(R)"
+
+config TAS2557_REGMAP
+	bool "Use of RegMap API"
+	depends on SND_SOC_TAS2557
+	default y
+
+config TAS2557_CODEC
+	bool "Codec Driver support"
+	depends on SND_SOC_TAS2557
+	default y
+
+config TAS2557_MISC
+	bool "Misc Driver support"
+	depends on SND_SOC_TAS2557
+	default y
+
 config SND_SOC_TAS2557_STEREO
 	tristate "Texas Instruments TAS2557 SmartAmp(R)"
 

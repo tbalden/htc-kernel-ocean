@@ -199,7 +199,4 @@ extern int tavil_codec_enable_interp_clk(struct snd_soc_codec *codec,
 extern struct tavil_dsd_config *tavil_get_dsd_config(struct snd_soc_codec *);
 extern int tavil_codec_info_create_codec_entry(struct snd_info_entry *,
 					       struct snd_soc_codec *);
-/* HTC_AUD_START - AS HS 2.0 */
-extern int tavil_get_headsetType(struct snd_soc_codec *codec);
-/* HTC_AUD_END */
 #endif
