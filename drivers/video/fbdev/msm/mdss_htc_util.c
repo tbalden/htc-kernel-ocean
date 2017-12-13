@@ -25,18 +25,26 @@
 #include "mdss_mdp.h"
 #include "mdss_panel.h"
 
+#ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_DSX_ESD_DETECTION
+	extern void lcm_rst_callback_register( void (*lcm_rst_func)(void) );
+#endif
+
 struct attribute_status htc_attr_status[] = {
 	{"cabc_level_ctl", 0, 0, 0},
 	{"burst_switch", 0, 0, 0},
-	{"color_temp_ctl", UNDEF_VALUE, UNDEF_VALUE, UNDEF_VALUE},
-	{"bklt_cali_enable", UNDEF_VALUE, UNDEF_VALUE, UNDEF_VALUE},
-	{"disp_cali_enable", 0, 0, 0},
+	{"color_temp_ctl", 8, UNDEF_VALUE, UNDEF_VALUE},
+	{"bklt_cali_enable", 1, UNDEF_VALUE, UNDEF_VALUE},
+	{"disp_cali_enable", 1, 0, 0},
+	{"color_profile_ctl", 0, 0, 0},
 };
 
 #define DEBUG_BUF   2048
 #define MIN_COUNT   9
 #define DCS_MAX_CNT   128
 
+static struct delayed_work dimming_work;
+static void dimming_do_work(struct work_struct *work);
+static struct msm_fb_data_type *g_mfd = NULL;
 static char debug_buf[DEBUG_BUF];
 struct mdss_dsi_ctrl_pdata *ctrl_instance = NULL;
 static char dcs_cmds[DCS_MAX_CNT];
@@ -136,21 +144,61 @@ static ssize_t dsi_cmd_write(
 	return count;
 }
 
+
+static void htc_report_panel_dead(void)
+{
+	if (g_mfd){
+		mdss_fb_report_panel_dead(g_mfd);
+		pr_err("%s:do panel reset\n", __func__);
+	}else{
+		pr_err("%s:no mfd resource, skip panel reset\n", __func__);
+	}
+
+}
+
+static ssize_t panel_dead_write( struct file *file, const char __user *buff,
+												size_t count,loff_t *ppos)
+{
+	unsigned long res;
+	int rc;
+
+	if (copy_from_user(debug_buf, buff, count))
+		return -EFAULT;
+
+	rc = kstrtoul(debug_buf, 10, &res);
+	if (rc) {
+		pr_err("invalid parameter, %s %d\n", buff, rc);
+		count = -EINVAL;
+		goto err_out;
+	}
+
+	if (res == 1){
+		htc_report_panel_dead();
+	}
+
+err_out:
+	return count;
+}
+
 static const struct file_operations dsi_cmd_fops = {
 	.write = dsi_cmd_write,
 };
 
+static const struct file_operations panel_dead_fops = {
+	.write = panel_dead_write,
+};
+
 void htc_debugfs_init(struct msm_fb_data_type *mfd)
 {
-	struct mdss_panel_data *pdata;
 	struct dentry *dent = debugfs_create_dir("htc_debug", NULL);
 
-	pr_info("%s\n", __func__);
+	if (mfd->panel_info->pdest != DISPLAY_1)
+		return;
 
-	pdata = dev_get_platdata(&mfd->pdev->dev);
+	if (!g_mfd)
+		g_mfd = mfd;
 
-	ctrl_instance = container_of(pdata, struct mdss_dsi_ctrl_pdata,
-						panel_data);
+	INIT_DELAYED_WORK(&dimming_work, dimming_do_work);
 
 	if (IS_ERR(dent)) {
 		pr_err(KERN_ERR "%s(%d): debugfs_create_dir fail, error %ld\n",
@@ -158,13 +206,20 @@ void htc_debugfs_init(struct msm_fb_data_type *mfd)
 		return;
 	}
 
-	if (debugfs_create_file("dsi_cmd", 0644, dent, 0, &dsi_cmd_fops)
+	if (debugfs_create_file("report_panel_dead", 0644, dent, 0, &panel_dead_fops)
 			== NULL) {
 		pr_err(KERN_ERR "%s(%d): debugfs_create_file: index fail\n",
 			__FILE__, __LINE__);
-		return;
 	}
+
 	return;
+}
+
+void htc_debugfs_deinit(struct msm_fb_data_type *mfd){
+	if (mfd->panel_info->pdest == DISPLAY_1) {
+		ctrl_instance = NULL;
+		g_mfd = NULL;
+	}
 }
 
 static struct calibration_gain aux_gain;
@@ -237,6 +292,24 @@ static ssize_t camera_bl_show(struct device *dev,
 {
 	ssize_t ret =0;
 	ret = scnprintf(buf, PAGE_SIZE, "%s%u\n", "BL_CAM_MIN=", camera_backlight_value);
+	return ret;
+}
+
+static unsigned hal_color_feature_enabled = 0;
+static ssize_t hal_color_feature_enabled_show(struct device *dev,
+        struct device_attribute *attr, char *buf)
+{
+	ssize_t ret =0;
+	ret = scnprintf(buf, PAGE_SIZE, "%u\n", hal_color_feature_enabled);
+	return ret;
+}
+
+static unsigned ddic_color_mode_supported = 0;
+static ssize_t ddic_color_mode_supported_show(struct device *dev,
+        struct device_attribute *attr, char *buf)
+{
+	ssize_t ret =0;
+	ret = scnprintf(buf, PAGE_SIZE, "%u\n", ddic_color_mode_supported);
 	return ret;
 }
 
@@ -449,19 +522,25 @@ static DEVICE_ATTR(backlight_info, S_IRUGO, camera_bl_show, NULL);
 static DEVICE_ATTR(cabc_level_ctl, S_IRUGO | S_IWUSR, attrs_show, attr_store);
 static DEVICE_ATTR(burst_switch, S_IRUGO | S_IWUSR, attrs_show, attr_store);
 static DEVICE_ATTR(color_temp_ctl, S_IRUGO | S_IWUSR, attrs_show, attr_store);
+static DEVICE_ATTR(color_profile_ctl, S_IRUGO | S_IWUSR, attrs_show, attr_store);
 static DEVICE_ATTR(bklt_cali, S_IRUGO | S_IWUSR, bklt_gain_show, bklt_gain_store);
 static DEVICE_ATTR(bklt_cali_enable, S_IRUGO | S_IWUSR, attrs_show, attr_store);
 static DEVICE_ATTR(disp_cali, S_IRUGO | S_IWUSR, rgb_gain_show, rgb_gain_store);
 static DEVICE_ATTR(disp_cali_enable, S_IRUGO | S_IWUSR, attrs_show, attr_store);
+static DEVICE_ATTR(hal_disp_color_enable, S_IRUGO, hal_color_feature_enabled_show, NULL);
+static DEVICE_ATTR(ddic_color_mode_supported, S_IRUGO, ddic_color_mode_supported_show, NULL);
 static struct attribute *htc_extend_attrs[] = {
 	&dev_attr_backlight_info.attr,
 	&dev_attr_cabc_level_ctl.attr,
 	&dev_attr_burst_switch.attr,
 	&dev_attr_color_temp_ctl.attr,
+	&dev_attr_color_profile_ctl.attr,
 	&dev_attr_bklt_cali.attr,
 	&dev_attr_bklt_cali_enable.attr,
 	&dev_attr_disp_cali.attr,
 	&dev_attr_disp_cali_enable.attr,
+	&dev_attr_hal_disp_color_enable.attr,
+	&dev_attr_ddic_color_mode_supported.attr,
 	NULL,
 };
 
@@ -810,3 +889,236 @@ void htc_set_color_temp(struct msm_fb_data_type *mfd, bool force)
 	pr_info("%s: color temp mode=%d\n", __func__, htc_attr_status[COLOR_TEMP_INDEX].cur_value);
 	return;
 }
+
+void htc_set_color_profile(struct mdss_panel_data *pdata, bool force)
+{
+	struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
+	struct dcs_cmd_req cmdreq;
+
+	ctrl_pdata = container_of(pdata, struct mdss_dsi_ctrl_pdata,
+			panel_data);
+
+	if (!ctrl_pdata->color_default_cmds.cmd_cnt || !ctrl_pdata->color_srgb_cmds.cmd_cnt)
+		return;
+
+	if ((htc_attr_status[COLOR_PROFILE_INDEX].req_value != SRGB_MODE) && (htc_attr_status[COLOR_PROFILE_INDEX].req_value != DEFAULT_MODE))
+		return;
+
+	if (!force && (htc_attr_status[COLOR_PROFILE_INDEX].req_value == htc_attr_status[COLOR_PROFILE_INDEX].cur_value))
+		return;
+
+	memset(&cmdreq, 0, sizeof(cmdreq));
+
+	if (htc_attr_status[COLOR_PROFILE_INDEX].req_value == SRGB_MODE) {
+		cmdreq.cmds = ctrl_pdata->color_srgb_cmds.cmds;
+		cmdreq.cmds_cnt = ctrl_pdata->color_srgb_cmds.cmd_cnt;
+	} else {
+		cmdreq.cmds = ctrl_pdata->color_default_cmds.cmds;
+		cmdreq.cmds_cnt = ctrl_pdata->color_default_cmds.cmd_cnt;
+	}
+
+	if (force)
+		cmdreq.flags = CMD_REQ_COMMIT | CMD_REQ_LP_MODE;
+	else
+		cmdreq.flags = CMD_REQ_COMMIT | CMD_CLK_CTRL;
+	cmdreq.rlen = 0;
+	cmdreq.cb = NULL;
+
+	mdss_dsi_cmdlist_put(ctrl_pdata, &cmdreq);
+
+	htc_attr_status[COLOR_PROFILE_INDEX].cur_value = htc_attr_status[COLOR_PROFILE_INDEX].req_value;
+	pr_info("%s: color profile mode=%d\n", __func__, htc_attr_status[COLOR_PROFILE_INDEX].cur_value);
+	return;
+}
+
+static DEFINE_MUTEX(dsi_notify_sem);
+int dsi_register_notifier(struct dsi_status_notifier *notifier)
+{
+	if (!notifier || !notifier->name || !notifier->func) {
+		pr_err("%s: invalid parameter\n",__func__);
+		return -EINVAL;
+	}
+
+	mutex_lock(&dsi_notify_sem);
+	list_add(&notifier->dsi_notifier_link,
+		&g_dsi_notifier_list);
+	mutex_unlock(&dsi_notify_sem);
+	return 0;
+}
+EXPORT_SYMBOL(dsi_register_notifier);
+
+void send_dsi_status_notify(int status)
+{
+	static struct dsi_status_notifier *dsi_notifier;
+
+	mutex_lock(&dsi_notify_sem);
+	list_for_each_entry(dsi_notifier,
+		&g_dsi_notifier_list,
+		dsi_notifier_link) {
+		dsi_notifier->func(status);
+	}
+	mutex_unlock(&dsi_notify_sem);
+
+	pr_info("%s: status=%d\n",__func__, status);
+}
+
+void htc_vreg_vol_switch(struct mdss_dsi_ctrl_pdata *ctrl_pdata, bool enable)
+{
+	int ret = 0;
+
+	if (ctrl_pdata->lcmio_src_vreg.vreg)
+	{
+		if (ctrl_pdata->lcmio_src_enabled == enable)
+			return;
+
+		if (enable) {
+			regulator_set_voltage(
+				ctrl_pdata->lcmio_src_vreg.vreg,
+				ctrl_pdata->lcmio_src_vreg.on_min_voltage,
+				ctrl_pdata->lcmio_src_vreg.max_voltage);
+			ret = regulator_enable(ctrl_pdata->lcmio_src_vreg.vreg);
+		} else {
+			ret = regulator_disable(ctrl_pdata->lcmio_src_vreg.vreg);
+			regulator_set_voltage(
+				ctrl_pdata->lcmio_src_vreg.vreg,
+				ctrl_pdata->lcmio_src_vreg.off_min_voltage,
+				ctrl_pdata->lcmio_src_vreg.max_voltage);
+			regulator_set_load(ctrl_pdata->lcmio_src_vreg.vreg, 0);
+		}
+
+		if (ret < 0) {
+			pr_err("%pS->%s: %s %s failed\n",
+					__builtin_return_address(0), __func__,
+					ctrl_pdata->lcmio_src_vreg.vreg_name,
+					enable?"enable":"disable");
+		} else
+			ctrl_pdata->lcmio_src_enabled = enable;
+	}
+}
+
+void htc_vreg_init(struct platform_device *ctrl_pdev,
+	struct mdss_dsi_ctrl_pdata *ctrl_pdata)
+{
+	int rc = 0;
+
+	if (ctrl_pdata->lcmio_src_vreg.vreg_name && ctrl_pdata->lcmio_src_vreg.on_min_voltage &&
+			ctrl_pdata->lcmio_src_vreg.off_min_voltage && ctrl_pdata->lcmio_src_vreg.max_voltage)
+	{
+		ctrl_pdata->lcmio_src_vreg.vreg = regulator_get(&ctrl_pdev->dev,
+				ctrl_pdata->lcmio_src_vreg.vreg_name);
+
+		rc = PTR_RET(ctrl_pdata->lcmio_src_vreg.vreg);
+		if (rc) {
+			pr_err("%pS->%s: %s get failed. rc=%d\n",
+					__builtin_return_address(0), __func__,
+					ctrl_pdata->lcmio_src_vreg.vreg_name, rc);
+		} else {
+			regulator_set_voltage(
+				ctrl_pdata->lcmio_src_vreg.vreg,
+				ctrl_pdata->lcmio_src_vreg.on_min_voltage,
+				ctrl_pdata->lcmio_src_vreg.max_voltage);
+			rc = regulator_enable(ctrl_pdata->lcmio_src_vreg.vreg);
+			if (rc < 0) {
+				pr_err("%pS->%s: %s enable failed\n",
+					__builtin_return_address(0), __func__,
+					ctrl_pdata->lcmio_src_vreg.vreg_name);
+			} else
+				ctrl_pdata->lcmio_src_enabled = true;
+		}
+	}
+}
+
+
+void htc_mdss_dsi_parse_esd_params(struct device_node *np)
+{
+
+	int rc;
+	const char *string;
+
+	rc = of_property_read_string(np,"htc,esd-status-check-mode", &string);
+
+	if (!rc){
+
+		if (!strcmp(string, "tp_reg_check")) {
+#ifdef	CONFIG_TOUCHSCREEN_SYNAPTICS_DSX_ESD_DETECTION
+			lcm_rst_callback_register(htc_report_panel_dead);
+#endif
+		}else{
+			pr_err("No valid htc esd-status-check-mode string\n");
+		}
+
+	}else{
+		pr_err("No valid htc esd-status-check-mode property in DTS \n");
+	}
+
+}
+
+
+void htc_hal_color_feature_enabled(bool enabled)
+{
+	if (enabled){
+		hal_color_feature_enabled = 1;
+	}
+}
+
+void htc_ddic_color_mode_supported(bool enabled)
+{
+	if (enabled){
+		ddic_color_mode_supported = 1;
+	}
+}
+
+static void dimming_do_work(struct work_struct *work)
+{
+	struct mdss_panel_data *pdata;
+	struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
+	struct dcs_cmd_req cmdreq;
+
+	if (!g_mfd) {
+		pr_err("%s no mfd resource \n" , __func__);
+		return;
+	}
+
+	pdata = dev_get_platdata(&g_mfd->pdev->dev);
+
+	ctrl_pdata = container_of(pdata, struct mdss_dsi_ctrl_pdata,
+					panel_data);
+
+	memset(&cmdreq, 0, sizeof(cmdreq));
+
+	cmdreq.cmds = ctrl_pdata->dimming_on_cmds.cmds;
+	cmdreq.cmds_cnt = ctrl_pdata->dimming_on_cmds.cmd_cnt;
+	cmdreq.flags = CMD_REQ_COMMIT | CMD_CLK_CTRL;
+	cmdreq.rlen = 0;
+	cmdreq.cb = NULL;
+
+	mdss_dsi_cmdlist_put(ctrl_pdata, &cmdreq);
+
+	pr_debug("dimming on\n");
+}
+
+void htc_dimming_on(struct msm_fb_data_type *mfd)
+{
+	struct mdss_panel_data *pdata;
+	struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
+
+	pdata = dev_get_platdata(&mfd->pdev->dev);
+
+	ctrl_pdata = container_of(pdata, struct mdss_dsi_ctrl_pdata,
+					panel_data);
+
+	if (!ctrl_pdata->dimming_on_cmds.cmds)
+		return;
+
+
+	schedule_delayed_work(&dimming_work, msecs_to_jiffies(1000));
+	return;
+}
+
+void htc_dimming_off(void)
+{
+	/* Delete dimming workqueue */
+	cancel_delayed_work_sync(&dimming_work);
+	pr_debug("dimming off\n");
+}
+

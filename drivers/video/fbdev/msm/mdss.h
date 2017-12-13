@@ -27,6 +27,7 @@
 #include <linux/msm-bus.h>
 #include <linux/file.h>
 #include <linux/dma-direction.h>
+#include <soc/qcom/cx_ipeak.h>
 
 #include "mdss_panel.h"
 
@@ -44,6 +45,7 @@ enum mdss_mdp_clk_type {
 	MDSS_CLK_MDP_LUT,
 	MDSS_CLK_MDP_VSYNC,
 	MDSS_CLK_MNOC_AHB,
+	MDSS_CLK_THROTTLE_AXI,
 	MDSS_MAX_CLK
 };
 
@@ -209,6 +211,15 @@ enum mdss_mdp_pipe_type {
 	MDSS_MDP_PIPE_TYPE_MAX,
 };
 
+enum mdss_mdp_intf_index {
+	MDSS_MDP_NO_INTF,
+	MDSS_MDP_INTF0,
+	MDSS_MDP_INTF1,
+	MDSS_MDP_INTF2,
+	MDSS_MDP_INTF3,
+	MDSS_MDP_MAX_INTF
+};
+
 struct reg_bus_client {
 	char name[MAX_CLIENT_NAME_LEN];
 	short usecase_ndx;
@@ -261,7 +272,7 @@ struct mdss_smmu_ops {
 	void (*smmu_unmap_dma_buf)(struct sg_table *table, int domain,
 			int dir, struct dma_buf *dma_buf);
 	int (*smmu_dma_alloc_coherent)(struct device *dev, size_t size,
-			dma_addr_t *phys, dma_addr_t *iova, void *cpu_addr,
+			dma_addr_t *phys, dma_addr_t *iova, void **cpu_addr,
 			gfp_t gfp, int domain);
 	void (*smmu_dma_free_coherent)(struct device *dev, size_t size,
 			void *cpu_addr, dma_addr_t phys, dma_addr_t iova,
@@ -535,6 +546,8 @@ struct mdss_data_type {
 	u32 sec_cam_en;
 	u32 sec_session_cnt;
 	wait_queue_head_t secure_waitq;
+	struct cx_ipeak_client *mdss_cx_ipeak;
+	struct mult_factor bus_throughput_factor;
 };
 
 extern struct mdss_data_type *mdss_res;

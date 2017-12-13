@@ -39,6 +39,10 @@
 #include "mdss_hdcp.h"
 #include "mdss_debug.h"
 
+#ifdef CONFIG_TUSB1044
+extern int tusb1044_exist(void);
+#endif
+
 #define RGB_COMPONENTS		3
 #define VDDA_MIN_UV			1800000	/* uV units */
 #define VDDA_MAX_UV			1800000	/* uV units */
@@ -803,6 +807,13 @@ static int mdss_dp_pinctrl_set_state(
 static int mdss_dp_pinctrl_init(struct platform_device *pdev,
 			struct mdss_dp_drv_pdata *dp)
 {
+
+#ifdef CONFIG_TUSB1044
+	if (tusb1044_exist()) {
+		return PTR_ERR(dp->pin_res.pinctrl);
+	}
+#endif
+
 	dp->pin_res.pinctrl = devm_pinctrl_get(&pdev->dev);
 	if (IS_ERR_OR_NULL(dp->pin_res.pinctrl)) {
 		pr_err("failed to get pinctrl\n");
@@ -891,7 +902,6 @@ aux_en_gpio_err:
 static int mdss_dp_config_gpios(struct mdss_dp_drv_pdata *dp, bool enable)
 {
 	int rc = 0;
-
 	if (enable == true) {
 		rc = mdss_dp_request_gpios(dp);
 		if (rc) {
@@ -960,6 +970,13 @@ static int mdss_dp_parse_gpio_params(struct platform_device *pdev,
 		pr_err("%d, Aux_sel gpio not specified\n",
 					__LINE__);
 	}
+
+#ifdef CONFIG_TUSB1044
+	if (tusb1044_exist()) {
+		dp->aux_sel_gpio = -1;
+		pr_info("re-driver exsit, remove aux gpios request\n");
+	};
+#endif
 
 	dp->usbplug_cc_gpio = of_get_named_gpio(
 			pdev->dev.of_node,
@@ -1093,15 +1110,17 @@ static void mdss_dp_update_cable_status(struct mdss_dp_drv_pdata *dp,
 
 static int dp_get_cable_status(struct platform_device *pdev, u32 vote)
 {
-	struct mdss_dp_drv_pdata *dp_ctrl = platform_get_drvdata(pdev);
+	struct mdss_dp_drv_pdata *dp = platform_get_drvdata(pdev);
 	u32 hpd;
 
-	if (!dp_ctrl) {
+	if (!dp) {
 		DEV_ERR("%s: invalid input\n", __func__);
 		return -ENODEV;
 	}
 
-	hpd = dp_ctrl->cable_connected;
+	mutex_lock(&dp->attention_lock);
+	hpd = dp->cable_connected;
+	mutex_unlock(&dp->attention_lock);
 
 	return hpd;
 }
@@ -1119,8 +1138,14 @@ static int dp_audio_info_setup(struct platform_device *pdev,
 	struct mdss_dp_drv_pdata *dp_ctrl = platform_get_drvdata(pdev);
 
 	if (!dp_ctrl || !params) {
-		DEV_ERR("%s: invalid input\n", __func__);
-		return -ENODEV;
+		pr_err("invalid input\n");
+		rc = -ENODEV;
+		goto end;
+	}
+
+	if (!dp_ctrl->power_on) {
+		pr_debug("DP is already power off\n");
+		goto end;
 	}
 
 	mdss_dp_audio_setup_sdps(&dp_ctrl->ctrl_io, params->num_of_channels);
@@ -1128,6 +1153,7 @@ static int dp_audio_info_setup(struct platform_device *pdev,
 	mdss_dp_set_safe_to_exit_level(&dp_ctrl->ctrl_io, dp_ctrl->lane_cnt);
 	mdss_dp_audio_enable(&dp_ctrl->ctrl_io, true);
 
+end:
 	return rc;
 } /* dp_audio_info_setup */
 
@@ -1156,6 +1182,11 @@ static void dp_audio_teardown_done(struct platform_device *pdev)
 
 	if (!dp) {
 		pr_err("invalid input\n");
+		return;
+	}
+
+	if (!dp->power_on) {
+		pr_err("DP is already power off\n");
 		return;
 	}
 
@@ -1480,7 +1511,7 @@ static void mdss_dp_configure_source_params(struct mdss_dp_drv_pdata *dp,
 	mdss_dp_config_misc(dp,
 		mdss_dp_bpp_to_test_bit_depth(mdss_dp_get_bpp(dp)),
 		mdss_dp_get_colorimetry_config(dp));
-	mdss_dp_sw_config_msa(&dp->ctrl_io, dp->link_rate, &dp->dp_cc_io);
+	mdss_dp_sw_config_msa(dp);
 	mdss_dp_timing_cfg(&dp->ctrl_io, &dp->panel_data.panel_info);
 }
 
@@ -1650,6 +1681,7 @@ int mdss_dp_on_hpd(struct mdss_dp_drv_pdata *dp_drv)
 	dp_drv->link_rate = mdss_dp_gen_link_clk(dp_drv);
 	if (!dp_drv->link_rate) {
 		pr_err("Unable to configure required link rate\n");
+		mdss_dp_clk_ctrl(dp_drv, DP_CORE_PM, false);
 		ret = -EINVAL;
 		goto exit;
 	}
@@ -1677,8 +1709,14 @@ int mdss_dp_on_hpd(struct mdss_dp_drv_pdata *dp_drv)
 link_training:
 	dp_drv->power_on = true;
 
-	while (-EAGAIN == mdss_dp_setup_main_link(dp_drv, true))
+	while (-EAGAIN == mdss_dp_setup_main_link(dp_drv, true)) {
 		pr_debug("MAIN LINK TRAINING RETRY\n");
+		mdss_dp_mainlink_ctrl(&dp_drv->ctrl_io, false);
+		/* Disable DP mainlink clocks */
+		mdss_dp_disable_mainlink_clocks(dp_drv);
+		/* Enable DP mainlink clocks with reduced link rate */
+		mdss_dp_enable_mainlink_clocks(dp_drv);
+	}
 
 	dp_drv->cont_splash = 0;
 
@@ -1693,6 +1731,8 @@ exit:
 int mdss_dp_on(struct mdss_panel_data *pdata)
 {
 	struct mdss_dp_drv_pdata *dp_drv = NULL;
+	bool hpd;
+	int rc = 0;
 
 	if (!pdata) {
 		pr_err("Invalid input data\n");
@@ -1701,6 +1741,22 @@ int mdss_dp_on(struct mdss_panel_data *pdata)
 
 	dp_drv = container_of(pdata, struct mdss_dp_drv_pdata,
 			panel_data);
+
+	mutex_lock(&dp_drv->attention_lock);
+	hpd = dp_drv->cable_connected;
+	mutex_unlock(&dp_drv->attention_lock);
+
+	/* In case of device coming out of PM_SUSPEND, there can be
+	 * a corner case where the sink is turned off or the DP cable
+	 * is disconnected almost at the same time as userspace triggering
+	 * unblank. This can cause the UNBLANK call to be still triggered
+	 * before the disconnect event is notified to the userspace.
+	 * Avoid turning ON DP path in such cases.
+	 */
+	if (!hpd || !dp_drv->alt_mode.dp_status.hpd_high) {
+		pr_err("DP sink not connected\n");
+		return -EINVAL;
+	}
 
 	/*
 	 * If the link already active, then nothing needs to be done here.
@@ -1726,15 +1782,18 @@ int mdss_dp_on(struct mdss_panel_data *pdata)
 	 * init/deinit during unrelated resume/suspend events,
 	 * add host initialization call before DP power-on.
 	 */
-	if (!dp_drv->dp_initialized)
-		mdss_dp_host_init(pdata);
+	if (!dp_drv->dp_initialized) {
+		rc = mdss_dp_host_init(pdata);
+		if (rc < 0)
+			return rc;
+	}
 
 	return mdss_dp_on_hpd(dp_drv);
 }
 
 static bool mdss_dp_is_ds_bridge(struct mdss_dp_drv_pdata *dp)
 {
-	return dp->dpcd.downstream_port.dfp_present;
+	return dp->dpcd.downstream_port.dsp_present;
 }
 
 static bool mdss_dp_is_ds_bridge_sink_count_zero(struct mdss_dp_drv_pdata *dp)
@@ -1960,6 +2019,11 @@ static int mdss_dp_host_init(struct mdss_panel_data *pdata)
 	}
 
 	dp_drv->orientation = usbpd_get_plug_orientation(dp_drv->pd);
+	if (dp_drv->orientation == ORIENTATION_NONE) {
+		pr_err("DP cable might be disconnected\n");
+		ret = -EINVAL;
+		goto orientation_error;
+	}
 
 	dp_drv->aux_sel_gpio_output = 0;
 	if (dp_drv->orientation == ORIENTATION_CC2)
@@ -2001,8 +2065,9 @@ static int mdss_dp_host_init(struct mdss_panel_data *pdata)
 	return 0;
 
 clk_error:
-	mdss_dp_regulator_ctrl(dp_drv, false);
 	mdss_dp_config_gpios(dp_drv, false);
+orientation_error:
+	mdss_dp_regulator_ctrl(dp_drv, false);
 vreg_error:
 	return ret;
 }
@@ -2066,7 +2131,6 @@ static int mdss_dp_notify_clients(struct mdss_dp_drv_pdata *dp,
 	bool notify = false;
 	bool connect;
 
-	mutex_lock(&dp->pd_msg_mutex);
 	pr_debug("beginning notification\n");
 	if (status == dp->hpd_notification_status) {
 		pr_debug("No change in status %s --> %s\n",
@@ -2158,7 +2222,6 @@ notify:
 
 end:
 	dp->hpd_notification_status = status;
-	mutex_unlock(&dp->pd_msg_mutex);
 	return ret;
 }
 
@@ -2172,6 +2235,10 @@ static int mdss_dp_process_hpd_high(struct mdss_dp_drv_pdata *dp)
 	ret = mdss_dp_dpcd_cap_read(dp);
 	if (ret || !mdss_dp_aux_is_link_rate_valid(dp->dpcd.max_link_rate) ||
 		!mdss_dp_aux_is_lane_count_valid(dp->dpcd.max_lane_count)) {
+		if (ret == EDP_AUX_ERR_TOUT) {
+			pr_err("DPCD read timedout, skip connect notification\n");
+			goto end;
+		}
 		/*
 		 * If there is an error in parsing DPCD or if DPCD reports
 		 * unsupported link parameters then set the default link
@@ -2448,12 +2515,16 @@ static ssize_t mdss_dp_rda_connected(struct device *dev,
 {
 	ssize_t ret;
 	struct mdss_dp_drv_pdata *dp = mdss_dp_get_drvdata(dev);
+	bool cable_connected;
 
 	if (!dp)
 		return -EINVAL;
 
-	ret = snprintf(buf, PAGE_SIZE, "%d\n", dp->cable_connected);
-	pr_debug("%d\n", dp->cable_connected);
+	mutex_lock(&dp->attention_lock);
+	cable_connected = dp->cable_connected;
+	mutex_unlock(&dp->attention_lock);
+	ret = snprintf(buf, PAGE_SIZE, "%d\n", cable_connected);
+	pr_debug("%d\n", cable_connected);
 
 	return ret;
 }
@@ -2622,6 +2693,7 @@ static ssize_t mdss_dp_wta_hpd(struct device *dev,
 	int hpd, rc;
 	ssize_t ret = strnlen(buf, PAGE_SIZE);
 	struct mdss_dp_drv_pdata *dp = mdss_dp_get_drvdata(dev);
+	bool cable_connected;
 
 	if (!dp) {
 		pr_err("invalid data\n");
@@ -2637,9 +2709,13 @@ static ssize_t mdss_dp_wta_hpd(struct device *dev,
 	}
 
 	dp->hpd = !!hpd;
-	pr_debug("hpd=%d\n", dp->hpd);
+	mutex_lock(&dp->attention_lock);
+	cable_connected = dp->cable_connected;
+	mutex_unlock(&dp->attention_lock);
+	pr_debug("hpd=%d cable_connected=%s\n", dp->hpd,
+		cable_connected ? "true" : "false");
 
-	if (dp->hpd && dp->cable_connected) {
+	if (dp->hpd && cable_connected) {
 		if (dp->alt_mode.current_state & DP_CONFIGURE_DONE) {
 			mdss_dp_host_init(&dp->panel_data);
 			mdss_dp_process_hpd_high(dp);
@@ -3061,10 +3137,14 @@ static int mdss_dp_event_handler(struct mdss_panel_data *pdata,
 		rc = mdss_dp_on(pdata);
 		break;
 	case MDSS_EVENT_PANEL_ON:
+		if (!dp->power_on) {
+			pr_err("DP Controller not powered on\n");
+			break;
+		}
 		mdss_dp_update_hdcp_info(dp);
 
 		if (dp_is_hdcp_enabled(dp)) {
-			cancel_delayed_work(&dp->hdcp_cb_work);
+			cancel_delayed_work_sync(&dp->hdcp_cb_work);
 
 			dp->hdcp_status = HDCP_STATE_AUTHENTICATING;
 			queue_delayed_work(dp->workq,
@@ -3081,6 +3161,10 @@ static int mdss_dp_event_handler(struct mdss_panel_data *pdata,
 		complete_all(&dp->notification_comp);
 		break;
 	case MDSS_EVENT_BLANK:
+		if (!dp->power_on) {
+			pr_err("DP Controller not powered on\n");
+			break;
+		}
 		if (dp_is_hdcp_enabled(dp)) {
 			dp->hdcp_status = HDCP_STATE_INACTIVE;
 
@@ -3442,17 +3526,15 @@ static void mdss_dp_event_cleanup(struct mdss_dp_drv_pdata *dp)
 static int mdss_dp_event_setup(struct mdss_dp_drv_pdata *dp)
 {
 
-
 	init_waitqueue_head(&dp->dp_event.event_q);
 	spin_lock_init(&dp->dp_event.event_lock);
 
-	dp->ev_thread = kthread_create(mdss_dp_event_thread,
+	dp->ev_thread = kthread_run(mdss_dp_event_thread,
 		(void *)&dp->dp_event, "mdss_dp_event");
 	if (IS_ERR(dp->ev_thread)) {
 		pr_err("unable to start event thread\n");
 		return PTR_ERR(dp->ev_thread);
 	}
-	kthread_park(dp->ev_thread);
 
 	dp->workq = create_workqueue("mdss_dp_hpd");
 	if (!dp->workq) {
@@ -3497,7 +3579,8 @@ static void usbpd_connect_callback(struct usbpd_svid_handler *hdlr)
 	}
 
 	mdss_dp_update_cable_status(dp_drv, true);
-	kthread_unpark(dp_drv->ev_thread);
+	if (dp_drv->ev_thread)
+		kthread_unpark(dp_drv->ev_thread);
 
 	if (dp_drv->hpd)
 		dp_send_events(dp_drv, EV_USBPD_DISCOVER_MODES);
@@ -4080,9 +4163,12 @@ static void mdss_dp_process_attention(struct mdss_dp_drv_pdata *dp_drv)
 	if (dp_drv->alt_mode.dp_status.hpd_irq) {
 		pr_debug("Attention: hpd_irq high\n");
 
-		if(!dp_drv->dp_initialized){
-
-			pr_err("return due to DP already de-initialized\n");
+		/* In case of HPD_IRQ events without DP link being
+		 * turned on such as adb shell stop, skip handling
+		 * hpd_irq event.
+		 */
+		if (!dp_drv->dp_initialized) {
+			pr_err("DP not initialized yet\n");
 			return;
 		}
 
@@ -4203,6 +4289,7 @@ static void mdss_dp_handle_attention(struct mdss_dp_drv_pdata *dp)
 		}
 		pr_debug("done processing item %d in the list\n", i);
 	};
+
 exit:
 	pr_debug("exit\n");
 }
@@ -4279,7 +4366,6 @@ static int mdss_dp_probe(struct platform_device *pdev)
 	dp_drv->mask1 = EDP_INTR_MASK1;
 	dp_drv->mask2 = EDP_INTR_MASK2;
 	mutex_init(&dp_drv->emutex);
-	mutex_init(&dp_drv->pd_msg_mutex);
 	mutex_init(&dp_drv->attention_lock);
 	mutex_init(&dp_drv->hdcp_mutex);
 	spin_lock_init(&dp_drv->lock);

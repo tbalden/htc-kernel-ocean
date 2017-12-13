@@ -66,7 +66,7 @@
 #define HDMI_TX_4_MAX_PCLK_RATE            600000
 
 #define hdmi_tx_get_fd(x) ((x && (ffs(x) > 0))  ? \
-			hdmi_ctrl->feature_data[ffs(x) - 1] : 0)
+			hdmi_ctrl->feature_data[ffs(x) - 1] : NULL)
 #define hdmi_tx_set_fd(x, y) {if (x && (ffs(x) > 0)) \
 			hdmi_ctrl->feature_data[ffs(x) - 1] = y; }
 
@@ -272,20 +272,6 @@ static void hdmi_tx_cable_notify_work(struct work_struct *work)
 	mutex_unlock(&hdmi_ctrl->tx_lock);
 } /* hdmi_tx_cable_notify_work */
 
-static bool hdmi_tx_is_cea_format(int mode)
-{
-	bool cea_fmt;
-
-	if ((mode > 0) && (mode <= HDMI_EVFRMT_END))
-		cea_fmt = true;
-	else
-		cea_fmt = false;
-
-	DEV_DBG("%s: %s\n", __func__, cea_fmt ? "Yes" : "No");
-
-	return cea_fmt;
-}
-
 static inline bool hdmi_tx_is_hdcp_enabled(struct hdmi_tx_ctrl *hdmi_ctrl)
 {
 	return hdmi_ctrl->hdcp_feature_on &&
@@ -377,7 +363,9 @@ static void hdmi_tx_audio_setup(struct hdmi_tx_ctrl *hdmi_ctrl)
 
 static inline u32 hdmi_tx_is_dvi_mode(struct hdmi_tx_ctrl *hdmi_ctrl)
 {
-	return hdmi_edid_is_dvi_mode(hdmi_tx_get_fd(HDMI_TX_FEAT_EDID));
+	void *data = hdmi_tx_get_fd(HDMI_TX_FEAT_EDID);
+
+	return hdmi_edid_is_dvi_mode(data);
 } /* hdmi_tx_is_dvi_mode */
 
 static inline u32 hdmi_tx_is_in_splash(struct hdmi_tx_ctrl *hdmi_ctrl)
@@ -578,7 +566,8 @@ static ssize_t hdmi_tx_sysfs_wta_edid(struct device *dev,
 	}
 
 	mutex_lock(&hdmi_ctrl->tx_lock);
-	if (edid_size < EDID_BLOCK_SIZE) {
+	if ((edid_size < EDID_BLOCK_SIZE) ||
+		(edid_size > hdmi_ctrl->edid_buf_size)) {
 		DEV_DBG("%s: disabling custom edid\n", __func__);
 
 		ret = -EINVAL;
@@ -630,6 +619,11 @@ static ssize_t hdmi_tx_sysfs_rda_edid(struct device *dev,
 
 	mutex_lock(&hdmi_ctrl->tx_lock);
 	cea_blks = hdmi_ctrl->edid_buf[EDID_BLOCK_SIZE - 2];
+	if (cea_blks >= MAX_EDID_BLOCKS) {
+		DEV_ERR("%s: invalid cea blocks\n", __func__);
+		mutex_unlock(&hdmi_ctrl->tx_lock);
+		return -EINVAL;
+	}
 	size = (cea_blks + 1) * EDID_BLOCK_SIZE;
 	size = min_t(u32, size, PAGE_SIZE);
 
@@ -2156,6 +2150,8 @@ static int hdmi_tx_init_panel_info(struct hdmi_tx_ctrl *hdmi_ctrl)
 	pinfo->lcdc.v_front_porch = timing.front_porch_v;
 	pinfo->lcdc.v_pulse_width = timing.pulse_width_v;
 	pinfo->lcdc.frame_rate = timing.refresh_rate;
+	pinfo->lcdc.h_polarity = timing.active_low_h;
+	pinfo->lcdc.v_polarity = timing.active_low_v;
 
 	pinfo->type = DTV_PANEL;
 	pinfo->pdest = DISPLAY_3;
@@ -2224,6 +2220,14 @@ static int hdmi_tx_read_sink_info(struct hdmi_tx_ctrl *hdmi_ctrl)
 		status = hdmi_edid_parser(data);
 		if (status)
 			DEV_ERR("%s: edid parse failed\n", __func__);
+		else
+			/*
+			 * Updata HDMI max supported TMDS clock, consider
+			 * both sink and source capicity.
+			 */
+			hdmi_edid_set_max_pclk_rate(data,
+			  min(hdmi_edid_get_sink_caps_max_tmds_clk(data) / 1000,
+			      hdmi_ctrl->max_pclk_khz));
 	}
 bail:
 	if (hdmi_tx_enable_power(hdmi_ctrl, HDMI_TX_DDC_PM, false))
@@ -2434,6 +2438,7 @@ static void hdmi_tx_set_mode(struct hdmi_tx_ctrl *hdmi_ctrl, u32 power_on)
 	struct dss_io_data *io = NULL;
 	/* Defaults: Disable block, HDMI mode */
 	u32 hdmi_ctrl_reg = BIT(1);
+	void *data = hdmi_tx_get_fd(HDMI_TX_FEAT_EDID);
 
 	if (!hdmi_ctrl) {
 		DEV_ERR("%s: invalid input\n", __func__);
@@ -2462,7 +2467,7 @@ static void hdmi_tx_set_mode(struct hdmi_tx_ctrl *hdmi_ctrl, u32 power_on)
 			hdmi_ctrl_reg |= BIT(2);
 
 		/* Set transmission mode to DVI based in EDID info */
-		if (hdmi_edid_is_dvi_mode(hdmi_tx_get_fd(HDMI_TX_FEAT_EDID)))
+		if (hdmi_edid_is_dvi_mode(data))
 			hdmi_ctrl_reg &= ~BIT(1); /* DVI mode */
 
 		/*
@@ -3173,9 +3178,7 @@ static int hdmi_tx_power_on(struct hdmi_tx_ctrl *hdmi_ctrl)
 	}
 
 	hdmi_ctrl->panel.vic = hdmi_ctrl->vic;
-
-	if (!hdmi_tx_is_dvi_mode(hdmi_ctrl) &&
-	    hdmi_tx_is_cea_format(hdmi_ctrl->vic))
+	if (!hdmi_tx_is_dvi_mode(hdmi_ctrl))
 		hdmi_ctrl->panel.infoframe = true;
 	else
 		hdmi_ctrl->panel.infoframe = false;
@@ -3203,8 +3206,7 @@ static int hdmi_tx_power_on(struct hdmi_tx_ctrl *hdmi_ctrl)
 
 	hdmi_tx_core_on(hdmi_ctrl);
 
-	if (hdmi_ctrl->panel.infoframe &&
-	    !hdmi_tx_is_encryption_set(hdmi_ctrl) &&
+	if (!hdmi_tx_is_encryption_set(hdmi_ctrl) &&
 	    hdmi_tx_is_stream_shareable(hdmi_ctrl)) {
 		hdmi_tx_config_avmute(hdmi_ctrl, false);
 	}
