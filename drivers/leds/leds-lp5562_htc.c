@@ -1941,6 +1941,90 @@ static void lp5562_dual_color_blink(struct i2c_client *client)
 	mutex_unlock(&led_mutex);
 	I(" %s ---\n" , __func__);
 }
+
+static void lp5562_green_blink (struct i2c_client *client,  uint8_t green)
+{
+	uint8_t data = 0x00;
+	int ret, reg_index = 0;
+
+	I(" %s +++ \n" , __func__);
+	mutex_lock(&led_mutex);
+
+	data = 0x04;
+	ret = write_operation_register(client, data, 0);
+	udelay(200);
+	data = (u8)0;
+	ret = i2c_write_block(client, ENG_1_PC_CONTROL, &data, 1);
+	udelay(200);
+	ret = i2c_write_block(client, ENG_2_PC_CONTROL, &data, 1);
+#ifdef LP5562_BLUE_LED
+	udelay(200);
+	ret = i2c_write_block(client, ENG_3_PC_CONTROL, &data, 1);
+#endif
+	if (green) {
+		reg_index = 0;
+		/* === set green pwm === */
+		data = 0x40;
+		ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
+		ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &green, 1);
+		/* === wait 0.064s === */
+		data = 0x44;
+		ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
+		data = 0x00;
+		ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
+		/* === set pwm to 0 === */
+		data = 0x40;
+		ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
+		data = 0x00;
+		ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
+		// 1 sec
+		data = 0x7f;
+		ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
+		data = 0x00;
+		ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
+		// 1 sec
+		data = 0x7f;
+		ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
+		data = 0x00;
+		ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
+		// 1 sec
+		data = 0x7f;
+		ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
+		data = 0x00;
+		ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
+		// 1 sec
+		data = 0x7f;
+		ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
+		data = 0x00;
+		ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
+		// 1 sec
+		data = 0x7f;
+		ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
+		data = 0x00;
+		ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
+		// 1 sec
+		data = 0x7f;
+		ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
+		data = 0x00;
+		ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
+
+		/* === clear register === */
+		data = 0x00;
+		ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
+		ret = i2c_write_block(client, CMD_ENG_2_BASE + reg_index++, &data, 1);
+	}
+
+	/* === run program === */
+	data = 0x08;
+	ret = write_operation_register(client, data, 0);
+	udelay(200);
+	data = 0x08|0x40;
+	ret = write_enable_register(client, data, 0);
+	udelay(550);
+	mutex_unlock(&led_mutex);
+	I(" %s ---\n" , __func__);
+}
+
 static void lp5562_led_off(struct i2c_client *client)
 {
 	uint8_t data = 0x00;
@@ -2029,6 +2113,7 @@ static void multicolor_work_func(struct work_struct *work)
 	ldata = container_of(work, struct lp5562_led, led_work_multicolor);
 	I(" %s , Mode = %x\n" , __func__, ldata->Mode);
 
+//	if (ldata->Mode > 1 && ldata->Mode <= 6) // TODO check this
 	if (ldata->Mode > 1 && ldata->Mode <= 5)
 		lp5562_led_enable(client, 1);
 	else if (ldata->Mode == 1)
@@ -2085,6 +2170,8 @@ static void multicolor_work_func(struct work_struct *work)
 		lp5562_red_long_blink(client);
 	} else if (ldata->Mode ==5 && ldata->Red && ldata->Green && !ldata->Blue) { /* === set red green blink === */
 		lp5562_dual_color_blink(client);
+	} else if (ldata->Mode == 6) {
+		lp5562_green_blink(client, ldata->Green);
 	} else {
 		for (i = 0; i <= 0x6f; i++) {
 			ret = i2c_read_block(client, i, data1, 1);
@@ -2165,6 +2252,11 @@ void virtual_key_led_reset_blink(int onoff)
 
 	if(!client)
 		return;
+
+	if (!plat_data->vk_use) {
+		I("No virtual key led used\n");
+		return;
+	}
 
 	I("virtual_key_led_reset_blink +++, onoff = %d\n", onoff);
 
@@ -3311,7 +3403,7 @@ static ssize_t lp5562_led_multi_color_store(struct device *dev,
 #endif
 	sscanf(buf, "%x", &val);
 
-	if (val < 0 || val > 0xFFFFFFFF)
+	if (val > 0xFFFFFFFF)
 		return -EINVAL;
 	led_cdev = (struct led_classdev *)dev_get_drvdata(dev);
 	ldata = container_of(led_cdev, struct lp5562_led, cdev);
@@ -3752,6 +3844,7 @@ static int lp5562_parse_dt(struct device *dev, struct led_i2c_platform_data *pda
 	if (prop) {
 		of_property_read_u32(dt, "lp5562,vk_current_param", &gVK_Current_param);
 	}
+	pdata->vk_use = of_property_read_bool(dt, "lp5562,vk_use");
 	return 0;
 }
 
@@ -3939,7 +4032,7 @@ static int lp5562_led_probe(struct i2c_client *client
 		goto err_create_work_queue;
 	}
 	for (i = 0; i < pdata->num_leds; i++) {
-		if(i == VIRTUAL_KEY_LED_ID) {
+		if(i == VIRTUAL_KEY_LED_ID && pdata->vk_use) {
 			I("VK probe, i = %d, num_leds = %d\n", i, pdata->num_leds);
 			cdata->leds[i].cdev.name = "button-backlight";
 			ret = led_classdev_register(dev, &cdata->leds[i].cdev);
