@@ -37,11 +37,12 @@ struct led_i2c_platform_data {
 	int ena_gpio;
 	int ena_gpio_io_ext;
 	int tri_gpio;
-    int charging_gpio;
+	int charging_gpio;
 	int button_lux;
 	int red_charge;
 	int green_charge;
 	int tp_3v3_en;
+	bool vk_use;
 };
 
 

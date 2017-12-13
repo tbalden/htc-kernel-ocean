@@ -63,6 +63,7 @@ tm.tm_hour, tm.tm_min, tm.tm_sec, ts.tv_nsec); \
 #define HTC_EXT_BAD_CABLE_USED			(1<<4)
 #define HTC_EXT_QUICK_CHARGER_USED		(1<<5)
 #define HTC_EXT_USB_OVERHEAT				(1<<6)
+#define HTC_EXT_AI_CHARGING			(1<<8)
 
 #define BATT_TIMER_UPDATE_TIME				(60)
 #define BATT_SUSPEND_CHECK_TIME				(3600)
@@ -138,6 +139,7 @@ struct htc_battery_info {
 	int batt_full_voltage_mv;
 	int batt_full_current_ma;
 	int overload_curr_thr_ma;
+	int batt_fcc_ma;
 	struct wake_lock charger_exist_lock;
 	struct wake_lock check_overheat_lock;
 	struct delayed_work chg_full_check_work;
@@ -161,6 +163,13 @@ struct htc_battery_info {
 #endif
 	unsigned int htc_extension;	/* for htc in-house sw */
 	int qc3_current_ua;
+	int fastchg_current_ma;
+	int health_level;
+	int batt_health_good;
+	int allow_power_off_voltage;
+	int low_batt_check_soc_raw_threshold;
+	int r_default_for_5v2a_pre_chk;
+	int ai_charge_enable;
 };
 
 struct htc_battery_timer {
@@ -431,3 +440,4 @@ int charger_register_read(u16 addr, u8 *val);
 int smblib_typec_first_debounce_result(void);
 
 bool is_cool_charger(void);
+int pmic_bob_regulator_pwm_mode_enable(bool enable);

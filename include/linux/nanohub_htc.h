@@ -20,15 +20,31 @@
 #define EVT_NO_SENSOR_CONFIG_EVENT        0x00000300
 #define EVT_RESET_REASON                  0x00000403
 #define SENS_TYPE_PROX                    13
+#define SENS_TYPE_GESTURE                 24
 #define SENS_TYPE_HALL                    29
+
+#ifdef CONFIG_NANOHUB_HTC_SENSTYPE_OFFSET
+#define SENS_TYPE_HTC_BASE        96
+#define SENS_TYPE_HTC_EASY_ACCESS (SENS_TYPE_HTC_BASE + 2)
+#define SENS_TYPE_HTC_TOUCH       (SENS_TYPE_HTC_BASE + 3)
+#define SENS_TYPE_HTC_SECOND_DISP (SENS_TYPE_HTC_BASE + 4)
+#define SENS_TYPE_HTC_TOUCH_POINT (SENS_TYPE_HTC_BASE + 7)
+#define SENS_TYPE_HTC_EDGE        (SENS_TYPE_HTC_BASE + 8)
+#define SENS_TYPE_HTC_EDWK        (SENS_TYPE_HTC_BASE + 9)
+#else
 #define SENS_TYPE_HTC_EASY_ACCESS         54
 #define SENS_TYPE_HTC_TOUCH               55
 #define SENS_TYPE_HTC_SECOND_DISP         56
 #define SENS_TYPE_HTC_TOUCH_POINT         59
 #define SENS_TYPE_HTC_EDGE                60
 #define SENS_TYPE_HTC_EDWK                61
+#endif
 #define CONFIG_CMD_CFG_DATA               3
 #define sensorGetMyEventType(_sensorType) (EVT_NO_FIRST_SENSOR_EVENT + (_sensorType))
+
+#define APP_ID_MAKE(vendor, app)       ((((uint64_t)(vendor)) << 24) | ((app) & 0x00FFFFFF))
+#define APP_ID_VENDOR_HTC       0x4854437470ULL /* "HTCtp" */
+#define BMI160_APP_ID APP_ID_MAKE(APP_ID_VENDOR_HTC, 2)
 
 struct __attribute__ ((packed)) hal_cfg_data {
 	uint8_t s_pole_near:1;
@@ -38,7 +54,7 @@ struct __attribute__ ((packed)) hal_cfg_data {
 
 struct __attribute__ ((packed)) eza_cfg_data {
 	uint8_t setting[4];
-#ifdef CONFIG_NANOHUB_SECOND_DISP
+#if defined(CONFIG_NANOHUB_SECOND_DISP) || defined(CONFIG_NANOHUB_AOD)
 	uint8_t lcd_mode;
 #endif
 };
@@ -46,7 +62,7 @@ struct __attribute__ ((packed)) eza_cfg_data {
 struct __attribute__ ((packed)) tou_cfg_data {
 	uint8_t status;
 	uint8_t solution;
-#ifdef CONFIG_NANOHUB_SECOND_DISP
+#if defined(CONFIG_NANOHUB_SECOND_DISP) || defined(CONFIG_NANOHUB_AOD)
 	uint8_t mode;
 #endif
 };
@@ -114,6 +130,8 @@ static inline int nanohub_tp_solution(uint8_t solution) {
 #ifdef CONFIG_NANOHUB_SECOND_DISP
 int nanohub_tp_mode(uint8_t mode);
 int nanohub_is_switch_operating(void);
+#elif defined(CONFIG_NANOHUB_AOD)
+int nanohub_tp_mode(uint8_t mode);
 #else
 static inline int nanohub_tp_mode(uint8_t mode) {
 	return 0;
@@ -146,6 +164,15 @@ static inline int nanohub_notifier(uint8_t event_id, void *val) {
 enum {
 	SECOND_DISP_BL_CTRL,
 };
+
+#ifdef CONFIG_NANOHUB_AOD
+enum {
+	LCD_MODE_U0 = 0,	//Display off
+	LCD_MODE_U1,		//Reserve
+	LCD_MODE_U2,		//AOD mode
+	LCD_MODE_U3,		//Display on (normal mode)
+};
+#endif
 
 #define NANOHUB_CPU_STATUS_RESUME       0x00
 #define NANOHUB_CPU_STATUS_SUSPEND      0x01

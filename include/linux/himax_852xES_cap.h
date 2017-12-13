@@ -135,10 +135,13 @@ struct himax_i2c_platform_data {
 	uint8_t powerOff3V3;
 	uint8_t cable_config[2];
 	uint8_t protocol_type;
+	uint8_t wake_up_reset;
+	uint8_t glove_mode_en;
+	uint8_t always_K_WA;
+	uint8_t irq_on_state;
 	uint32_t gpio_irq;
 	uint32_t gpio_reset;
-	uint32_t gpio_1v8_en;
-	uint32_t gpio_3v3_en;
+	uint32_t gpio_en;
 	int (*power)(int on);
 	void (*reset)(void);
 	struct himax_virtual_key *virtual_key;
@@ -169,7 +172,7 @@ struct himax_i2c_platform_data {
 #define HIMAX852xes_NAME_CAP "Himax852xes_cap"
 #define HIMAX852xes_FINGER_SUPPORT_NUM 10
 #define HIMAX_I2C_ADDR				0x4b
-#define INPUT_DEV_NAME	"himax-touchscreen-cap"
+#define INPUT_DEV_NAME	"himax-cap"
 #define FLASH_DUMP_FILE "/data/user/Flash_Dump.bin"
 #define DIAG_COORDINATE_FILE "/sdcard/Coordinate_Dump.csv"
 
@@ -263,6 +266,10 @@ struct himax_i2c_platform_data {
 #define SHIFTBITS 5
 #define FLASH_SIZE 32768
 
+#define PINCTRL_STATE_ACTIVE    "pmx_ts_active"
+#define PINCTRL_STATE_SUSPEND   "pmx_ts_suspend"
+#define PINCTRL_STATE_RELEASE   "pmx_ts_release"
+
 struct himax_virtual_key {
 	int index;
 	int keycode;
@@ -332,6 +339,7 @@ struct himax_config {
 struct himax_ts_data {
 	bool suspended;
 	atomic_t suspend_mode;
+	atomic_t sensing_status;
 	uint8_t x_channel;
 	uint8_t y_channel;
 	uint8_t useScreenRes;
@@ -443,7 +451,13 @@ struct himax_ts_data {
 	spinlock_t lock;
 	bool debounced[2];
 	uint8_t K_counter;
+	uint8_t ESD_counter;
 	struct timespec time_start;
+	struct timespec ESD_time_start;
+	struct pinctrl *pinctrl;
+	struct pinctrl_state *pinctrl_state_active;
+	struct pinctrl_state *pinctrl_state_suspend;
+	struct pinctrl_state *pinctrl_state_release;
 };
 
 static struct himax_ts_data *private_ts;

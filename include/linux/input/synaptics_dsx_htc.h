@@ -1,11 +1,10 @@
 /*
  * Synaptics DSX touchscreen driver
  *
- * Copyright (C) 2012-2015 Synaptics Incorporated. All rights reserved.
+ * Copyright (C) 2012-2016 Synaptics Incorporated. All rights reserved.
  *
  * Copyright (C) 2012 Alexandra Chin <alexandra.chin@tw.synaptics.com>
  * Copyright (C) 2012 Scott Lin <scott.lin@tw.synaptics.com>
- * Copyright (C) 2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -35,13 +34,21 @@
 #ifndef _SYNAPTICS_DSX_H_
 #define _SYNAPTICS_DSX_H_
 
-#define PLATFORM_DRIVER_NAME "synaptics_dsxv26"
-#define STYLUS_DRIVER_NAME "synaptics_dsxv26_stylus"
-#define ACTIVE_PEN_DRIVER_NAME "synaptics_dsxv26_active_pen"
-#define PROXIMITY_DRIVER_NAME "synaptics_dsxv26_proximity"
-#define GESTURE_DRIVER_NAME "synaptics_dsxv26_gesture"
-#define I2C_DRIVER_NAME "synaptics_dsxv26"
-#define SPI_DRIVER_NAME "synaptics_dsxv26"
+#define HTC_FEATURE
+
+#ifdef HTC_FEATURE
+#define PLATFORM_DRIVER_NAME "synaptics_dsx_touchscreen"
+
+#define MAX_MODE_CMD_NUM 10
+#else
+#define PLATFORM_DRIVER_NAME "synaptics_dsx"
+#endif
+#define STYLUS_DRIVER_NAME "synaptics_dsx_stylus"
+#define ACTIVE_PEN_DRIVER_NAME "synaptics_dsx_active_pen"
+#define PROXIMITY_DRIVER_NAME "synaptics_dsx_proximity"
+#define GESTURE_DRIVER_NAME "synaptics_dsx_gesture"
+#define I2C_DRIVER_NAME "synaptics_dsx_i2c"
+#define SPI_DRIVER_NAME "synaptics_dsx_spi"
 
 /*
  * struct synaptics_dsx_button_map - button map
@@ -58,7 +65,6 @@ struct synaptics_dsx_button_map {
  * @x_flip: x flip flag
  * @y_flip: y flip flag
  * @swap_axes: swap axes flag
- * @resume_in_workqueue: defer resume function to workqueue
  * @irq_gpio: attention interrupt GPIO
  * @irq_on_state: attention interrupt active state
  * @power_gpio: power switch GPIO
@@ -77,17 +83,22 @@ struct synaptics_dsx_button_map {
  * @reset_active_ms: reset active time
  * @byte_delay_us: delay time between two bytes of SPI data
  * @block_delay_us: delay time between two SPI transfers
+ * @addr_delay_us: delay time after sending address word
  * @pwr_reg_name: pointer to name of regulator for power control
  * @bus_reg_name: pointer to name of regulator for bus pullup control
  * @cap_button_map: pointer to 0D button map
  * @vir_button_map: pointer to virtual button map
- * @resume_in_workqueue: defer resume function to workqueue
  */
 struct synaptics_dsx_board_data {
 	bool x_flip;
 	bool y_flip;
 	bool swap_axes;
-	bool resume_in_workqueue;
+#ifdef HTC_FEATURE
+	bool mode_f54_force_update;
+	int switch_gpio;
+	int switch_hub_state;
+	int f51_set_pmic_offset;
+#endif
 	int irq_gpio;
 	int irq_on_state;
 	int power_gpio;
@@ -106,8 +117,24 @@ struct synaptics_dsx_board_data {
 	unsigned int reset_active_ms;
 	unsigned int byte_delay_us;
 	unsigned int block_delay_us;
+	unsigned int addr_delay_us;
 	const char *pwr_reg_name;
 	const char *bus_reg_name;
+#ifdef HTC_FEATURE
+	const char *glove_reg_name[MAX_MODE_CMD_NUM];
+	unsigned int reset_lcm_delay_ms;
+	uint32_t glove_reg[MAX_MODE_CMD_NUM];
+	uint32_t normal_reg[MAX_MODE_CMD_NUM];
+	uint32_t display_width;
+	uint32_t display_height;
+	uint16_t set_pmic_delay;
+	uint16_t set_wg_delay;
+	uint16_t set_sleep_delay;
+	uint8_t support_glove;
+	uint8_t glove_cmd_num;
+	uint8_t lcm_reset_seq;
+	uint8_t sensor_sleep_mode;
+#endif
 	struct synaptics_dsx_button_map *cap_button_map;
 	struct synaptics_dsx_button_map *vir_button_map;
 };

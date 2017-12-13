@@ -334,7 +334,9 @@ struct mmc_devfeq_clk_scaling {
 	atomic_t	devfreq_abort;
 	bool		skip_clk_scale_freq_update;
 	int		freq_table_sz;
+	int		pltfm_freq_table_sz;
 	u32		*freq_table;
+	u32		*pltfm_freq_table;
 	unsigned long	total_busy_time_us;
 	unsigned long	target_freq;
 	unsigned long	curr_freq;
@@ -392,7 +394,6 @@ struct mmc_host {
 #define MMC_VDD_35_36		0x00800000	/* VDD voltage 3.5 ~ 3.6 */
 
 	u32			caps;		/* Host capabilities */
-	u32                     caps_uhs;       /* bake up Host capabilities for uhs*/
 
 #define MMC_CAP_4_BIT_DATA	(1 << 0)	/* Can the host do 4 bit transfers */
 #define MMC_CAP_MMC_HIGHSPEED	(1 << 1)	/* Can do MMC high-speed timing */
@@ -606,6 +607,11 @@ struct mmc_host {
 		unsigned long wkbytes_drv;
 		ktime_t workload_time;
 
+		/* CMDQ */
+		unsigned long cmdq_read_map;
+		unsigned long cmdq_write_map;
+		ktime_t cmdq_read_start;
+		ktime_t cmdq_write_start;
 		ktime_t start;
 	} perf;
 
@@ -629,8 +635,9 @@ struct mmc_host {
 	int			latency_hist_enabled;
 	struct io_latency_state io_lat_s;
 #endif
-	unsigned int		underclocking;
-	unsigned int		error_count;
+
+	bool sdr104_wa;
+	unsigned int            error_count;
 
 	unsigned long		private[0] ____cacheline_aligned;
 };
@@ -695,9 +702,6 @@ static inline void mmc_signal_sdio_irq(struct mmc_host *host)
 }
 
 void sdio_run_irqs(struct mmc_host *host);
-
-int mmc_is_sd_host(struct mmc_host *mmc);
-int mmc_is_mmc_host(struct mmc_host *mmc);
 
 int mmc_is_sd_host(struct mmc_host *mmc);
 int mmc_is_mmc_host(struct mmc_host *mmc);
@@ -769,6 +773,16 @@ static inline int mmc_host_uhs(struct mmc_host *host)
 		(MMC_CAP_UHS_SDR12 | MMC_CAP_UHS_SDR25 |
 		 MMC_CAP_UHS_SDR50 | MMC_CAP_UHS_SDR104 |
 		 MMC_CAP_UHS_DDR50);
+}
+
+static inline void mmc_host_clear_sdr104(struct mmc_host *host)
+{
+	host->caps &= ~MMC_CAP_UHS_SDR104;
+}
+
+static inline void mmc_host_set_sdr104(struct mmc_host *host)
+{
+	host->caps |= MMC_CAP_UHS_SDR104;
 }
 
 static inline int mmc_host_packed_wr(struct mmc_host *host)
@@ -853,6 +867,8 @@ static inline bool mmc_card_hs400(struct mmc_card *card)
 	return card->host->ios.timing == MMC_TIMING_MMC_HS400;
 }
 
+void mmc_retune_enable(struct mmc_host *host);
+void mmc_retune_disable(struct mmc_host *host);
 void mmc_retune_timer_stop(struct mmc_host *host);
 
 static inline void mmc_retune_needed(struct mmc_host *host)
