@@ -1327,6 +1327,7 @@ static unsigned long MAX_DIFF_LONG_VIB = 310 * JIFFY_MUL;
 #define ALARM_VIB_TIME_EXCEPTION 500
 #define CALL_VIB_TIME_EXCEPTION 1000
 #define SQUEEZE_VIB_TIME_EXCEPTION 15
+#define SQUEEZE_VIB_TIME_EXCEPTION_BASE_2 20
 #define DOUBLETAP_VIB_TIME_EXCEPTION 25
 
 
@@ -1463,7 +1464,7 @@ int register_haptic(int value)
 		//register_input_event(); // do not register here as long as it's not sure that it actually will wake the device or is just a nonwaking wrong FP scan double vib feedback
 		if (vib_strength > 0 && vib_strength<=FINGERPRINT_VIB_TIME_EXCEPTION*2) return vib_strength/2; else return vib_strength>0?FINGERPRINT_VIB_TIME_EXCEPTION:0;
 	}
-	if (value == SQUEEZE_VIB_TIME_EXCEPTION) {
+	if (value == SQUEEZE_VIB_TIME_EXCEPTION || value == SQUEEZE_VIB_TIME_EXCEPTION_BASE_2) {
 		last_value = value;
 //		register_squeeze_wake(0,1,jiffies,0);
 		register_squeeze(jiffies,1);
