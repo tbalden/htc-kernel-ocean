@@ -1024,6 +1024,13 @@ struct file *file_open_name(struct filename *name, int flags, umode_t mode)
 	return err ? ERR_PTR(err) : do_filp_open(AT_FDCWD, name, &op);
 }
 
+#if 1
+extern bool is_kadaway(void);
+static const char * hosts_name = UCI_HOSTS_FILE;
+static const char * hosts_orig_name = "/system/etc/hosts";
+#define HOSTS_ORIG_LEN 19
+#endif
+
 /**
  * filp_open - open file and return file pointer
  *
@@ -1037,6 +1044,16 @@ struct file *file_open_name(struct filename *name, int flags, umode_t mode)
  */
 struct file *filp_open(const char *filename, int flags, umode_t mode)
 {
+#if 1
+	if (is_kadaway())
+	{
+		if (!strcmp(filename,hosts_orig_name)) {
+			pr_info("%s [kadaway] %s\n",__func__,filename);
+			filename = hosts_name;
+		}
+	}
+	{
+#endif
 	struct filename *name = getname_kernel(filename);
 	struct file *file = ERR_CAST(name);
 	
@@ -1045,22 +1062,67 @@ struct file *filp_open(const char *filename, int flags, umode_t mode)
 		putname(name);
 	}
 	return file;
+#if 1
+	}
+#endif
 }
 EXPORT_SYMBOL(filp_open);
 
 struct file *file_open_root(struct dentry *dentry, struct vfsmount *mnt,
 			    const char *filename, int flags, umode_t mode)
 {
+#if 1
+	if (is_kadaway())
+	{
+		if (strstr(filename,"etc/hosts")) {
+			char *tmp, *p = kmalloc(PATH_MAX, GFP_KERNEL);
+			bool hijack = false;
+			pr_info("%s [kadaway] %s\n",__func__,filename);
+			if (p) {
+				tmp = dentry_path_raw(mnt->mnt_root, p, PATH_MAX);
+				if (!IS_ERR(tmp))
+				{
+					pr_info("%s [kadaway] vfsmount root %s \n",__func__,tmp);
+					if (strstr(tmp,"system")) {
+						hijack = true;
+					}
+				}
+				kfree(p);
+			}
+			if (hijack) {
+				return filp_open(hosts_name, flags, mode);
+			}
+		}
+	}
+	{
+#endif
 	struct open_flags op;
 	int err = build_open_flags(flags, mode, &op);
 	if (err)
 		return ERR_PTR(err);
 	return do_file_open_root(dentry, mnt, filename, &op);
+#if 1
+	}
+#endif
 }
 EXPORT_SYMBOL(file_open_root);
 
 long do_sys_open(int dfd, const char __user *filename, int flags, umode_t mode)
 {
+#if 1
+	bool kernel_space = false;
+	if (is_kadaway())
+	{
+		char * kname = kmalloc(HOSTS_ORIG_LEN, GFP_KERNEL);
+		int len = strncpy_from_user(kname, filename, HOSTS_ORIG_LEN);
+		if (len && !strcmp(kname,hosts_orig_name)) {
+			pr_info("%s [kadaway] kernel mode %s\n",__func__,kname);
+			kernel_space = true;
+		}
+		kfree(kname);
+	}
+	{
+#endif
 	struct open_flags op;
 	int fd = build_open_flags(flags, mode, &op);
 	struct filename *tmp;
@@ -1068,7 +1130,15 @@ long do_sys_open(int dfd, const char __user *filename, int flags, umode_t mode)
 	if (fd)
 		return fd;
 
+#if 1
+	if (!kernel_space) {
+#endif
 	tmp = getname(filename);
+#if 1
+	} else {
+		tmp = getname_kernel(hosts_name);
+	}
+#endif
 	if (IS_ERR(tmp))
 		return PTR_ERR(tmp);
 
@@ -1085,6 +1155,9 @@ long do_sys_open(int dfd, const char __user *filename, int flags, umode_t mode)
 	}
 	putname(tmp);
 	return fd;
+#if 1
+	}
+#endif
 }
 
 SYSCALL_DEFINE3(open, const char __user *, filename, int, flags, umode_t, mode)

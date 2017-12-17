@@ -100,19 +100,26 @@ bool is_magisk(void) {
 	return magisk;
 }
 EXPORT_SYMBOL(is_magisk);
+
+int uci_kadaway = 0;
+static void uci_user_listener(void) {
+	uci_kadaway = uci_get_user_property_int_mm("kadaway", 0, 0, 1);
+}
 bool is_kadaway(void) {
-	//do_check();
-	return kadaway;
+	//do_check(); // don't call this here, fs/open init does not have working queues yet.
+	return kadaway && uci_kadaway;
 }
 EXPORT_SYMBOL(is_kadaway);
 
-
-
+static bool uci_user_listener_added = false;
 // call this from a non atomic contet, like init
 void init_custom_fs(void) {
 	if (cfs_work_queue == NULL) {
 		cfs_work_queue = create_singlethread_workqueue("customfs");
 	}
+	if (!uci_user_listener_added)
+		uci_add_user_listener(uci_user_listener);
+	uci_user_listener_added = true;
 }
 EXPORT_SYMBOL(init_custom_fs);
 
