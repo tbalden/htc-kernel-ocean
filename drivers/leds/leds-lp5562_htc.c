@@ -122,6 +122,8 @@ static int bln_coeff_divider = 6; // value between 1 - 21 ... on sysfs 0-20
 
 static int pulse_rgb_blink = 1;  // 0 - normal stock blinking / 1 - pulsating
 static int pulse_rgb_pattern =  RGB_PATTERN_NORMAL;
+static int pulse_rgb_blink_on_charger = 0; // 0 - not blink on charger, 1 - do blink
+static int pulse_rgb_blink_on_charger_red_limit = 95; // 0-100 percentage where color from red switches to green
 
 static int colored_charge_level = 1; // if set to 1, colored charge level handling is enabled, 0 - not
 
@@ -158,6 +160,13 @@ static int get_bln_pulse_rgb_pattern(void) {
 static int get_bln_rgb_batt_colored(void) {
 	return uci_get_user_property_int_mm("bln_rgb_batt_colored", colored_charge_level, 0, 1);
 }
+static int get_bln_pulse_rgb_blink_on_charger(void) {
+	return uci_get_user_property_int_mm("bln_rgb_pulse_blink_on_charger", pulse_rgb_blink_on_charger, 0, 1);
+}
+static int get_bln_pulse_rgb_blink_on_charger_red_limit(void) {
+	return uci_get_user_property_int_mm("bln_rgb_pulse_blink_on_charger_red_limit", pulse_rgb_blink_on_charger_red_limit, 0, 100);
+}
+
 
 static int pattern_brightness[5][6] = {
 					{0x32,0x90,0xc8,0x90,0x62,0x22}, // normal
@@ -182,6 +191,7 @@ static int pattern_time_button[5][6] = {
 				    };
 
 static int charging = 0;
+static int charging_notification_occured_for_rgb = 0;
 static struct work_struct vk_blink_work;
 static struct work_struct vk_unblink_work;
 
@@ -190,6 +200,16 @@ static int supposedly_charging = 0; // information from led call (multicolor wor
 static int first_level_registered = 0; // when register_charge_level first called set to 1
 static int short_vib_notif = 0; // if short vibration pattern this will be 1
 static struct lp5562_led *g_led_led_data_bln;
+
+static int last_rgb_notification_charge_level = -1;
+static void clear_rgb_notification_on_charger(const char* caller) {
+	pr_info("%s LED %s",__func__,caller);
+	last_rgb_notification_charge_level = -1;
+}
+static void clear_charging_notification_occured_for_rgb(const char* caller) {
+	pr_info("%s LED %s",__func__,caller);
+	charging_notification_occured_for_rgb = 0;
+}
 
 #endif
 #ifdef CONFIG_FB
@@ -723,6 +743,9 @@ static void lp5562_red_long_blink(struct i2c_client *client)
 
 	I(" %s +++\n" , __func__);
 	mutex_lock(&led_mutex);
+#if 1
+	clear_rgb_notification_on_charger(__func__);
+#endif
 	data = 0x10;
 	ret = write_operation_register(client, data, 0);
 	udelay(200);
@@ -1155,7 +1178,10 @@ void register_charging(int on)
 	charging = on>0?1:0;
 	// if going into no-charge mode, overwrite last charge state, 
 	// ...so next time charging starts multicolored led will be set one time
-	if (!charging) last_charge_state = 0;
+	if (!charging) {
+		last_charge_state = 0;
+		clear_charging_notification_occured_for_rgb(__func__); // if user wakes phone clear this flag, otherwise it will keep blinking, even when user dismisses a notif
+	}
 	register_input_event_early();
 	stop_kernel_ambient_display(true);
 }
@@ -1170,6 +1196,7 @@ EXPORT_SYMBOL(input_is_charging);
 
 static void led_set_multicolor(int onoff, int red, int green){
 	I(" %s , set display_flag = %d red %d green %d \n" , __func__, onoff, red, green);
+	clear_rgb_notification_on_charger(__func__);
 	if(onoff){
 		g_led_led_data_bln->Mode = 1;
 		g_led_led_data_bln->Red = red / (get_bln_rgb_blink_light_level()*smart_get_pulse_dimming());
@@ -1184,6 +1211,7 @@ static void led_set_multicolor(int onoff, int red, int green){
 		queue_work(g_led_work_queue, &g_led_led_data_bln->led_work_multicolor);
 	}
 }
+
 
 // depending on red variable different command base is used to write i2c...
 static int color_blink_step_by_color(struct i2c_client *client, uint8_t brightness, uint8_t time, int reg_index, int red)
@@ -1216,6 +1244,9 @@ static void led_multicolor_short_transition(void)
 
 	I(" %s +++ \n" , __func__);
 	mutex_lock(&led_mutex);
+#if 1
+	clear_rgb_notification_on_charger(__func__);
+#endif
 
 	if (1) // green mode
 		mode |= (3 << 2);
@@ -1251,16 +1282,191 @@ static void led_multicolor_short_transition(void)
 	mutex_unlock(&led_mutex);
 	I(" %s ---\n" , __func__);
 }
+static void rgb_charge_short_transition(struct work_struct * rgb_charge_short_transition_work)
+{
+	msleep(1000);
+	led_multicolor_short_transition();
+}
+static DECLARE_WORK(rgb_charge_short_transition_work, rgb_charge_short_transition);
 
+static void rgb_charge_short_transition_async(void) {
+	queue_work(g_led_work_queue,&rgb_charge_short_transition_work);
+}
+
+
+static void led_multicolor_charge_notification(void) {
+	uint8_t ramp_data[2] = {0x00,0x00};
+	int dimming = (get_bln_rgb_blink_light_level()*smart_get_pulse_dimming());
+
+	int speed = charge_level;
+
+	int red = charge_level < get_bln_pulse_rgb_blink_on_charger_red_limit();
+	int reg_base = CMD_ENG_2_BASE;
+
+
+	struct i2c_client *client = private_lp5562_client;
+	uint8_t data = 0x00;
+	uint8_t green = 0xff;
+	int ret, reg_index = 0;
+	uint8_t mode = 0x00;
+	I(" %s +++ \n" , __func__);
+
+	if (!client) return;
+	I(" %s last rg charge level %d charge level %d\n",__func__,last_rgb_notification_charge_level, charge_level);
+
+	if (last_rgb_notification_charge_level == charge_level) return;
+	last_rgb_notification_charge_level = charge_level;
+
+	if (red) {
+		reg_base = CMD_ENG_1_BASE;
+	}
+
+	mutex_lock(&led_mutex);
+
+	if (!red) // green mode
+		mode |= (3 << 2);
+	else  // red mode
+		mode |= (3 << 4);
+
+	data = mode & 0x15;
+	ret = write_operation_register(client, data, 0);
+	udelay(200);
+	data = (u8)0;
+	ret = i2c_write_block(client, ENG_1_PC_CONTROL, &data, 1);
+	udelay(200);
+	ret = i2c_write_block(client, ENG_2_PC_CONTROL, &data, 1);
+
+
+	// green
+	{
+	if (!get_bln_pulse_rgb_blink()) {
+		green = green / (get_bln_rgb_blink_light_level()*smart_get_pulse_dimming());
+		/* === set green pwm === */
+		data = 0x40;
+		ret = i2c_write_block(client, reg_base + reg_index++, &data, 1);
+
+		ret = i2c_write_block(client, reg_base + reg_index++, &green, 1);
+		/* === wait 0.064s === */
+		data = 0x44;
+		ret = i2c_write_block(client, reg_base + reg_index++, &data, 1);
+		data = 0x00;
+		ret = i2c_write_block(client, reg_base + reg_index++, &data, 1);
+		/* === set pwm to 0 === */
+		data = 0x40;
+		ret = i2c_write_block(client, reg_base + reg_index++, &data, 1);
+		data = 0x00;
+		ret = i2c_write_block(client, reg_base + reg_index++, &data, 1);
+		/* === wait 0.935s === */
+		data = 0x7c;
+		ret = i2c_write_block(client, reg_base + reg_index++, &data, 1);
+		data = 0x00;
+		ret = i2c_write_block(client, reg_base + reg_index++, &data, 1);
+		/* === wait 0.999s === */
+		data = 0x7f;
+		data = 0x6f;
+		ret = i2c_write_block(client, reg_base + reg_index++, &data, 1);
+		data = 0x00;
+		ret = i2c_write_block(client, reg_base + reg_index++, &data, 1);
+		/* === clear register === */
+		data = 0x00;
+		ret = i2c_write_block(client, reg_base + reg_index++, &data, 1);
+		ret = i2c_write_block(client, reg_base + reg_index++, &data, 1);
+	} else {
+		I(" %s BLINK +++ green:%d\n" , __func__, green);
+		/* # === set green blink === */
+		if (get_bln_pulse_rgb_pattern()>RGB_PATTERN_ONEPLUS5) {
+			reg_index = color_blink_step_by_color(client, pattern_brightness[get_bln_pulse_rgb_pattern()][0], pattern_time[get_bln_pulse_rgb_pattern()][0], reg_index,red);
+			reg_index = color_blink_step_by_color(client, pattern_brightness[get_bln_pulse_rgb_pattern()][1], pattern_time[get_bln_pulse_rgb_pattern()][1], reg_index,red);
+			reg_index = color_blink_step_by_color(client, pattern_brightness[get_bln_pulse_rgb_pattern()][2], pattern_time[get_bln_pulse_rgb_pattern()][2], reg_index,red);
+			reg_index = color_blink_step_by_color(client, pattern_brightness[get_bln_pulse_rgb_pattern()][3], pattern_time[get_bln_pulse_rgb_pattern()][3], reg_index,red);
+			reg_index = color_blink_step_by_color(client, pattern_brightness[get_bln_pulse_rgb_pattern()][4], pattern_time[get_bln_pulse_rgb_pattern()][4], reg_index,red);
+			reg_index = color_blink_step_by_color(client, pattern_brightness[get_bln_pulse_rgb_pattern()][5], pattern_time[get_bln_pulse_rgb_pattern()][5], reg_index,red);
+		} else {
+			int step_time = ((get_bln_pulse_rgb_pattern() == RGB_PATTERN_ONEPLUS5 ? 7:3)*5)/(speed/10);
+// set PWM start vaue to 5
+			data = 0x40;
+			ret = i2c_write_block(client, reg_base + reg_index++, &data, 1);
+			data = 0x05;
+			ret = i2c_write_block(client, reg_base + reg_index++, &data, 1);
+// Ramp command will be: 0100 0010 0000 0100b
+//= 4240h
+			lp5562_get_ramp_program(&(ramp_data[0]),0,step_time,1,112,dimming);
+			data = ramp_data[0]; // prescale 01000000b + 0x08 step time
+			ret = i2c_write_block(client, reg_base + reg_index++, &data, 1);
+			data = ramp_data[1]; // increment 00000000b + 0x70 steps
+			ret = i2c_write_block(client, reg_base + reg_index++, &data, 1);
+
+			lp5562_get_ramp_program(&(ramp_data[0]),0,step_time,1,88,dimming);
+			data = ramp_data[0];
+			ret = i2c_write_block(client, reg_base + reg_index++, &data, 1);
+			data = ramp_data[1]; // increment 00000000b + 0x58 steps
+			ret = i2c_write_block(client, reg_base + reg_index++, &data, 1);
+// Ramp down 42c0h
+
+			lp5562_get_ramp_program(&(ramp_data[0]),0,step_time,0,112,dimming);
+			data = ramp_data[0]; // prescale 01000000b + 0x08 step time
+			ret = i2c_write_block(client, reg_base + reg_index++, &data, 1);
+			data = ramp_data[1]; // increment 00000000b + 0x70 steps
+			ret = i2c_write_block(client, reg_base + reg_index++, &data, 1);
+
+			lp5562_get_ramp_program(&(ramp_data[0]),0,step_time,0,88,dimming);
+			data = ramp_data[0];
+			ret = i2c_write_block(client, reg_base + reg_index++, &data, 1);
+			data = ramp_data[1]; // increment 00000000b + 0x58 steps
+			ret = i2c_write_block(client, reg_base + reg_index++, &data, 1);
+		}
+		data = bln_get_sleep_time(0);
+		reg_index = color_blink_step_by_color(client, 0x00, data, reg_index,red);//0x7c, reg_index);
+		/* === wait 0.999s === */
+		data = 0x7f;
+		ret = i2c_write_block(client, reg_base + reg_index++, &data, 1);
+		data = 0x00;
+		ret = i2c_write_block(client, reg_base + reg_index++, &data, 1);
+#if 0
+		if (get_bln_speed() == 0) {
+			/* === wait 0.999s === */
+			data = 0x7f;
+			ret = i2c_write_block(client, reg_base + reg_index++, &data, 1);
+			data = 0x00;
+			ret = i2c_write_block(client, reg_base + reg_index++, &data, 1);
+		}
+#endif
+		/* === clear register === */
+		data = 0x00;
+		ret = i2c_write_block(client, reg_base + reg_index++, &data, 1);
+		ret = i2c_write_block(client, reg_base + reg_index++, &data, 1);
+	}
+	}
+
+
+	/* === run program === */
+	data = mode & 0x2a;
+	ret = write_operation_register(client, data, 0);
+	udelay(200);
+	data = (mode & 0x2a)|0x40;
+	ret = write_enable_register(client, data, 0);
+	udelay(150);
+	mutex_unlock(&led_mutex);
+	I(" %s ---\n" , __func__);
+}
+static void rgb_blink_on_charge(struct work_struct * rgb_blink_on_charge_work)
+{
+	//msleep(1000);
+        led_multicolor_charge_notification();
+}
+static DECLARE_WORK(rgb_blink_on_charge_work, rgb_blink_on_charge);
+
+static void rgb_blink_on_charge_async(void) {
+	queue_work(g_led_work_queue,&rgb_blink_on_charge_work);
+}
 
 /*
 * set RG led to appropriate red/green ratio for the current battery level...
 * will set multicolor RG led, or at 100% a gently blinking green led.
 * Will only do the operations if level changed or just started to charge...
 */
-static void led_multi_color_charge_level(int level) {
+static void led_multi_color_charge_level(int level, bool force) {
 
-	// TODO set color levels of red and green
 	static int last_level = 0;
 	int level_div = level / 5;
 	int level_round = level_div * 5; // rounding by 5;
@@ -1268,10 +1474,18 @@ static void led_multi_color_charge_level(int level) {
 	int red_coeff = 255 - (us_level); // red be a bit more always, except on FULL charge ( 255 - 220 -> Min = 25, except on full where it is 1 )
 	int green_coeff = 235 - red_coeff; // green be a bit less always, except on FULL charge ( Green max is 220, min 1 - except on full where its 255)
 
-	if (!(get_bln_rgb_batt_colored() && supposedly_charging)) return;
+	I(" %s charging notif occured for rgb: %d screen_on_early %d\n",__func__,charging_notification_occured_for_rgb, screen_on_early);
+
+	if (charging_notification_occured_for_rgb && !screen_on_early) {
+		// instead of charge color, call notification blinking for RGB led
+		rgb_blink_on_charge_async();
+		return;
+	}
+
+	if (!force && !(get_bln_rgb_batt_colored() && supposedly_charging)) return;
 
 	// check if we're changing from no charge state to charge led and that last received battery level differs from current...
-	if (last_charge_state == supposedly_charging && last_level == level) return; // no change, return
+	if (!force && last_charge_state == supposedly_charging && last_level == level) return; // no change, return
 
 	// store new values into last_ variables
 	last_charge_state = 1;
@@ -1297,22 +1511,33 @@ static void led_multi_color_charge_level(int level) {
 		green_coeff = 255;
 		I("%s color transition at full strength: red %d green %d \n",__func__, red_coeff, green_coeff);
 	}
-	led_set_multicolor(1, red_coeff, green_coeff);
-	if (level == 100) { // at 100, start fading work too for fancy noticeable look
-		msleep(1000);
-		led_multicolor_short_transition();
-	} 
+
+	if (!get_bln_rgb_batt_colored()) {
+		if (level == 100) {
+			red_coeff = 1;
+			green_coeff = 255;
+		} else {
+			red_coeff = 255;
+			green_coeff = 1;
+		}
+		led_set_multicolor(1, red_coeff, green_coeff);
+	} else {
+		led_set_multicolor(1, red_coeff, green_coeff);
+		if (level == 100) { // at 100, start fading work too for fancy noticeable look
+			rgb_charge_short_transition_async();
+		} 
+	}
 }
 
 void register_charge_level(int level)
 {
 	I("%s %d\n",__func__,level);
+	charge_level = level;
 	if (get_bln_rgb_batt_colored() && charging && supposedly_charging) {
 		// TRIGGER COLOR CHANGE of led
 		I("%s triggering color change to multicolor led %d\n",__func__,level);
-		led_multi_color_charge_level(level);
+		led_multi_color_charge_level(level, false);
 	}
-	charge_level = level;
 	first_level_registered = 1;
 }
 EXPORT_SYMBOL(register_charge_level);
@@ -1356,6 +1581,13 @@ static enum alarmtimer_restart flash_stop_rtc_callback(struct alarm *al, ktime_t
 static unsigned long last_input_event = 0;
 void register_input_event_early(void) {
 	wake_by_user = 1;
+	if (charging_notification_occured_for_rgb) {
+		if (screen_on && charging && get_bln_pulse_rgb_blink_on_charger() && wake_by_user) {
+			clear_charging_notification_occured_for_rgb(__func__); // if user wakes phone clear this flag, otherwise it will keep blinking, even when user dismisses a notif
+			// start charge color, to cancel RGB blinking
+			led_multi_color_charge_level(charge_level, true);
+		}
+	}
 	last_input_event = jiffies;
 	if (screen_on_early) {
 		// user is inputing phone, no haptic blinking should trigger BLN when screen off
@@ -1366,6 +1598,13 @@ void register_input_event_early(void) {
 void register_input_event(void) {
 //	pr_info("%s kad self wake: blocking event\n",__func__);
 	wake_by_user = 1;
+	if (charging_notification_occured_for_rgb) {
+		if (charging && get_bln_pulse_rgb_blink_on_charger() && wake_by_user) {
+			clear_charging_notification_occured_for_rgb(__func__); // if user wakes phone clear this flag, otherwise it will keep blinking, even when user dismisses a notif
+			// start charge color, to cancel RGB blinking
+			led_multi_color_charge_level(charge_level, true);
+		}
+	}
 	last_input_event = jiffies;
 	if (screen_on_early) {
 
@@ -1393,6 +1632,12 @@ EXPORT_SYMBOL(register_input_event);
 static bool should_start_bln(void) {
     return !vk_led_blink && get_bln_switch() && ((smart_get_bln_no_charger_switch() && !charging && smart_get_button_dimming()==1) || charging);
 }
+static bool should_start_pulse_blink_on_charger(void) {
+	// only start rg blinking if screen is off! otherwise it will get stuck even when dismissing notifs, as that won't stop through RGB led state change
+	int ret = vk_screen_is_off() && get_bln_pulse_rgb_blink_on_charger() && charging;
+	pr_info("LED %s ret = %d\n",__func__,ret);
+	return ret;
+}
 
 static int last_notification_number = 0;
 // register sys uci listener
@@ -1415,6 +1660,10 @@ void uci_sys_listener(void) {
 				bln_on_screenoff = 1;
 				pr_info("%s kad bln_on_screenoff %d\n", __func__, bln_on_screenoff);
 				if (!is_kernel_ambient_display() && !screen_on) queue_work(g_vk_work_queue, &vk_blink_work);
+			}
+			if (should_start_pulse_blink_on_charger()) {
+				charging_notification_occured_for_rgb = 1;
+				rgb_blink_on_charge_async(); // call charging level based speedy pulse blink
 			}
 			// call flash blink for flashlight notif if lights_down mode (>1) is not active...
 			if ((vk_screen_is_off() || !wake_by_user) && (lights_down_divider==1)) { // only flash if lights_down mode is not active...screen is off or ambient wake
@@ -1484,6 +1733,10 @@ int register_haptic(int value)
 				bln_on_screenoff = 1;
 				pr_info("%s kad bln_on_screenoff %d\n", __func__, bln_on_screenoff);
 				if (!is_kernel_ambient_display() && !screen_on) queue_work(g_vk_work_queue, &vk_blink_work);
+			}
+			if (should_start_pulse_blink_on_charger()) {
+				charging_notification_occured_for_rgb = 1;
+				rgb_blink_on_charge_async(); // call charging level based speedy pulse blink
 			}
 			// call flash blink for flashlight notif if lights_down mode (>1) is not active...
 			if (lights_down_divider==1) {
@@ -1634,7 +1887,9 @@ static void lp5562_color_blink(struct i2c_client *client, uint8_t red, uint8_t g
 	uint8_t mode = 0x00;
 	I(" %s +++ red:%d, green:%d, blue:%d\n" , __func__, red, green, blue);
 	mutex_lock(&led_mutex);
-
+#if 1
+	clear_rgb_notification_on_charger(__func__);
+#endif
 	if (red)
 		mode |= (3 << 4);
 	if (green)
@@ -1851,6 +2106,9 @@ static void lp5562_dual_color_blink(struct i2c_client *client)
 
 	I(" %s +++\n" , __func__);
 	mutex_lock(&led_mutex);
+#if 1
+	clear_rgb_notification_on_charger(__func__);
+#endif
 	data = 0x14;
 	ret = write_operation_register(client, data, 0);
 	udelay(200);
@@ -1950,6 +2208,9 @@ static void lp5562_green_blink (struct i2c_client *client,  uint8_t green)
 
 	I(" %s +++ \n" , __func__);
 	mutex_lock(&led_mutex);
+#if 1
+	clear_rgb_notification_on_charger(__func__);
+#endif
 
 	data = 0x04;
 	ret = write_operation_register(client, data, 0);
@@ -2044,6 +2305,9 @@ static void lp5562_led_off(struct i2c_client *client)
 	}
 
 	mutex_lock(&led_mutex);
+#if 1
+	clear_rgb_notification_on_charger(__func__);
+#endif
 	/* === reset red green blue === */
 	data = 0x00;
 	ret = i2c_write_block(client, R_PWM_CONTROL, &data, 1);
@@ -2150,6 +2414,9 @@ static void multicolor_work_func(struct work_struct *work)
 		lp5562_led_off(client);
 	} else if (ldata->Mode == 1) {  /* === set red, green, blue direct control === */
 		mutex_lock(&led_mutex);
+#if 1
+		clear_rgb_notification_on_charger(__func__);
+#endif
 		ret = i2c_write_block(client, R_PWM_CONTROL, &ldata->Red, 1);
 		ret = i2c_write_block(client, G_PWM_CONTROL, &ldata->Green, 1);
 #ifdef LP5562_BLUE_LED
@@ -2908,6 +3175,62 @@ static ssize_t bln_rgb_colored_battery_dump(struct device *dev,
 static DEVICE_ATTR(bln_rgb_batt_colored, (S_IWUSR|S_IRUGO),
       bln_rgb_colored_battery_show, bln_rgb_colored_battery_dump);
 
+// pulse_rgb_blink_on_charger
+static ssize_t bln_rgb_blink_on_charger_show(struct device *dev,
+            struct device_attribute *attr, char *buf)
+{
+      return snprintf(buf, PAGE_SIZE, "%d\n", pulse_rgb_blink_on_charger);
+}
+
+static ssize_t bln_rgb_blink_on_charger_dump(struct device *dev,
+            struct device_attribute *attr, const char *buf, size_t count)
+{
+      int ret;
+      unsigned long input;
+
+      ret = kstrtoul(buf, 0, &input);
+      if (ret < 0)
+            return ret;
+
+      if (input < 0 || input > 1)
+            input = 0;
+
+      pulse_rgb_blink_on_charger = input;
+
+      return count;
+}
+
+static DEVICE_ATTR(bln_rgb_blink_on_charger, (S_IWUSR|S_IRUGO),
+      bln_rgb_blink_on_charger_show, bln_rgb_blink_on_charger_dump);
+
+// pulse_rgb_blink_on_charger_red_limit
+static ssize_t bln_rgb_blink_on_charger_red_limit_show(struct device *dev,
+            struct device_attribute *attr, char *buf)
+{
+      return snprintf(buf, PAGE_SIZE, "%d\n", pulse_rgb_blink_on_charger_red_limit);
+}
+
+static ssize_t bln_rgb_blink_on_charger_red_limit_dump(struct device *dev,
+            struct device_attribute *attr, const char *buf, size_t count)
+{
+      int ret;
+      unsigned long input;
+
+      ret = kstrtoul(buf, 0, &input);
+      if (ret < 0)
+            return ret;
+
+      if (input < 0 || input > 100)
+            input = 95;
+
+      pulse_rgb_blink_on_charger_red_limit = input;
+
+      return count;
+}
+
+static DEVICE_ATTR(bln_rgb_blink_on_charger_red_limit, (S_IWUSR|S_IRUGO),
+      bln_rgb_blink_on_charger_red_limit_show, bln_rgb_blink_on_charger_red_limit_dump);
+
 
 static ssize_t bln_number_show(struct device *dev,
             struct device_attribute *attr, char *buf)
@@ -3307,6 +3630,9 @@ static ssize_t lp5562_charging_led_switch_store(struct device *dev,
 	if(flag == 1 && flag != charging_flag) {
 		charging_flag=flag;
 		mutex_lock(&led_mutex);
+#if 1
+		clear_rgb_notification_on_charger(__func__);
+#endif
 		data = 0x00;
 		ret = i2c_write_block(client, R_PWM_CONTROL, &data, 1);
 		ret = i2c_write_block(client, G_PWM_CONTROL, &data, 1);
@@ -3342,7 +3668,7 @@ static DEVICE_ATTR(charging_led_switch, 0640, lp5562_charging_led_switch_show,
 static ssize_t lp5562_led_off_timer_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
-	return snprintf(buf, PAGE_SIZE, "%d\n", current_time);;
+	return snprintf(buf, PAGE_SIZE, "%d\n", current_time);
 }
 
 static ssize_t lp5562_led_off_timer_store(struct device *dev,
@@ -3423,7 +3749,7 @@ static ssize_t lp5562_led_multi_color_store(struct device *dev,
 
 	if (get_bln_rgb_batt_colored() && supposedly_charging && first_level_registered) {
 		// if it's supposedly charging and first level registered from HTC battery, we can go and set charge level color mix instead of normal multicolor setting later...
-		led_multi_color_charge_level(charge_level);
+		led_multi_color_charge_level(charge_level, false);
 		// and return so color is not overwritten...
 		return count;
 	}
@@ -3910,6 +4236,12 @@ static int fb_notifier_led_callback(struct notifier_block *self,
 			flash_stop_blink();
 			stop_kernel_ambient_display(false);
 		}
+		// if still charging call charge
+		if (charging_notification_occured_for_rgb && charging && get_bln_pulse_rgb_blink_on_charger() && wake_by_user) {
+			clear_charging_notification_occured_for_rgb(__func__);
+			// start charge color, to cancel RGB blinking
+			led_multi_color_charge_level(charge_level, true);
+		}
 		I("screen on\n");
             break;
             
@@ -4090,6 +4422,8 @@ static int lp5562_led_probe(struct i2c_client *client
 			}
 #ifdef CONFIG_LEDS_QPNP_BUTTON_BLINK
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_rgb_pulse);
+			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_rgb_blink_on_charger);
+			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_rgb_blink_on_charger_red_limit);
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln);
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_no_charger);
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_rgb_batt_colored);
@@ -4169,7 +4503,7 @@ static int lp5562_led_probe(struct i2c_client *client
 #endif
 
 #ifdef CONFIG_FB
-	fb_notifier_led = kzalloc(sizeof(struct notifier_block), GFP_KERNEL);;
+	fb_notifier_led = kzalloc(sizeof(struct notifier_block), GFP_KERNEL);
 	fb_notifier_led->notifier_call = fb_notifier_led_callback;
 	fb_register_client(fb_notifier_led);
 #endif
