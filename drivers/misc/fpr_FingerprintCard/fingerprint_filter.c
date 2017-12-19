@@ -230,7 +230,7 @@ void fpf_uci_sys_listener(void) {
 			}
 		}
 		fpf_ringing = ringing;
-		if (screen_on && !ringing) {
+		if (screen_on && !ringing && !fpf_screen_waking_app) {
 			if (should_screen_off_face_down(screen_timeout_sec, face_down)) {
 				fpf_pwrtrigger(0,__func__);
 			}
