@@ -1024,7 +1024,7 @@ static void start_kad_running(int for_squeeze) {
 }
 
 
-
+#if 0
 // defines what maximum level of user setting for minimum squeeze power set on sense ui
 // will set kernel-side squeeze-to-sleep/wake active. This way user can set below this
 // level the squeeze power on Sense UI, and kernel-squeeze handling will turn on
@@ -1034,11 +1034,13 @@ static int squeeze_power_kernel_max_threshold = 1;// 0 - 9
 static int get_squeeze_power_kernel_max_threshold(void) {
 	return uci_get_user_property_int_mm("squeeze_power_kernel_max_threshold", squeeze_power_kernel_max_threshold, 0,9);
 }
+#endif
 
 // int that signals if kernel should handle squeezes for squeeze to sleep/wake
 static int squeeze_kernel_handled = 0;
 
 void register_squeeze_power_threshold_change(int power) {
+#if 0
 	int new_level = (power - 101) / 20;
 	pr_info("%s squeeze call new_level power %d max level %d power %d \n",__func__,new_level,get_squeeze_power_kernel_max_threshold(),power);
 	if (new_level <= get_squeeze_power_kernel_max_threshold() && power>=100) { // at least raw squeeze power -> 100 it should be, below that first notch is not registered...
@@ -1046,7 +1048,9 @@ void register_squeeze_power_threshold_change(int power) {
 	} else {
 		squeeze_kernel_handled = 0;
 	}
+#endif
 	last_squeeze_power_registration_jiffies = jiffies;
+	squeeze_kernel_handled = 1;
 }
 EXPORT_SYMBOL(register_squeeze_power_threshold_change);
 
@@ -2719,7 +2723,7 @@ static ssize_t squeeze_wake_dump(struct device *dev,
 static DEVICE_ATTR(squeeze_wake, (S_IWUSR|S_IRUGO),
 	squeeze_wake_show, squeeze_wake_dump);
 
-
+#if 0
 static ssize_t squeeze_max_power_level_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
@@ -2746,6 +2750,7 @@ static ssize_t squeeze_max_power_level_dump(struct device *dev,
 
 static DEVICE_ATTR(squeeze_max_power_level, (S_IWUSR|S_IRUGO),
 	squeeze_max_power_level_show, squeeze_max_power_level_dump);
+#endif
 
 static ssize_t squeeze_peek_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
@@ -3799,9 +3804,11 @@ static int __init fpf_init(void)
 	if (rc)
 		pr_err("%s: sysfs_create_file failed for notif boost only in pocket\n", __func__);
 
+#if 0
 	rc = sysfs_create_file(fpf_kobj, &dev_attr_squeeze_max_power_level.attr);
 	if (rc)
 		pr_err("%s: sysfs_create_file failed for squeeze max pwr level\n", __func__);
+#endif
 
 	rc = sysfs_create_file(fpf_kobj, &dev_attr_block_power_key_in_pocket.attr);
 	if (rc)
