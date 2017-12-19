@@ -30,6 +30,7 @@
 /*include <mach/ADP5585_ioextender.h>*/
 #include <linux/of_gpio.h>
 #include <linux/wakelock.h>
+#include <linux/spinlock.h>
 
 #if 1
 #include <linux/stacktrace.h>
@@ -1193,22 +1194,28 @@ int input_is_charging(void) {
 EXPORT_SYMBOL(input_is_charging);
 
 
+DEFINE_SPINLOCK(led_data_lock);
 
 static void led_set_multicolor(int onoff, int red, int green){
 	I(" %s , set display_flag = %d red %d green %d \n" , __func__, onoff, red, green);
 	clear_rgb_notification_on_charger(__func__);
 	if(onoff){
+		wake_lock_timeout(&(g_led_led_data_bln->led_wake_lock), 2*HZ);
+		spin_lock(&led_data_lock);
 		g_led_led_data_bln->Mode = 1;
 		g_led_led_data_bln->Red = red / (get_bln_rgb_blink_light_level()*smart_get_pulse_dimming());
 		g_led_led_data_bln->Green = green / (get_bln_rgb_blink_light_level()*smart_get_pulse_dimming());
 		g_led_led_data_bln->Blue = 0;
 		queue_work(g_led_work_queue, &g_led_led_data_bln->led_work_multicolor);
+		spin_unlock(&led_data_lock);
 	}else {
+		spin_lock(&led_data_lock);
 		g_led_led_data_bln->Mode = 0;
 		g_led_led_data_bln->Red = 0;
 		g_led_led_data_bln->Green = 0;
 		g_led_led_data_bln->Blue = 0;
 		queue_work(g_led_work_queue, &g_led_led_data_bln->led_work_multicolor);
+		spin_unlock(&led_data_lock);
 	}
 }
 
@@ -2337,17 +2344,21 @@ static void green_blink_mfg(int onoff){
 	I(" %s , set display_flag = %d\n" , __func__, onoff);
 	display_flag = onoff;
 	if(display_flag){
+		spin_lock(&led_data_lock);
 		g_led_led_data->Mode = 2;
 		g_led_led_data->Red = 0;
 		g_led_led_data->Green = 0xc8;
 		g_led_led_data->Blue = 0;
 		queue_work(g_led_work_queue, &g_led_led_data->led_work_multicolor);
+		spin_unlock(&led_data_lock);
 	}else {
+		spin_lock(&led_data_lock);
 		g_led_led_data->Mode = 0;
 		g_led_led_data->Red = 0;
 		g_led_led_data->Green = 0;
 		g_led_led_data->Blue = 0;
 		queue_work(g_led_work_queue, &g_led_led_data->led_work_multicolor);
+		spin_unlock(&led_data_lock);
 	}
 }
 #endif
@@ -3735,6 +3746,9 @@ static ssize_t lp5562_led_multi_color_store(struct device *dev,
 	led_cdev = (struct led_classdev *)dev_get_drvdata(dev);
 	ldata = container_of(led_cdev, struct lp5562_led, cdev);
 	wake_lock_timeout(&(ldata->led_wake_lock), 2*HZ);
+
+	spin_lock(&led_data_lock);
+
 	ldata->Mode = (val & Mode_Mask) >> 24;
 	ldata->Red = (val & Red_Mask) >> 16;
 	ldata->Green = (val & Green_Mask) >> 8;
@@ -3749,6 +3763,7 @@ static ssize_t lp5562_led_multi_color_store(struct device *dev,
 
 	if (get_bln_rgb_batt_colored() && supposedly_charging && first_level_registered) {
 		// if it's supposedly charging and first level registered from HTC battery, we can go and set charge level color mix instead of normal multicolor setting later...
+		spin_unlock(&led_data_lock);
 		led_multi_color_charge_level(charge_level, false);
 		// and return so color is not overwritten...
 		return count;
@@ -3759,6 +3774,7 @@ static ssize_t lp5562_led_multi_color_store(struct device *dev,
 	}
 #endif
 	queue_work(g_led_work_queue, &ldata->led_work_multicolor);
+	spin_unlock(&led_data_lock);
 	return count;
 }
 
