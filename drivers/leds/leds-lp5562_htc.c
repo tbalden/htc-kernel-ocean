@@ -1073,7 +1073,7 @@ extern void kernel_ambient_display(void);
 extern int is_kernel_ambient_display(void);
 extern void stop_kernel_ambient_display(bool interrupt_ongoing);
 
-void register_input_event(void);
+void register_input_event(const char* caller);
 void register_input_event_early(void);
 
 static int blink_running = 0;
@@ -1175,7 +1175,11 @@ static int last_charge_state = 0;
 // e.g. from USB driver
 void register_charging(int on)
 {
+	bool input_event = false;
 	I("%s %d\n",__func__,on);
+	if (on!=charging) {
+		input_event = true;
+	}
 	charging = on>0?1:0;
 	// if going into no-charge mode, overwrite last charge state, 
 	// ...so next time charging starts multicolored led will be set one time
@@ -1183,8 +1187,10 @@ void register_charging(int on)
 		last_charge_state = 0;
 		clear_charging_notification_occured_for_rgb(__func__); // if user wakes phone clear this flag, otherwise it will keep blinking, even when user dismisses a notif
 	}
-	register_input_event_early();
-	stop_kernel_ambient_display(true);
+	if (input_event) {
+		register_input_event_early();
+		stop_kernel_ambient_display(true);
+	}
 }
 EXPORT_SYMBOL(register_charging);
 
@@ -1585,7 +1591,20 @@ static enum alarmtimer_restart flash_stop_rtc_callback(struct alarm *al, ktime_t
 	return ALARMTIMER_NORESTART;
 }
 
-static unsigned long last_input_event = 0;
+long get_global_mseconds(void) {
+	struct timespec ts;
+	long ret = 0;
+	getnstimeofday(&ts);
+	ret = (ts.tv_sec*1000LL) + ((ts.tv_nsec)/(1000LL*1000LL));
+	I("%s time = %ld",__func__,ret);
+	return ret;
+}
+
+static long last_input_event = 0;
+void set_last_input_event(const char * caller) {
+	I("%s caller %s",__func__,caller);
+	last_input_event = get_global_mseconds();
+}
 void register_input_event_early(void) {
 	wake_by_user = 1;
 	if (charging_notification_occured_for_rgb) {
@@ -1595,14 +1614,14 @@ void register_input_event_early(void) {
 			led_multi_color_charge_level(charge_level, true);
 		}
 	}
-	last_input_event = jiffies;
+	set_last_input_event(__func__);
 	if (screen_on_early) {
 		// user is inputing phone, no haptic blinking should trigger BLN when screen off
 		bln_on_screenoff = 0;
 	}
 	smart_set_last_user_activity_time();
 }
-void register_input_event(void) {
+void register_input_event(const char * caller) {
 //	pr_info("%s kad self wake: blocking event\n",__func__);
 	wake_by_user = 1;
 	if (charging_notification_occured_for_rgb) {
@@ -1612,7 +1631,8 @@ void register_input_event(void) {
 			led_multi_color_charge_level(charge_level, true);
 		}
 	}
-	last_input_event = jiffies;
+	I("%s caller %s",__func__,caller);
+	set_last_input_event(__func__);
 	if (screen_on_early) {
 
 		ktime_t wakeup_time;
@@ -1654,7 +1674,7 @@ void uci_sys_listener(void) {
 		int ringing = uci_get_sys_property_int_mm("ringing", 0, 0, 1);
 		pr_info("%s uci sys ringing %d\n",__func__,ringing);
 		if (ringing) {
-			register_input_event();
+			register_input_event(__func__);
 			stop_kernel_ambient_display(true);
 		}
 	}
@@ -1707,11 +1727,11 @@ int register_haptic(int value)
 	//WARN_ON(1);
 
 	if (value == DOUBLETAP_VIB_TIME_EXCEPTION) {
-		register_input_event();
+		register_input_event(__func__);
 		return value;
 	}
 	if (value == CALL_VIB_TIME_EXCEPTION || value == ALARM_VIB_TIME_EXCEPTION) {
-		register_input_event();
+		register_input_event(__func__);
 		stop_kernel_ambient_display(true);
 		return value;
 	}
@@ -4199,7 +4219,7 @@ static int fb_notifier_led_callback(struct notifier_block *self,
 {
     struct fb_event *evdata = data;
     int *blank;
-    unsigned int last_input_event_diff = jiffies - last_input_event;
+    long last_input_event_diff = (get_global_mseconds() - last_input_event);
 
     // catch early events as well, as this helps a lot correct functioning knowing when screen is almost off/on, preventing many problems.
     // interpreting still screen ON while it's almost off and vica versa
@@ -4212,7 +4232,7 @@ static int fb_notifier_led_callback(struct notifier_block *self,
 		// if it's ambient display, virtual key lights are not set very close to the fb blank events...
 		///// ...also do not care about this if it's not aosp mode
 		wake_by_user = 0;//first_wake || last_vk_wake_diff < 60; // || !aosp_mode;
-		pr_info("%s fb wake_by_user %d diff %u\n",__func__, wake_by_user, last_input_event_diff);
+		pr_info("%s fb wake_by_user %d diff %ld\n",__func__, wake_by_user, last_input_event_diff);
 		screen_on_early = 1;
 		screen_on = 1;
 		vk_off_time_passed = 0;
@@ -4237,9 +4257,9 @@ static int fb_notifier_led_callback(struct notifier_block *self,
         case FB_BLANK_UNBLANK:
 		screen_on = 1;
 		// check if first wake or other user input directly before this notifier callback, like doubletap wake...
-		wake_by_user = first_wake || last_input_event_diff < 140 * JIFFY_MUL; // || !aosp_mode;
+		wake_by_user = first_wake || last_input_event_diff < 1400; // || !aosp_mode;
 		first_wake = 0; // boot up wake over...
-		pr_info("%s kad self wake: wake event FULL: wake by user result %d diff %u \n",__func__, wake_by_user, last_input_event_diff);
+		pr_info("%s kad self wake: wake event FULL: wake by user result %d diff %ld \n",__func__, wake_by_user, last_input_event_diff);
 		vk_off_time_passed = 0;
 #if 0
 		pulse_rgb_pattern++;
