@@ -94,7 +94,7 @@ struct file* uci_fopen(const char* path, int flags, int rights) {
 
 #define MAX_PARAMS 100
 #define MAX_STR_LEN 100
-#define MAX_FILE_SIZE 2000
+#define MAX_FILE_SIZE 2500
 
 char *user_cfg_keys[MAX_PARAMS];
 char *user_cfg_values[MAX_PARAMS];
@@ -510,7 +510,7 @@ static int fb_notifier_callback(struct notifier_block *self,
         case FB_BLANK_UNBLANK:
 		pr_info("uci screen on\n");
 		if (first_unblank) {
-			start_alarm_parse(80); // start in 40 sec, user cfg parse...
+			start_alarm_parse(20); // start in 40 sec, user cfg parse...
 			first_unblank = 0;
 		}
             break;
