@@ -201,8 +201,10 @@ static void fpf_pwrtrigger(int vibration, const char caller[]);
 extern void register_input_event(const char* caller);
 void stop_kernel_ambient_display(bool interrupt_ongoing);
 
+int stored_lock_state = 0;
 // register sys uci listener
 void fpf_uci_sys_listener(void) {
+	int locked = 0;
 	pr_info("%s uci sys parse happened...\n",__func__);
 	{
 		int silent = uci_get_sys_property_int_mm("silent", 0, 0, 1);
@@ -212,6 +214,7 @@ void fpf_uci_sys_listener(void) {
 		int screen_timeout_sec = uci_get_sys_property_int_mm("screen_timeout", 15, 0, 600);
 
 		int screen_waking_app = uci_get_sys_property_int("screen_waking_apps", 0);
+		locked = uci_get_sys_property_int_mm("locked", 0, 0, 1);
 		if (screen_waking_app != -EINVAL) fpf_screen_waking_app = screen_waking_app;
 
 		pr_info("%s uci sys silent %d ringing %d face_down %d timeout %d \n",__func__,silent, ringing, face_down, screen_timeout_sec);
@@ -236,6 +239,10 @@ void fpf_uci_sys_listener(void) {
 			}
 		}
 	}
+	if (!locked&&stored_lock_state!=locked) {
+		register_input_event(__func__);
+		stop_kernel_ambient_display(true);
+	} else
 	if (fpf_ringing || fpf_screen_waking_app) {
 		register_input_event(__func__);
 		stop_kernel_ambient_display(true);
@@ -243,6 +250,7 @@ void fpf_uci_sys_listener(void) {
 	if (!screen_on && kad_should_start_on_uci_sys_change) {
 		kernel_ambient_display();
 	}
+	stored_lock_state = locked;
 }
 
 
@@ -405,9 +413,11 @@ bool is_screen_locked(void) {
 	if (!last_screen_lock_check_was_false && time_passed>=lock_timeout_sec) {
 		return true;
 	}
-	// screen was just turned but not enough time passed...
-	// ...till next screen off lock_timeout shouldn't be checked, as with screen on, lock timeout obviously won't happen
-	last_screen_lock_check_was_false = 1;
+	if (screen_on) {
+		// screen was just turned but not enough time passed...
+		// ...till next screen off lock_timeout shouldn't be checked, as with screen on, lock timeout obviously won't happen
+		last_screen_lock_check_was_false = 1;
+	}
 	return false;
 }
 
