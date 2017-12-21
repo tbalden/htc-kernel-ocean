@@ -2503,7 +2503,7 @@ reset:
 		} else {
 			hap->vmax_mv = stored_vmax_mv;
 		}
-		qpnp_hap_vmax_config(hap, stored_vmax_mv, true);
+		qpnp_hap_vmax_config(hap, hap->vmax_mv, true);
 		vmax_needs_reset = 0;
 	}
 skip_reset:
