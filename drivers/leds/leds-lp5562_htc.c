@@ -1596,13 +1596,13 @@ long get_global_mseconds(void) {
 	long ret = 0;
 	getnstimeofday(&ts);
 	ret = (ts.tv_sec*1000LL) + ((ts.tv_nsec)/(1000LL*1000LL));
-	I("%s time = %ld",__func__,ret);
+	//I("%s time = %ld",__func__,ret);
 	return ret;
 }
 
 static long last_input_event = 0;
 void set_last_input_event(const char * caller) {
-	I("%s caller %s",__func__,caller);
+	//I("%s caller %s",__func__,caller);
 	last_input_event = get_global_mseconds();
 }
 void register_input_event_early(void) {
@@ -1631,7 +1631,7 @@ void register_input_event(const char * caller) {
 			led_multi_color_charge_level(charge_level, true);
 		}
 	}
-	I("%s caller %s",__func__,caller);
+	//I("%s caller %s",__func__,caller);
 	set_last_input_event(__func__);
 	if (screen_on_early) {
 

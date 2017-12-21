@@ -513,7 +513,7 @@ static void kcal_restore_sync(void) {
 static void kcal_restore(struct work_struct * kcal_restore_work) 
 {
 	pr_info("%s kad ############ restore_backup     screen %d kad %d overlay_on %d backed_up %d need_restore %d\n",__func__, screen_on, kad_running, kad_kcal_overlay_on, kad_kcal_backed_up, needs_kcal_restore_on_screen_on);
-	if (kcal_sleep_before_restore) { msleep(330); } // squeeze peek timed out, wait a bit till screen faded enough... otherwise instant restore
+	if (kcal_sleep_before_restore) { msleep(250); } // squeeze peek timed out, wait a bit till screen faded enough... otherwise instant restore
 	kcal_restore_sync();
 }
 static DECLARE_WORK(kcal_restore_work, kcal_restore);
@@ -528,7 +528,7 @@ static void kcal_listener(struct work_struct * kcal_listener_work)
 			pr_info("%s kad !! kcal listener restore  screen %d kad %d overlay_on %d backed_up %d need_restore %d\n",__func__, screen_on, kad_running, kad_kcal_overlay_on, kad_kcal_backed_up, needs_kcal_restore_on_screen_on);
 			kcal_push_restore = 0;
 			kcal_push_break = 0;
-			if (kcal_sleep_before_restore) { msleep(330); } // 230->300 (oreo screen off a bit longer) is ok, before a screen off happens fully...
+			if (kcal_sleep_before_restore) { msleep(250); } // 230->250 (oreo screen off a bit longer) is ok, before a screen off happens fully...
 			if (screen_on) kcal_restore_sync();
 			break;
 		}
