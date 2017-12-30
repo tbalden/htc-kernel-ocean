@@ -86,4 +86,5 @@ GTAGS
 \#*#
 
 /out
+/out_life
 /net/wireguard/
