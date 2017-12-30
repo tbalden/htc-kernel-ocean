@@ -1,0 +1,6 @@
+&soc {
+        sim_switch {
+		compatible = "htc,sim_switch";
+		htc,sim_switch = <&tlmm 21 0>;
+	};
+};

@@ -1,0 +1,302 @@
+#include "sdm660-external-codec.dtsi"
+
+&tasha_snd {
+	qcom,wsa-disable;
+	qcom,wsa-max-devs = <0>;
+	/delete-property/ qcom,wsa-devs;
+	/delete-property/ qcom,us-euro-gpios;
+};
+
+&tavil_snd {
+	status = "disabled";
+};
+
+&int_codec {
+	/delete-property/ qcom,us-euro-gpios;
+};
+
+&slim_aud {
+	tasha_codec {
+		/delete-node/ swr_master;
+		/delete-node/ msm_cdc_pinctrll;
+		/delete-node/ msm_cdc_pinctrlr;
+	};
+};
+
+&i2c_8 { /* BLSP1 QUP8 (TAS2557) */
+	status = "okay";
+};
+
+/* Headset Bring up*/
+
+&pm660l_l8 {  // AUD_AMP_3V3
+	regulator-min-microvolt = <3300000>;
+	regulator-max-microvolt = <3300000>;
+	qcom,init-ldo-mode = <1>;
+	regulator-always-on;
+};
+
+&tasha_snd {
+		qcom,audio-routing =
+			"AIF4 VI", "MCLK",
+			"RX_BIAS", "MCLK",
+			"MADINPUT", "MCLK",
+			"AMIC2", "MIC BIAS2",
+			"MIC BIAS2", "Headset Mic",
+//HTC_AUD_START
+			"AMIC3", "ANCRight Headset Mic",
+			"ANCRight Headset Mic", "MCLK",
+			"AMIC4", "ANCLeft Headset Mic",
+			"ANCLeft Headset Mic", "MCLK",
+			"Lineout_1 amp", "LINEOUT1",
+//HTC_AUD_END
+			"AMIC5", "MIC BIAS3",
+			"MIC BIAS3", "Handset Mic",
+			"AMIC6", "MIC BIAS4",
+			"MIC BIAS4", "Analog Mic6",
+			"DMIC0", "MIC BIAS1",
+			"MIC BIAS1", "Digital Mic0",
+			"DMIC1", "MIC BIAS1",
+			"MIC BIAS1", "Digital Mic1",
+			"DMIC2", "MIC BIAS3",
+			"MIC BIAS3", "Digital Mic2",
+			"DMIC3", "MIC BIAS3",
+			"MIC BIAS3", "Digital Mic3",
+			"DMIC4", "MIC BIAS4",
+			"MIC BIAS4", "Digital Mic4",
+			"DMIC5", "MIC BIAS4",
+			"MIC BIAS4", "Digital Mic5",
+			"SpkrLeft IN", "SPK1 OUT",
+			"SpkrRight IN", "SPK2 OUT";
+
+		htc,aud_gpio_ids = "htc,aud_typec_id1",
+				"htc,aud_typec_id2",
+				"htc,aud_usb_position";
+
+		htc,aud_gpio_switches = "htc,hpmic_agnd_flip_en_s0",
+				"htc,hpmic_agnd_flip_en_s1",
+				"htc,miclr_flip_en",
+				"htc,miclr_dgnd_sw_en";
+
+		htc,aud_usb_position = <&tlmm 71 0>;
+		htc,aud_typec_id1 = <&tlmm 69 0>;
+		htc,aud_typec_id2 = <&tlmm 63 0>;
+		//S3
+		htc,hpmic_agnd_flip_en_s0= <&tlmm 0 0>;
+		htc,hpmic_agnd_flip_en_s1= <&tlmm 64 0>;
+		//S4
+		htc,miclr_flip_en = <&pm660l_gpios 5 0>;
+		//S5
+		htc,miclr_dgnd_sw_en = <&tca6418 4 0>;
+
+		htc,hsmic_2v85_en = <&pm660l_gpios 4 0>;
+		htc,aud_remote_sensor = <&tca6418 3 0>;
+
+		htc,adapter_35mm_threshold = <330 800>;
+		htc,adapter_25mm_threshold = <1250 2850>;
+
+		htc,headset_adc_channel = <19>;
+
+		//qcom,headset-vadc = <&pm8994_vadc>;
+		htc,usb_hph_fsa3030_sel0 = <&tca6418 5 0>;
+		htc,usb_hph_fsa3030_sel1 = <&tca6418 6 0>;
+		//htc,usb_hph_fsa3030_sel2 = <&tlmm 78 0>;
+		//htc,aud_mbhc_hsdet_l = <&tlmm 55 0>;
+
+		htc,aud_rf_pa_on = <&tlmm 92 0>;
+		htc,aud_tcoil_amp_gpio = <&tca6418 1 0>;
+
+		pinctrl-names = "headset_pin_default";
+		pinctrl-0 = <&headset_pin_default>;
+
+		qcom,tert-mi2s-gpios = <&tert_mi2s_gpios>;
+};
+
+/*GPIO_5 AUD_MICLR_FLIP_EN*/
+&pm660l_gpios {
+		gpio@c400 {
+				qcom,mode = <1>;                /* Output */
+				qcom,master-en = <1>;
+				status = "ok";
+        };
+};
+
+/* GPIO 4 AUD_HSMIC_2V85_EN */
+&pm660l_gpios {
+        gpio@c300 {
+				qcom,mode = <1>;                /* Output */
+				qcom,master-en = <1>;
+				status = "ok";
+        };
+};
+
+&soc {
+	/delete-node/ msm_cdc_pinctrl@75;
+	tert_mi2s_gpios: tert_mi2s_pinctrl {
+		compatible = "qcom,msm-cdc-pinctrl";
+		pinctrl-names = "aud_active", "aud_sleep";
+		pinctrl-0 = <&ter_mi2s_clk_active &ter_mi2s_ws_active &ter_mi2s_sd0_active &ter_mi2s_sd1_active>;
+		pinctrl-1 = <&ter_mi2s_clk_sleep &ter_mi2s_ws_sleep &ter_mi2s_sd0_sleep &ter_mi2s_sd1_sleep>;
+		qcom,lpi-gpios;
+	};
+
+	tlmm: pinctrl@03000000 {
+		/*HPMIC_AGND_FLIP_S0, type-C headset ID1, AMP_RST, ID2, HPMIC_AGND_FLIP_S1, Flip position*/
+		headset_pin_default {
+			headset_pin_default: headset_pin_default {
+				mux {
+					pins = "gpio0", "gpio48", "gpio49", "gpio63", "gpio64", "gpio69", "gpio71";
+					function = "gpio";
+				};
+				config {
+					pins = "gpio0", "gpio48", "gpio49", "gpio63", "gpio64", "gpio69", "gpio71";
+					drive-strength = <2>; /* 2 mA */
+					bias-disable;       /* NO PULL */
+				};
+			};
+		};
+
+		ter_mclk_active: ter_mclk_active {
+			mux {
+				pins = "gpio62";
+				function = "sec_mi2s";
+			};
+			config {
+				pins = "gpio62";
+				drive-strength = <8>;
+			};
+		};
+
+		ter_mclk_sleep: ter_mclk_sleep {
+			mux {
+				pins = "gpio62";
+				function = "sec_mi2s";
+			};
+
+			config {
+				pins = "gpio62";
+				drive-strength = <2>;
+			};
+		};
+	};
+
+/* TI config for spk chip */
+	i2c@c1b8000 { /* i2c_8 */
+		tas2557@4c {
+			#sound-dai-cells = <1>;
+			compatible = "ti,tas2557";
+			reg = <0x4c>;
+			ti,cdc-reset-gpio = <&tlmm 49 0>;
+			ti,irq-gpio = <&tlmm 56 0>;
+			ti,i2s-bits = <16>;   /* support 16, 24, 32 */
+			ti,bypass-tmax = <1>;   /* 0, not bypass; 1, bypass */
+			status = "ok";
+		};
+	};
+	qcom,msm-dai-mi2s {
+		dai_mi2s2: qcom,msm-dai-q6-mi2s-tert {
+			compatible = "qcom,msm-dai-q6-mi2s";
+			qcom,msm-dai-q6-mi2s-dev-id = <2>;
+			qcom,msm-mi2s-rx-lines = <1>; /* SD0 */
+			qcom,msm-mi2s-tx-lines = <2>; /* SD1 */
+			#qcom,msm-mi2s-slave = <0>;
+		};
+	};
+	lpi_pinctrl@15070000 {
+/* ter and quat mi2s */
+
+		ter_mi2s_clk_active: ter_mi2s_clk_active {
+			mux {
+				pins = "gpio4";
+				function = "func4";
+			};
+
+			config {
+				pins = "gpio4";
+				drive-strength = <8>;
+			};
+		};
+
+		ter_mi2s_clk_sleep: ter_mi2s_clk_sleep {
+			mux {
+				pins = "gpio4";
+				function = "func4";
+			};
+
+			config {
+				pins = "gpio4";
+				drive-strength = <2>;
+			};
+		};
+
+		ter_mi2s_ws_active: ter_mi2s_ws_active {
+			mux {
+				pins = "gpio5";
+				function = "func4";
+			};
+
+			config {
+				pins = "gpio5";
+				drive-strength = <8>;
+			};
+		};
+
+		ter_mi2s_ws_sleep: ter_mi2s_ws_sleep {
+			mux {
+				pins = "gpio5";
+				function = "func4";
+			};
+
+			config {
+				pins = "gpio5";
+				drive-strength = <2>;
+			};
+		};
+		ter_mi2s_sd0_active: ter_mi2s_sd0_active {
+			mux {
+				pins = "gpio6";
+				function = "func4";
+			};
+
+			config {
+				pins = "gpio6";
+				drive-strength = <8>;
+			};
+		};
+
+		ter_mi2s_sd0_sleep: ter_mi2s_sd0_sleep {
+			mux {
+				pins = "gpio6";
+				function = "func4";
+			};
+
+			config {
+				pins = "gpio6";
+				drive-strength = <2>;
+			};
+		};
+		ter_mi2s_sd1_active: ter_mi2s_sd1_active {
+			mux {
+				pins = "gpio7";
+				function = "func4";
+			};
+
+			config {
+				pins = "gpio7";
+				drive-strength = <8>;
+			};
+		};
+
+		ter_mi2s_sd1_sleep: ter_mi2s_sd1_sleep {
+			mux {
+				pins = "gpio7";
+				function = "func4";
+			};
+
+			config {
+				pins = "gpio7";
+				drive-strength = <2>;
+			};
+		};
+	};
+};

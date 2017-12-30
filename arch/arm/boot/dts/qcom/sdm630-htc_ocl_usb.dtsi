@@ -1,0 +1,104 @@
+/* Copyright (c) 2016, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ */
+
+&tlmm {
+	usbpd_cc_dir: usbpd_cc_dir {
+		mux {
+			pins = "gpio58";
+			function = "USB_PHY";
+		};
+
+		config {
+			pins = "gpio58";
+			drive-strength = <2>;
+			bias-disable;
+		};
+	};
+	audio_detect_active: audio_detect_active {
+		mux {
+		pins = "gpio55";
+		function = "gpio";
+		};
+
+		config {
+			pins = "gpio55";
+			bias-disable;
+			output-low;
+			drive-strength = <2>;
+		};
+
+	};
+
+	audio_detect_sleep: audio_detect_sleep {
+		mux {
+			pins = "gpio55";
+			function = "gpio";
+		};
+
+		config {
+			pins = "gpio55";
+			bias-disable;
+			output-high;
+			drive-strength = <2>;
+		};
+	};
+	tps61099_pinctrl {
+		tps61099_active: tps61099_active {
+			mux {
+				pins = "gpio113";
+				function = "gpio";
+			};
+
+			config {
+				pins = "gpio113";
+				drive-strength = <2>;
+				bias-disable;
+				output-high;
+			};
+		};
+
+		tps61099_sleep: tps61099_sleep {
+			mux {
+				pins = "gpio113";
+				function = "gpio";
+			};
+
+			config {
+				pins = "gpio113";
+				drive-strength = <2>;
+				bias-disable;
+				output-low;
+			};
+		};
+	};
+};
+
+&soc {
+	htc_tps61099: htc_tps61099 {
+		compatible = "htc,tps61099";
+		pinctrl-names = "tps61099_active", "tps61099_sleep";
+		pinctrl-0 = <&tps61099_active>;
+		pinctrl-1 = <&tps61099_sleep>;
+	};
+};
+
+&pm660_pdphy {
+	pinctrl-names = "pin_active", "pin_sleep" , "usbpd_cc_dir";
+	pinctrl-0 = <&audio_detect_active>;
+	pinctrl-1 = <&audio_detect_sleep>;
+	pinctrl-2 = <&usbpd_cc_dir>;
+};
+
+&pm660_charger {
+	ext_power-supply = <&htc_tps61099>;
+	qcom,external-vconn;
+};

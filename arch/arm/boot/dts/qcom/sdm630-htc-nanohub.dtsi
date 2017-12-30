@@ -1,0 +1,197 @@
+/* Copyright (c) 2016, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ */
+
+/*
+ * msm8998-htc-nanohub : nanohub config
+ */
+
+&i2c_3 {
+	status = "disabled";
+};
+
+&tlmm {
+	spi_3 {
+		spi_3_active: spi_3_active {
+			config {
+				bias-pull-down;
+			};
+		};
+
+		spi_3_sleep: spi_3_sleep {
+			config {
+				bias-pull-down;
+			};
+		};
+	};
+
+	/* gpio66, gpio67 */
+	ts_mux {
+		ts_active {
+			mux {
+				/delete-property/ pins;
+			};
+			config {
+				/delete-property/ pins;
+			};
+		};
+		ts_reset_suspend {
+			mux {
+				/delete-property/ pins;
+			};
+			config {
+				/delete-property/ pins;
+			};
+		};
+		ts_int_suspend {
+			mux {
+				/delete-property/ pins;
+			};
+			config {
+				/delete-property/ pins;
+			};
+		};
+	};
+
+	sensorhub_ctrl {
+	/* NRST, BOOT0, AP2SH, SH2AP, SH2APNW*/
+		sensorhub_ctrl_active: sensorhub_ctrl_active {
+			mux {
+				pins = "gpio70", "gpio61", "gpio67", "gpio74", "gpio68";
+				function = "gpio";
+			};
+
+			config {
+				pins = "gpio70", "gpio61", "gpio67", "gpio74", "gpio68";
+				drive-strength = <2>;
+				bias-disable;
+			};
+		};
+	};
+
+	sensorhub_handshaking {
+	/* HANDSHAKING */
+		sensorhub_handshaking_active: sensorhub_handshaking_active {
+			mux {
+				pins = "gpio66";
+				function = "gpio";
+			};
+
+			config {
+				pins = "gpio66";
+				drive-strength = <2>;
+				bias-pull-down;
+			};
+		};
+	};
+
+	//sensorhub_intrs {
+	///* Interrupts */
+	//	sensorhub_intrs_active: sensorhub_intrs_active {
+	//		mux {
+	//			pins = "gpio74", "gpio68";
+	//			function = "gpio";
+	//		};
+        //
+	//		config {
+	//			pins = "gpio74", "gpio68";
+	//			drive-strength = <2>;
+	//			bias-pull-up;
+	//		};
+	//	};
+	//};
+};
+
+&soc {
+	spi_3: spi@c177000 { /* BLSP1 QUP3 */
+		status = "okay";
+		spi-max-frequency = <19200000>;
+		qcom,infinite-mode = <0>;
+		qcom,rt-priority;
+	};
+};
+
+&spi_3 {
+	nanohub: sensorhub@0 {
+		compatible = "nanohub";
+		reg = <0>;
+		spi-max-frequency = <50000000>;
+		spi-cpol;
+		spi-cpha;
+
+		interrupt-parent = <&tlmm>;
+		interrupts = <74 0x2>;
+		sensorhub,nreset-gpio = <&tlmm 70 0x00>;
+		sensorhub,boot0-gpio = <&tlmm 61 0x00>;
+		sensorhub,wakeup-gpio = <&tlmm 67 0x00>;
+		sensorhub,irq1-gpio = <&tlmm 74 0x00>;
+		sensorhub,irq2-gpio = <&tlmm 68 0x00>;
+		sensorhub,handshaking-gpio = <&tlmm 66 0x00>;
+		sensorhub,spi-cs-gpio = <&tlmm 10 0x00>;
+		sensorhub,bl-addr = <0x08000000>;
+		sensorhub,kernel-addr = <0x0800C000>;
+		sensorhub,shared-addr = <0x08040000>;
+		sensorhub,flash-banks = <0 0x08000000 0x04000>,
+			<3 0x0800C000 0x04000>,
+			<4 0x08010000 0x10000>,
+			<5 0x08020000 0x20000>;
+		sensorhub,num-flash-banks = <4>;
+		sensorhub,shared-flash-banks = <6 0x08040000 0x20000>,
+			<7 0x08060000 0x20000>,
+			<8 0x08080000 0x20000>,
+			<9 0x080A0000 0x20000>,
+			<10 0x080C0000 0x20000>,
+			<11 0x080E0000 0x20000>;
+		sensorhub,num-shared-flash-banks = <6>;
+		sensorhub,gesture-vibrate-ms = <25>;
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&sensorhub_ctrl_active &sensorhub_handshaking_active>;
+	};
+};
+
+&pm660_l14 {  // V_SR_1V8
+	regulator-min-microvolt = <1800000>;
+	regulator-max-microvolt = <1800000>;
+	qcom,init-ldo-mode = <1>;
+	regulator-always-on;
+};
+
+&pm660l_l3 {  // SR_3V
+	regulator-min-microvolt = <3000000>;
+	regulator-max-microvolt = <3000000>;
+	qcom,init-ldo-mode = <1>;
+	regulator-always-on;
+};
+
+/*
+&pm660_lXX {  // OCL uses V_IO_1V8, no need to control
+	regulator-min-microvolt = <1800000>;
+	regulator-max-microvolt = <1800000>;
+	qcom,init-voltage = <1800000>;
+	regulator-always-on;
+	status = "okay";
+};
+*/
+
+/* Enable PM660 GPIO 2 clk 32K function */
+&pm660_gpios {
+	gpio@c100 {
+		qcom,mode = <1>;
+		qcom,output-type = <0>;
+		qcom,pull = <5>;
+		qcom,vin-sel = <0>;
+		qcom,out-strength = <1>;
+		qcom,src-sel = <2>;
+		qcom,master-en = <1>;
+		status = "okay";
+	};
+};

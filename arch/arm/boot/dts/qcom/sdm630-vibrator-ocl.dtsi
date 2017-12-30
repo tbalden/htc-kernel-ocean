@@ -1,0 +1,20 @@
+&pm660_haptics {
+	status = "okay";
+	qcom,actuator-type = "lra";
+	qcom,play-mode = "direct";
+	qcom,vmax-mv = <2686>;
+	qcom,ilim-ma = <800>;
+	qcom,wave-shape = "sine";
+	qcom,wave-play-rate-us = <4255>;
+	qcom,int-pwm-freq-khz = <505>;
+	qcom,sc-deb-cycles = <8>;
+	qcom,en-brake;
+	qcom,brake-pattern = [02 02 00 00];
+	qcom,lra-high-z = "opt1";
+	qcom,lra-auto-res-mode = "qwd";
+	qcom,lra-res-cal-period = <4>;
+	qcom,lra-calibrate-at-eop = <0>;
+	/delete-property/ qcom,correct-lra-drive-freq;
+	qcom,lra-hw-auto-resonance;
+	qcom,misc-trim-error-rc19p2-clk-reg-present;
+};

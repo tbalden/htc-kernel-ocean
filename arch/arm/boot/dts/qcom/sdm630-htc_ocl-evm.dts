@@ -1,0 +1,81 @@
+/* Copyright (c) 2016-2017, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ */
+
+
+/dts-v1/;
+
+#include "sdm630.dtsi"
+#include "sdm630-cdp.dtsi"
+#include "sdm630-nc-pins-htc_ocl-evm.dtsi"
+#include "sdm630-htc-common.dtsi"
+#include "sdm630-touch-ocl.dtsi"
+#include "sdm630-hall-sensor-ocl.dtsi"
+#include "sdm630-cap-ocl.dtsi"
+#include "sdm660-camera-sensor-ocl.dtsi"
+#include "sdm630-htc_ocl_nfc_nxp.dtsi"
+#include "sdm630-htc_ocl-edge_xr.dtsi"
+
+/ {
+	model = "HTC Corporation. SDM630 OCL EVM";
+	compatible = "qcom,sdm630-cdp", "qcom,sdm630", "qcom,cdp";
+	qcom,msm-id = <449 0x0>;
+	qcom,board-id = <0x0 0>;
+	qcom,pmic-id = <0x0001001b 0x0101011a 0x0 0x0>,
+			<0x0001001b 0x0201011a 0x0 0x0>;
+};
+
+&pm660_gpios {
+	gpio@c100 {
+		qcom,mode = <1>;
+		qcom,output-type = <0>;
+		qcom,pull = <5>;
+		qcom,vin-sel = <0>;
+		qcom,out-strength = <1>;
+		qcom,src-sel = <2>;
+		qcom,master-en = <1>;
+		status = "okay";
+	};
+};
+
+&soc {
+	htc,htc_IOExpRST_pins {
+		compatible = "htc,IOExpRST_pin";
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&IOExpRST_pins_gpio>;
+	};
+};
+
+&tlmm {
+	IOExpRST_pins_gpio {
+		IOExpRST_pins_gpio: IOExpRST_pins_gpio {
+			mux {
+				/* gpio59: IO expander RST pin  */
+				pins = "gpio59";
+				function = "gpio";
+			};
+
+			config {
+				pins = "gpio59";
+				drive-strength = <2>;		/* 2 mA */
+				bias-disable;
+				output-high;			/* OUTPUT HIGH */
+			};
+		};
+	};
+};
+
+&nanohub {
+	/* A+G: uint8 bit 0_3 */
+	/* MAG: uint8 bit 4_7 */
+	sensorhub,motion-sensor-placement = /bits/ 8 <0x60>;
+};

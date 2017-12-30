@@ -1,0 +1,120 @@
+&tca6418 {
+	pmx_ts_pwr_active {
+		ts_pwr_active: ts_pwr_active {
+			config {
+				pins = "gpio2";
+				bias-disable;
+				output-high;
+			};
+		};
+	};
+
+	pmx_ts_pwr_suspend {
+		ts_pwr_suspend: ts_pwr_suspend {
+			config {
+				pins = "gpio2";
+				bias-disable;
+				output-high;
+			};
+		};
+	};
+};
+
+&tlmm {
+	pmx_ts_intr_active {
+		ts_intr_active: ts_intr_active {
+			mux {
+				pins = "gpio76";
+				function = "gpio";
+			};
+
+			config {
+				pins = "gpio76";
+				drive-strength = <2>;
+				bias-disable;
+			};
+		};
+	};
+
+	pmx_ts_intr_suspend {
+		ts_intr_suspend: ts_intr_suspend {
+			mux {
+				pins = "gpio76";
+				function = "gpio";
+			};
+
+			config {
+				pins = "gpio76";
+				drive-strength = <2>;
+				bias-disable;
+			};
+		};
+	};
+
+	pmx_ts_rst_active {
+		ts_rst_active: ts_rst_active {
+			mux {
+				pins = "gpio53";
+				function = "gpio";
+			};
+
+			config {
+				pins = "gpio53";
+				drive-strength = <2>;
+				bias-disable;
+				output-low;
+			};
+		};
+	};
+
+	pmx_ts_rst_suspend {
+		ts_rst_suspend: ts_rst_suspend {
+			mux {
+				pins = "gpio53";
+				function = "gpio";
+			};
+
+			config {
+				pins = "gpio53";
+				drive-strength = <2>;
+				bias-disable;
+				output-low;
+			};
+		};
+	};
+};
+
+&i2c_1_active {
+	config {
+		drive-strength = <8>;
+	};
+};
+
+&i2c_1_sleep {
+	config {
+		drive-strength = <8>;
+	};
+};
+
+&soc {
+	i2c_1: i2c@c175000 { // BLSP1 QUP1
+		status = "okay";
+		qcom,disable-dma;
+	};
+};
+
+&i2c_1 {
+	nvt@62 {
+		compatible = "novatek,NVT-ts";
+		reg = <0x62>;
+		interrupt-parent = <&tlmm>;
+		interrupts = <76 0x2>;
+		novatek,switch-gpio = <&tlmm 53 0x00>;
+		novatek,irq-gpio = <&tlmm 76 0x00>;
+		novatek,reset-gpio = <&tca6418 14 0>;
+		pinctrl-names = "pmx_ts_active", "pmx_ts_suspend";
+		pinctrl-0 = <&ts_pwr_active &ts_intr_active &ts_rst_active>;
+		pinctrl-1 = <&ts_pwr_suspend &ts_intr_suspend &ts_rst_suspend>;
+	};
+};
+

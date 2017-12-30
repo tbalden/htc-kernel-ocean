@@ -1,0 +1,267 @@
+/*
+ * sdm630-htc-common: common configs of HTC sdm630 projects
+ */
+
+#include "sdm630-htc_ocl-battery.dtsi"
+#include "sdm660-htc_ocl-audio.dtsi"
+#include "sdm630-dsi-panel-ocl.dtsi"
+#include "sdm630-htc_ocl-fingerprint.dtsi"
+#include "sdm630-key-ocl.dtsi"
+#include "sdm630-htc-nanohub.dtsi"
+#include "sdm630-htc_ocl-led.dtsi"
+#include "sdm630-htc_ocl_usb.dtsi"
+#include "sdm630-hall-sensor-ocl.dtsi"
+#include "sdm630-cap-ocl.dtsi"
+#include "sdm630-vibrator-ocl.dtsi"
+#include "sdm630-htc_ocl_sim_switch.dtsi"
+
+&i2c_7 {
+	status = "okay";
+
+	tca6418_i2c: tca6418-i2c@34 {
+		compatible = "ti,tca6418-i2c";
+		reg = <0x34>;
+		pinctrl = <&tca6418>;
+	};
+};
+
+&soc {
+	/* Modem_BSP */
+	htc_radio_smem {
+		compatible = "htc,htc_radio_smem";
+	};
+
+	tlmm: pinctrl@03000000 {
+		i2c_7 {
+			i2c_7_active: i2c_7_active {
+				config {
+					drive-strength = <8>;
+				};
+			};
+
+			i2c_7_sleep: i2c_7_sleep {
+				config {
+					drive-strength = <8>;
+				};
+			};
+		};
+	};
+
+	tca6418: tca6418-pinctrl {
+		compatible = "ti,tca6418-pinctrl";
+		#gpio-cells = <2>;
+		label = "tca6418-gpio";
+		i2c-client = <&tca6418_i2c>;
+	 };
+
+	htc_mnemosyne@0 {
+		compatible = "htc,mnemosyne";
+		reg = <0x835F0000 0x2000>;
+		reg-names = "htc_mnemosyne_res";
+        };
+};
+
+&spmi_bus {
+        qcom,pm660@0 {
+                qcom,power-on@800 {
+                        /delete-node/ qcom,pon_1;
+                        /delete-node/ qcom,pon_2;
+                        qcom,pon_3 {
+                                qcom,pon-type = <3>;
+                                qcom,pull-up = <1>;
+                                qcom,support-reset = <1>;
+                                qcom,s1-timer = <10256>;
+                                qcom,s2-timer = <2000>;
+                                qcom,s2-type = <8>;
+                                qcom,use-bark;
+                        };
+                };
+
+                pm660_coincell: qcom,coincell@2800 {
+                        qcom,charge-enable = <0>;
+                };
+        };
+
+};
+
+
+&i2c_1 {
+	status = "okay";
+	qcom,disable-dma;
+};
+
+&i2c_2 {
+	status = "okay";
+	qcom,disable-dma;
+};
+
+&i2c_6 {
+	status = "okay";
+	qcom,disable-dma;
+	/delete-node/ nq@28;
+};
+
+&i2c_7 {
+	status = "okay";
+	qcom,disable-dma;
+};
+
+&i2c_8 {
+	status = "okay";
+	qcom,disable-dma;
+};
+
+
+&i2c_1_active {
+	config {
+		drive-strength = <8>;
+	};
+};
+&i2c_1_sleep {
+	config {
+		drive-strength = <8>;
+	};
+};
+
+
+&i2c_2_active {
+	config {
+		drive-strength = <8>;
+	};
+};
+&i2c_2_sleep {
+	config {
+		drive-strength = <8>;
+	};
+};
+
+
+&i2c_6_active {
+	config {
+		drive-strength = <8>;
+	};
+};
+&i2c_6_sleep {
+	config {
+		drive-strength = <8>;
+	};
+};
+
+
+&i2c_7_active {
+	config {
+		drive-strength = <8>;
+	};
+};
+&i2c_7_sleep {
+	config {
+		drive-strength = <8>;
+	};
+};
+
+
+&i2c_8_active {
+	config {
+		drive-strength = <8>;
+	};
+};
+&i2c_8_sleep {
+	config {
+		drive-strength = <8>;
+	};
+};
+
+&venus_fw_mem {
+	/* Use reserved region for venus (QCT original use cma to allocate)  */
+	compatible = "removed-dma-pool";
+	no-map;
+	reg = <0 0x95400000 0 0x500000>;
+};
+
+&buffer_mem {
+	/* qct original reg = <0 0x94a00000 0 0x100000>; */
+	reg = <0 0x95300000 0 0x100000>;
+};
+
+&pil_mba_mem {
+	/* qct original reg = <0 0x94800000 0 0x200000>; */
+	reg = <0 0x95100000 0 0x200000>;
+};
+
+&adsp_fw_mem {
+	/* qct original reg = <0 0x92a00000 0 0x1e00000>; */
+	reg = <0 0x93300000 0 0x1e00000>;
+};
+
+&modem_fw_mem {
+	/* qct original reg = <0 0x8ac00000 0 0x7e00000>; */
+	reg = <0 0x8ac00000 0 0x7b00000>;
+};
+
+/ {
+        reserved-memory {
+		/* Reserved for modem_fw_mem extension */
+		modem_buffer_mem: modem_buffer_region@0 {
+			compatible = "removed-dma-pool";
+			no-map;
+			reg = <0x0 0x93000000 0x0 0x300000>;
+		};
+
+		htc_reserve_region: htc_reserve_region@0 {
+			#address-cells = <2>;
+			#size-cells = <2>;
+			ranges;
+
+			htc_reserve1_mem: htc_reserve1_region@0 {
+				compatible = "removed-dma-pool";
+				no-map;
+				reg = <0 0x83300000 0 0x00300000>;
+			};
+		};
+
+		htc_rtel_mem: htc_rtel_region@0 {
+			compatible = "shared-dma-pool";
+			reusable;
+			reg = <0 0x83800000 0 0x2000000>; /* 32 MB */
+		};
+
+		ramoops_mem: ramoops_region@0 {
+			compatible = "removed-dma-pool";
+			no-map;
+			reg = <0 0x83100000 0 0x00200000>;
+		};
+
+		cont_splash_mem: splash_region@9d400000 {
+			reg = <0x0 0x9d400000 0x0 0x02400000>;
+			compatible = "shared-dma-pool";
+			reusable;
+		};
+	};
+
+	htc_ramoops@0 {
+		compatible = "htc,ramoops";
+		linux,contiguous-region = <&ramoops_mem>;
+		record-size = <0x00010000>;  /*  128 KB */
+		console-size = <0x00100000>; /* 1024 KB */
+		pmsg-size = <0x00080000>;    /*  512 KB */
+		ftrace-size = <0x00040000>;  /*  256 KB */
+		dump-oops = <0x1>;
+	};
+};
+
+&soc {
+	qcom,rpm-stats-ver {
+		compatible = "qcom,rpm-stats-ver";
+		reg = <0x290000 0x4>;
+		reg-names = "rpm_data_base";
+	};
+
+	/* Modem_BSP */
+	qcom,rmtfs_rtel_sharedmem@0 {
+		compatible = "htc,rtel-uio";
+		reg = <0x83800000 0x02000000>;
+		memory-region = <&htc_rtel_mem>;
+		reg-names = "rtel";
+		qcom,client-id = <0x00000001>;
+	};
+};

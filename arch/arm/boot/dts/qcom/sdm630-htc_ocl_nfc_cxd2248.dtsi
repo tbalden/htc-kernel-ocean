@@ -1,0 +1,23 @@
+&i2c_6 {
+	qcom,disable-dma;
+	status = "okay";
+	sony_cxd224x_nfc@2b {
+		compatible = "sony,nfccxd224x";
+		reg = <0x2b>;
+		interrupt-parent = <&tlmm>;
+		interrupts = <50 0x2>;
+		sony,wake_gpio = <&tlmm 52 0x00>;
+		sony,irq_gpio = <&tlmm 50 0x00>;
+		sony,rst_gpio = <&tlmm 77 0x00>;
+		nfc_regulator = "pm660_l11";
+	};
+
+};
+
+&pm660_l11 {  // V_NFC_1V8
+        regulator-min-microvolt = <1800000>;
+        regulator-max-microvolt = <1800000>;
+        qcom,init-ldo-mode = <1>;
+        regulator-always-on;
+};
+

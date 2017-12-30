@@ -1,0 +1,101 @@
+&pm660_gpios {
+	gpio@ca00 {     // PMIC GPIO11 ACOK
+		reg = <0xca00 0x100>;
+		qcom,pin-num = <11>;
+		status = "okay";
+		qcom,mode = <0>;
+		qcom,pull = <5>;
+		qcom,vin-sel = <0>;
+		qcom,src-sel = <0>;
+		qcom,master-en = <1>;
+	};
+
+	gpio@cb00 {	// PMIC GPIO12 USBTHERM_ADC
+		reg = <0xcb00 0x100>;
+		qcom,pin-num = <12>;
+		status = "okay";
+		qcom,mode = <0>;
+		qcom,pull = <5>;
+		qcom,vin-sel = <0>;
+		qcom,src-sel = <0>;
+		qcom,master-en = <1>;
+	};
+};
+
+&pm660_vadc {
+	chan@19 {
+		label = "usb_conn_temp";
+		reg = <0x19>;
+		qcom,decimation = <0>;
+		qcom,pre-div-channel-scaling = <0>;
+		qcom,calibration-type = "ratiometric";
+		qcom,scale-function = <0>;
+		qcom,hw-settle-time = <1>;
+		qcom,fast-avg-setup = <2>;
+		qcom,cal-val = <0>;
+	};
+};
+
+&pm660_charger {
+	/delete-property/ qcom,batteryless-platform;
+
+	qcom,battery-data = <&ocl_batterydata>;
+	qcom,fcc-max-ua = <2600000>;
+	qcom,otg-cl-ua = <1000000>;
+
+	qcom,usb_conn_temp-vadc = <&pm660_vadc>;
+	qcom,usb_conn_temp-channel = <0x19>; //GPIO12
+
+	htc,qc3-vol-limit = <10>;
+	htc,qc3-curr-limit-ma = <2200>;
+	htc,batif-low-batt-cfg = <0x0>;
+	htc,wa-ext-otg-headset;
+};
+
+&pm660_fg {
+	qcom,battery-thermal-coefficients = [d8 50 ff];
+	qcom,fg-rsense-sel = <1>;
+	qcom,fg-force-load-profile;
+	qcom,fg-jeita-thresholds = <0 10 48 55>;
+	qcom,fg-jeita-hyst-temp = <2>;
+	qcom,fg-recharge-voltage = <4300>;
+	qcom,fg-chg-term-current = <50>;
+	qcom,fg-sys-term-current = <(-310)>;
+	qcom,fg-cutoff-voltage = <3320>;
+	qcom,fg-empty-voltage = <3000>;
+	qcom,fg-rconn-mohms = <10>;
+};
+
+/{
+	htc_battery_store {
+		compatible = "htc,htc_battery_store";
+		htc,stored-batt-magic-num = <(-1)>;
+		htc,stored-batt-soc = <(-1)>;
+		htc,stored-batt-update-time = <(-1)>;
+		htc,stored-batt-temperature = <(-1)>;
+		htc,stored-batt-total-level = <0>;
+		htc,stored-batt-overheat-sec = <0>;
+		htc,stored-batt-first-use = <0>;
+		htc,stored-batt-checksum = <0>;
+	};
+};
+
+/{
+	htc_battery_dt {
+		compatible = "htc,htc_battery_dt";
+		htc,batt-full-current-ma = <310>;
+		htc,allow-power-off-voltage = <3320>;
+		htc,low-batt-check-soc-threshold = <15>;
+		htc,decreased-batt-level-check = <0>;
+		htc,r-default-for-5v2a-pre-chk = <360>;
+	};
+};
+
+/{
+	ocl_batterydata: qcom,battery-data {
+		#include "batterydata-ocl-id1.dtsi"
+		#include "batterydata-ocl-id2.dtsi"
+		#include "batterydata-ocl-semi.dtsi"
+		#include "batterydata-ocl-unknown.dtsi"
+	};
+};

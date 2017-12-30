@@ -1,0 +1,59 @@
+&soc {
+	i2c_2: i2c@c176000 { // BLSP1 QUP2
+		status = "okay";
+		qcom,disable-dma;
+	};
+};
+&tlmm {
+	pmx_cs_intr_active {
+		cs_intr_active: cs_intr_active {
+			mux {
+				pins = "gpio47";
+				function = "gpio";
+			};
+
+			config {
+				pins = "gpio47";
+				drive-strength = <2>;
+				bias-disable;
+			};
+		};
+	};
+
+	pmx_cs_intr_suspend {
+		cs_intr_suspend: cs_intr_suspend {
+			mux {
+				pins = "gpio47";
+				function = "gpio";
+			};
+
+			config {
+				pins = "gpio47";
+				drive-strength = <2>;
+				bias-disable;
+			};
+		};
+	};
+};
+&i2c_2 {
+	virtualkey@4b {
+		compatible              = "himax,852xes_cap";
+		reg                     = <0x4b>;
+		himax,panel-coords      = <0 480 0 800>;
+		himax,display-coords    = <0 480 0 800>;
+		interrupt-parent = <&tlmm>;
+		interrupts = <47 0x0>;
+		himax,irq-gpio          = <&tlmm 47 0x0>;
+		himax,rst-gpio          = <&tca6418 17 0>;
+		himax,en-gpio		= <&tca6418 2 0>;
+		himax,wake-up-reset     = <0>;
+		himax,glove-mode        = <0>;
+		himax,always-K-WA   	= <1>;
+		update_feature          = <0>;
+		report_type             = <1>;
+		irq-on-state            = <0>;
+		pinctrl-names = "pmx_cs_active", "pmx_cs_suspend";
+		pinctrl-0 = <&cs_intr_active>;
+		pinctrl-1 = <&cs_intr_suspend>;
+	};
+};

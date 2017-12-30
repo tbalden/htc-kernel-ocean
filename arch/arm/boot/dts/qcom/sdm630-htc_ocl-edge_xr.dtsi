@@ -1,0 +1,171 @@
+&tlmm {
+    edge_mux {
+        edge_rst_active:edge_rst_active {
+            mux {
+                pins = "gpio25";
+                function = "gpio";
+            };
+
+            config {
+                pins = "gpio25";
+                drive-strength = <2>;
+                bias-disable; /* No PULL */
+                output-high;
+            };
+        };
+        edge_rst_suspend:edge_rst_suspend {
+            mux {
+                pins = "gpio25";
+                function = "gpio";
+            };
+
+            config {
+                pins = "gpio25";
+                drive-strength = <2>;
+                bias-disable; /* No PULL*/
+                output-low;
+            };
+        };
+
+        edge_int_active:edge_int_active {
+            mux {
+                pins = "gpio75";
+                function = "gpio";
+            };
+
+            config {
+                pins = "gpio75";
+                drive-strength = <2>;
+                bias-disable;
+                input-enable;
+            };
+        };
+
+        edge_int_suspend:edge_int_suspend {
+            mux {
+                pins = "gpio75";
+                function = "gpio";
+            };
+
+            config {
+                pins = "gpio75";
+                drive-strength = <2>;
+                bias-disable;
+                input-enable;
+            };
+        };
+
+        edge_override_active:edge_override_active {
+            mux {
+                pins = "gpio40";
+                function = "gpio";
+            };
+
+            config {
+                pins = "gpio40";
+                drive-strength = <2>;
+                bias-disable; /* No PULL */
+                output-high;
+            };
+        };
+        edge_override_suspend:edge_override_suspend {
+            mux {
+                pins = "gpio40";
+                function = "gpio";
+            };
+
+            config {
+                pins = "gpio40";
+                drive-strength = <2>;
+                bias-disable;
+                output-low;
+            };
+        };
+
+        edge_sel_active:edge_sel_active {
+            mux {
+                pins = "gpio24";
+                function = "gpio";
+            };
+
+            config {
+                pins = "gpio24";
+                drive-strength = <2>;
+                bias-disable; /* No PULL */
+                output-high;
+            };
+        };
+        edge_sel_suspend:edge_sel_suspend {
+            mux {
+                pins = "gpio24";
+                function = "gpio";
+            };
+
+            config {
+                pins = "gpio24";
+                drive-strength = <2>;
+                bias-disable; /* No PULL*/
+                output-low;
+            };
+        };
+
+        edge_pwr_active:edge_pwr_active {
+            mux {
+                pins = "gpio29";
+                function = "gpio";
+            };
+
+            config {
+                pins = "gpio29";
+                drive-strength = <2>;
+                bias-disable; /* No PULL */
+                output-high;
+            };
+        };
+        edge_pwr_suspend:edge_pwr_suspend {
+            mux {
+                pins = "gpio29";
+                function = "gpio";
+            };
+
+            config {
+                pins = "gpio29";
+                drive-strength = <2>;
+                bias-disable; /* No PULL*/
+                output-low;
+            };
+        };
+    };
+};
+
+&i2c_6 {
+    qcom,disable-dma;
+    status = "okay";
+    edge_xr15510@4a {
+        compatible       = "exar,xr15510";
+        reg              = <0x4a>;
+        interrupt-parent = <&tlmm>;
+        interrupts       = <75 0x2008>;
+        irq-gpio         = <&tlmm 75 0x00>; //V
+        reset-gpio       = <&tlmm 25 0x00>; //V
+        override-gpio    = <&tlmm 40 0x00>; //V
+        sel-gpio         = <&tlmm 24 0x00>; //V
+        pwren-gpio       = <&tlmm 29 0x00>; //V
+        edge_gadc        = <120>;
+        project_id	     = <1>;
+        /*
+           project {
+            {Ocean,	0},
+            {OceanLife, 1}
+           }
+         */
+        pinctrl-names = "edge_mux_active", "edge_mux_suspend";
+        pinctrl-0 = <&edge_rst_active &edge_int_active &edge_override_active &edge_sel_active &edge_pwr_active>;
+        pinctrl-1 = <&edge_rst_suspend &edge_int_suspend &edge_override_suspend &edge_sel_suspend &edge_pwr_suspend>;
+    };
+
+    edge_fw_flash@10 {
+        compatible = "exar,xr15510_fw_flash";
+        reg = <0x10>;
+    };
+};

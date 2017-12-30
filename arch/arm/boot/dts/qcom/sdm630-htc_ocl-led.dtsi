@@ -1,0 +1,51 @@
+&soc {
+	tlmm: pinctrl@03000000 {
+		lp5521_init: lp5562_init {
+			mux {
+				pins ="gpio20";
+				function = "gpio";
+			};
+			conig {
+				pins ="gpio20";
+				drive-strength = <2>; // 2 MA
+				bias-disable; // No PULL
+				output-high;
+			};
+		};
+	};
+};
+
+&i2c_8 {
+	status = "okay";
+
+	lp5562@30 {
+		compatible = "LP5562-LED";
+		reg = <0x30>;
+		lp5562,lp5562_en = <&tlmm 20 0x00>;
+		lp5562,LED_3v3_en = <&tca6418 2 0>;
+		lp5562,num_leds = <2>;
+		pinctrl-names = "lp5562_init";
+		pinctrl-0 = <&lp5521_init>;
+		lp5562,current_param = <75>;
+		lp5562,vk_use;
+		lp5562,vk_current_param = <200>;
+		vk-pwm-array = [00 20 70 70 B0 B0 FF FF FF FF FF];
+		vk-black-cg-id-def = "DEF00", "GRY00", "LOB00", "BLK00";
+		vk-white-cg-id-def = "PNK00", "GOD00", "LOW00", "WHT00";
+		vk-black-pwm-array-def = [00 10 40 40 40 40 90 90 90 90 90 FF FF FF FF FF];
+		vk-white-pwm-array-def = [00 10 40 40 40 40 90 90 90 90 90 FF FF FF FF FF];
+		vk-current-array-def =   [1F 1F 1F 1F 1F 1F 1F 1F 1F 1F 1F 7F 7F 7F 7F 7F];
+		vk-black-pwm-array-sec = [00 10 40 40 40 40 90 90 90 90 90 FF FF FF FF FF];
+		vk-white-pwm-array-sec = [00 10 40 40 40 40 90 90 90 90 90 FF FF FF FF FF];
+		vk-current-array-sec =   [1F 1F 1F 1F 1F 1F 1F 1F 1F 1F 1F 7F 7F 7F 7F 7F];
+	};
+};
+
+&spmi_bus {
+	qcom,pm660l@3{
+		qcom,leds@d300{
+			compatible = "qcom,qpnp-flash-led-v2";
+			qcom,gpio-flash-strobe = <&tca6418 8 0>;
+		};
+	};
+};

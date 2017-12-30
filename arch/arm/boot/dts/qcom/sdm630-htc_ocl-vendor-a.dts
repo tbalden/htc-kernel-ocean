@@ -1,0 +1,101 @@
+/* Copyright (c) 2016-2017, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ */
+
+
+/dts-v1/;
+
+#include "sdm630.dtsi"
+#include "sdm630-cdp.dtsi"
+#include "sdm630-nc-pins-htc_ocl-xa.dtsi"
+#include "sdm630-htc-common.dtsi"
+#include "sdm630-touch-ocl.dtsi"
+#include "sdm660-camera-sensor-ocl.dtsi"
+#include "sdm630-htc_ocl_nfc_nxp.dtsi"
+#include "sdm630-htc_ocl_nfc_cxd2248.dtsi"
+#include "sdm630-htc_ocl-edge_xr.dtsi"
+#include "sdm630-htc_ocl.dtsi"
+
+/ {
+	model = "HTC Corporation. SDM630 OCL A";
+	compatible = "qcom,sdm630-cdp", "qcom,sdm630", "qcom,cdp";
+	qcom,msm-id = <450 0x0>, <457 0x0>;
+	qcom,board-id = <0x80 0>;
+	qcom,pmic-id = <0x0001001b 0x0101011a 0x0 0x0>,
+			<0x0001001b 0x0201011a 0x0 0x0>;
+};
+
+/ {
+	firmware: firmware {
+		android {
+			compatible = "android,firmware";
+			fstab {
+				compatible = "android,fstab";
+				vendor {
+					compatible = "android,vendor";
+					dev = "/dev/block/platform/soc/c0c4000.sdhci/by-name/vendor";
+					type = "ext4";
+					mnt_flags = "ro,barrier=1,discard";
+					fsmgr_flags = "wait,slotselect,verify";
+					status = "ok";
+				};
+			};
+		};
+	};
+};
+
+&soc {
+qcom_seecom: qseecom@86d00000 {
+                 qcom,fde-key-size;
+             };
+};
+
+&pm660_gpios {
+	gpio@c100 {
+		qcom,mode = <1>;
+		qcom,output-type = <0>;
+		qcom,pull = <5>;
+		qcom,vin-sel = <0>;
+		qcom,out-strength = <1>;
+		qcom,src-sel = <2>;
+		qcom,master-en = <1>;
+		status = "okay";
+	};
+};
+
+&soc {
+	htc,htc_IOExpRST_pins {
+		compatible = "htc,IOExpRST_pin";
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&IOExpRST_pins_gpio>;
+	};
+};
+
+&tlmm {
+	IOExpRST_pins_gpio {
+		IOExpRST_pins_gpio: IOExpRST_pins_gpio {
+			mux {
+				/* gpio42: IO expander RST pin  */
+				pins = "gpio42";
+				function = "gpio";
+			};
+
+			config {
+				pins = "gpio42";
+				drive-strength = <2>;		/* 2 mA */
+				bias-disable;
+				output-high;			/* OUTPUT HIGH */
+			};
+		};
+	};
+};
+
