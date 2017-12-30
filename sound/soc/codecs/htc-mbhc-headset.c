@@ -91,9 +91,11 @@ static struct htc_headset_dev htc_headset = {
 };
 
 /* OCN ONLY + */
+#ifdef CONFIG_ARCH_MSM8998
 static struct htc_hs_gpio aud_remote_sensor_gpio = {
 	.name = "htc,aud_remote_sensor"
 };
+#endif
 /* OCN ONLY - */
 
 static struct platform_device *sound_device;
@@ -111,8 +113,10 @@ extern void __wcd_mbhc_set_and_turnoff_hph_padac(struct wcd_mbhc *mbhc);
 extern void __wcd_mbhc_swch_irq_handler(struct wcd_mbhc *mbhc);
 
 /* OCN ONLY + */
+#ifdef CONFIG_ARCH_MSM8998
 static unsigned int pre_condition;
 extern int qpnp_pin_pull_config(int gpio, int value);
+#endif
 /* OCN ONLY - */
 
 
@@ -184,6 +188,7 @@ static int htc_typec_hs_dt_parser(struct platform_device *pdev)
 	}
 
 /* OCN ONLY + */
+#ifdef CONFIG_ARCH_MSM8998
 	aud_remote_sensor_gpio.no = of_get_named_gpio(pdev->dev.of_node,
 									aud_remote_sensor_gpio.name, 0);
 	if (gpio_is_valid(aud_remote_sensor_gpio.no)) {
@@ -192,6 +197,7 @@ static int htc_typec_hs_dt_parser(struct platform_device *pdev)
 		if (ret < 0)
 			pre_condition = 0;
 	}
+#endif
 /* OCN ONLY - */
 
 	return 0;
@@ -583,8 +589,10 @@ irqreturn_t htc_typec_hs_plug_detect_irq(struct wcd_mbhc *mbhc)
 
 		if (insert) {
 /* OCN ONLY + */
+#ifdef CONFIG_ARCH_MSM8998
 			if (pre_condition)
 				qpnp_pin_pull_config(aud_remote_sensor_gpio.no, 1/*QPNP_PIN_PULL_UP_1P5*/);
+#endif
 /* OCN ONLY - */
 			htc_typec_hs_set_s5_en(true);
 			htc_typec_hs_set_ext_micbias(true, ANC_Headset_Detection_Mask);
@@ -617,8 +625,10 @@ irqreturn_t htc_typec_hs_plug_detect_irq(struct wcd_mbhc *mbhc)
 			}
 
 /* OCN ONLY + */
+#ifdef CONFIG_ARCH_MSM8998
 			if (pre_condition)
 				qpnp_pin_pull_config(aud_remote_sensor_gpio.no, -1/*Recover*/);
+#endif
 /* OCN ONLY - */
 
 			htc_typec_hs_set_ext_micbias(false, ANC_Headset_Detection_Mask); /* HPKB29557 ANC feature*/
