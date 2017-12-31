@@ -51,6 +51,10 @@ extern int32_t nvt_extra_proc_init(void);
 extern int32_t nvt_mp_proc_init(void);
 #endif
 
+#if 1
+extern int is_real_ts_input_filtered(void);
+#endif
+
 struct nvt_ts_data *ts;
 
 #if !defined(HTC_FEATURE)
@@ -888,6 +892,9 @@ static void nvt_ts_input_report(void)
 static void nvt_ts_work_func(struct work_struct *work)
 #endif
 {
+#if 1
+        bool is_real_ts_input_off = is_real_ts_input_filtered();
+#endif
 	int32_t ret = -1;
 	uint8_t point_data[POINT_DATA_LEN + 2] = {0};
 	uint32_t position = 0;
@@ -966,6 +973,7 @@ static void nvt_ts_work_func(struct work_struct *work)
 	}
 #endif
 
+
 #if MT_PROTOCOL_B
 	for (i = 0; i < ts->max_touch_num; i++) {
 		position = 1 + 6 * i;
@@ -1004,6 +1012,9 @@ static void nvt_ts_work_func(struct work_struct *work)
 				continue;
 
 			press_id[input_id - 1] = 1;
+#if 1
+			if (!is_real_ts_input_off) {
+#endif
 			input_mt_slot(ts->input_dev, input_id - 1);
 			input_mt_report_slot_state(ts->input_dev, MT_TOOL_FINGER, true);
 
@@ -1017,11 +1028,17 @@ static void nvt_ts_work_func(struct work_struct *work)
 			ts->report_points[input_id - 1].z = input_p;
 			ts->report_points[input_id - 1].type = !!(point_data[position] & 0x04);
 #endif
+#if 1
+			}
+#endif
 
 			finger_cnt++;
 		}
 	}
 
+#if 1
+	if (!is_real_ts_input_off) {
+#endif
 	for (i = 0; i < ts->max_touch_num; i++) {
 		if (press_id[i] != 1) {
 			input_mt_slot(ts->input_dev, i);
@@ -1033,6 +1050,9 @@ static void nvt_ts_work_func(struct work_struct *work)
 
 #if !defined(HTC_FEATURE)
 	input_report_key(ts->input_dev, BTN_TOUCH, (finger_cnt > 0));
+#endif
+#if 1
+	}
 #endif
 
 #else /* #if MT_PROTOCOL_B */
@@ -1067,6 +1087,9 @@ static void nvt_ts_work_func(struct work_struct *work)
 				continue;
 
 			press_id[input_id - 1] = 1;
+#if 1
+			if (!is_real_ts_input_off) {
+#endif
 			input_report_key(ts->input_dev, BTN_TOUCH, 1);
 			input_report_abs(ts->input_dev, ABS_MT_POSITION_X, input_x);
 			input_report_abs(ts->input_dev, ABS_MT_POSITION_Y, input_y);
@@ -1075,19 +1098,31 @@ static void nvt_ts_work_func(struct work_struct *work)
 			input_report_abs(ts->input_dev, ABS_MT_TRACKING_ID, input_id - 1);
 
 			input_mt_sync(ts->input_dev);
+#if 1
+			}
+#endif
 
 			finger_cnt++;
 		}
 	}
 	if (finger_cnt == 0) {
+#if 1
+		if (!is_real_ts_input_off) {
+#endif
 		input_report_key(ts->input_dev, BTN_TOUCH, 0);
 
 		input_mt_sync(ts->input_dev);
+#if 1
+		}
+#endif
 	}
 #endif /* #if MT_PROTOCOL_B */
 
 
 #if TOUCH_KEY_NUM > 0
+#if 1
+	if (!is_real_ts_input_off) {
+#endif
 	if (point_data[61] == 0xF8) {
 		for (i = 0; i < ts->max_button_num; i++) {
 			input_report_key(ts->input_dev, touch_key_array[i], ((point_data[62] >> i) & 0x01));
@@ -1097,9 +1132,18 @@ static void nvt_ts_work_func(struct work_struct *work)
 			input_report_key(ts->input_dev, touch_key_array[i], 0);
 		}
 	}
+#if 1
+	}
+#endif
 #endif
 
+#if 1
+	if (!is_real_ts_input_off) {
+#endif
 	input_sync(ts->input_dev);
+#if 1
+	}
+#endif
 #ifdef HTC_FEATURE
 	if (debug_mask & (TOUCH_KPI_LOG | TOUCH_BREAKDOWN_TIME)) {
 		getnstimeofday(&ts->tp_sync_time);

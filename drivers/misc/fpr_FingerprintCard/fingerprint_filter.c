@@ -2408,10 +2408,12 @@ static int ts_input_dev_filter(struct input_dev *dev) {
 	if (
 		strstr(dev->name, "himax-touchscreen") ||
 		strstr(dev->name, "cyttsp") ||
+		strstr(dev->name, "nvt_touchscreen") ||
 		strstr(dev->name, "gpio")
 	    ) {
 		// storing static ts_device for using outside this handle context as well
 		if (strstr(dev->name, "cyttsp")) ts_device = dev;
+		if (strstr(dev->name, "nvt_touchscreen")) ts_device = dev;
 		return 0;
 	} else {
 		return 1;
