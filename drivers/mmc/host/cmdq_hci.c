@@ -1283,6 +1283,14 @@ static void cmdq_post_req(struct mmc_host *mmc, int tag, int err)
 	cq_host = (struct cmdq_host *)mmc_cmdq_private(mmc);
 	mrq = get_req_by_tag(cq_host, tag);
 	data = mrq->data;
+#if 0 // TODO OCM
+	if (cq_host->ops->crypto_cfg_end) {
+		if (cq_host->ops->crypto_cfg_end(mmc, mrq)) {
+			pr_err("%s: failed to end ice config: err %d tag %d\n",
+					mmc_hostname(mmc), err, tag);
+		}
+	}
+#endif
 
 	if (data) {
 		data->error = err;

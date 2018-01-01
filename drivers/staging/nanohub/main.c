@@ -1426,8 +1426,10 @@ static void __nanohub_hw_reset(struct nanohub_data *data, int boot0)
 
 	gpio_direction_output(pdata->nreset_gpio, 0);
 	gpio_set_value(pdata->boot0_gpio, boot0 > 0);
+	pr_info("nanohub: boot0:%d, reset:%d\n", gpio_get_value(pdata->boot0_gpio), gpio_get_value(pdata->nreset_gpio));
 	usleep_range(30, 40);
 	gpio_direction_input(pdata->nreset_gpio);
+	pr_info("nanohub: reset:%d\n", gpio_get_value(pdata->nreset_gpio));
 	if (boot0 > 0)
 		usleep_range(70000, 75000);
 	else if (!boot0)
@@ -2090,7 +2092,7 @@ static void nanohub_process_buffer(struct nanohub_data *data,
 		pr_info("nanohub: htc_easy_access triggered\n");
 	} else if (event_id == sensorGetMyEventType(SENS_TYPE_HTC_SECOND_DISP)) {
 		pr_info("nanohub: htc_second_disp triggered\n");
-	} else if (event_id == sensorGetMyEventType(SENS_TYPE_GESTURE)) { // TODO check this!
+	} else if (event_id == sensorGetMyEventType(SENS_TYPE_GESTURE)) {
 		pr_info("nanohub: pick_up triggered(SENS_TYPE_GESTURE)\n");
 	}
 #if 1
