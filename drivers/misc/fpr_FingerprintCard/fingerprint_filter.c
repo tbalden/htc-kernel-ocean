@@ -994,9 +994,9 @@ static bool fpf_input_filter(struct input_handle *handle,
 
 // ---------------- SQUEEZE TO WAKE SLEEP: 
 // wakelock method code
-static int squeeze_wake = 1;
-static int squeeze_sleep = 1;
-static int squeeze_peek = 1;
+static int squeeze_wake = 0;
+static int squeeze_sleep = 0;
+static int squeeze_peek = 0;
 static int squeeze_peek_halfseconds = 4;
 
 static int get_squeeze_wake(void) {
@@ -1074,7 +1074,7 @@ static void squeeze_vib(void) {
 // ===========
 
 // sysfs parameters
-static int squeeze_swipe = 1;
+static int squeeze_swipe = 0;
 static int squeeze_swipe_vibration = 1;
 
 static int get_squeeze_swipe(void) {
