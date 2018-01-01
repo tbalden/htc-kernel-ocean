@@ -85,6 +85,8 @@ GTAGS
 *~
 \#*#
 
-/out
+/out_oce
+/out_oce_stock
 /out_life
+/out_ocm
 /net/wireguard/
