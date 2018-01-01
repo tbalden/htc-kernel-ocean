@@ -4389,12 +4389,16 @@ static int lp5562_led_probe(struct i2c_client *client
 		I("Not use LP5562 LED.\n");
 		goto err_check_chip_not_used;
 	}
+#if 1
 	mutex_init(&operation_mutex);
 	mutex_init(&enable_mutex);
+#endif
 
 	g_led_work_queue = create_singlethread_workqueue("led");
+#if 1
 	g_vk_work_queue = g_led_work_queue; // this didn't work out at all: create_singlethread_workqueue("vk_wq"); they collide in i2c write/read!
 	g_vib_work_queue = create_singlethread_workqueue("vib_wq");
+#endif
 	if (!g_led_work_queue) {
 		ret = -10;
 		pr_err("[LED] %s: create workqueue fail %d\n", __func__, ret);
@@ -4614,8 +4618,10 @@ static int lp5562_led_remove(struct i2c_client *client)
 		led_classdev_unregister(&cdata->leds[i].cdev);
 	}
 	destroy_workqueue(g_led_work_queue);
+#if 1
 	destroy_workqueue(g_vk_work_queue);
 	destroy_workqueue(g_vib_work_queue);
+#endif
 	kfree(cdata);
 
 	return 0;
