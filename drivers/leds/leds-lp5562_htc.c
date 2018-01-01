@@ -71,6 +71,8 @@
 
 #ifdef CONFIG_LEDS_QPNP_BUTTON_BLINK
 
+bool vk_present = false;
+
 // bln_on_screenoff : this is used to follow register_haptic based notif events... when
 // ...AmbientDisplay wakes device (BLN is not possible), but after screen off, BLN is triggered based on this
 // ... in the fb notifier BLANK event part. register_haptic sets it 1, register_input sets it 0 because that will be a user wake...
@@ -129,6 +131,7 @@ static int pulse_rgb_blink_on_charger_red_limit = 95; // 0-100 percentage where 
 static int colored_charge_level = 1; // if set to 1, colored charge level handling is enabled, 0 - not
 
 static int get_bln_switch(void) {
+	if (!vk_present) return 0;
 	return uci_get_user_property_int_mm("bln", bln_switch, 0, 1);
 }
 static int get_bln_no_charger_switch(void) {
@@ -930,6 +933,7 @@ static void virtual_key_led_blink(int onoff, int dim)
 		return;
 
 	I("virtual_key_led_blink +++, onoff = %d\n", onoff);
+	if (!vk_present) return;
 
 	if((onoff || dim) && (vk_screen_is_off() || (!screen_on && bln_on_screenoff))) {
 		vk_led_blink = 1;
@@ -1657,6 +1661,7 @@ EXPORT_SYMBOL(register_input_event);
 * is bln to be started, based on switches like BLN, bln no charger, smart button dimming and charge state
 */
 static bool should_start_bln(void) {
+    if (!vk_present) return false;
     return !vk_led_blink && get_bln_switch() && ((smart_get_bln_no_charger_switch() && !charging && smart_get_button_dimming()==1) || charging);
 }
 static bool should_start_pulse_blink_on_charger(void) {
@@ -2349,7 +2354,9 @@ static void lp5562_led_off(struct i2c_client *client)
 #ifdef CONFIG_LEDS_QPNP_BUTTON_BLINK
 	// BLN
 	blink_running = 0;
-	virtual_key_led_blink(0,0);
+	if (vk_present) {
+		virtual_key_led_blink(0,0);
+	}
 	flash_stop_blink();
 #endif
 
@@ -3848,9 +3855,11 @@ static void lp5562_vk_led_set_brightness(struct led_classdev *led_cdev,
 	if (uci_bln_light_level==21) {
 		ldata->VK_brightness = 0;
 		VK_brightness = 0;
-		if (vk_led_blink) {
-			virtual_key_led_blink(0,0);
-			return;
+		if (vk_present) {
+			if (vk_led_blink) {
+				virtual_key_led_blink(0,0);
+				return;
+			}
 		}
 	}
 	I(" %s , VK_brightness after bln coeff division = %u\n" , __func__, VK_brightness);
@@ -4208,6 +4217,7 @@ static int lp5562_parse_dt(struct device *dev, struct led_i2c_platform_data *pda
 		of_property_read_u32(dt, "lp5562,vk_current_param", &gVK_Current_param);
 	}
 	pdata->vk_use = of_property_read_bool(dt, "lp5562,vk_use");
+	vk_present = pdata->vk_use;
 	return 0;
 }
 
@@ -4464,18 +4474,20 @@ static int lp5562_led_probe(struct i2c_client *client
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_rgb_pulse);
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_rgb_blink_on_charger);
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_rgb_blink_on_charger_red_limit);
-			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln);
-			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_no_charger);
+			if (pdata->vk_use) {
+				ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln);
+				ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_no_charger);
+				ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_number);
+				ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_number_max);
+				ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_light_level);
+				ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_dim_blink);
+				ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_dim_number);
+				ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_dim_number_max);
+			}
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_rgb_batt_colored);
-			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_number);
-			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_number_max);
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_speed);
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_speed_max);
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_rgb_blink_light_level);
-			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_light_level);
-			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_dim_blink);
-			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_dim_number);
-			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_dim_number_max);
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_pulse_rgb_pattern);
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_pulse_rgb_pattern_max);
 			ret = device_create_file(cdata->leds[i].cdev.dev, &dev_attr_bln_vib_notification);
