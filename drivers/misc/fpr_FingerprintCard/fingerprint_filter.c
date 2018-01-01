@@ -2409,11 +2409,18 @@ static int ts_input_dev_filter(struct input_dev *dev) {
 		strstr(dev->name, "himax-touchscreen") ||
 		strstr(dev->name, "cyttsp") ||
 		strstr(dev->name, "nvt_touchscreen") ||
+		strstr(dev->name, "synaptics_dsx") ||
 		strstr(dev->name, "gpio")
 	    ) {
 		// storing static ts_device for using outside this handle context as well
+
+		// U11
 		if (strstr(dev->name, "cyttsp")) ts_device = dev;
+		// U11Life
 		if (strstr(dev->name, "nvt_touchscreen")) ts_device = dev;
+		// U11+
+		if (strstr(dev->name, "synaptics_dsx")) ts_device = dev;
+
 		return 0;
 	} else {
 		return 1;
