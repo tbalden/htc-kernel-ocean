@@ -1708,8 +1708,13 @@ void uci_sys_listener(void) {
         }
 }
 
+// if a single haptic vibration was last time interpreted as notif set this true
+// .. based on this next such exact vibration length will be skipped to be interpreted as notif avoiding doubles...
+static bool single_vibration_interpreted_as_notif = false;
+
 int register_haptic(int value)
 {
+	bool vib_notif_pattern_detected = false;
 	unsigned long stack_entries[STACK_LENGTH];
 	struct stack_trace trace = {
 		.nr_entries = 0,
@@ -1753,29 +1758,55 @@ int register_haptic(int value)
 	}
 
 	if (screen_on && wake_by_user) return value;
+
+	// checking repetition of same length vibs
 	if (last_value == value) {
 		if ((value > 500 && diff_jiffies < MAX_DIFF_LONG_VIB) || diff_jiffies < MAX_DIFF) {
-			if (value <= 200) {
-				short_vib_notif = 1;
+			if (single_vibration_interpreted_as_notif) {
+				single_vibration_interpreted_as_notif = false;
 			} else {
-				short_vib_notif = 0;
+				vib_notif_pattern_detected = true;
+				if (value <= 200) {
+					short_vib_notif = 1;
+				} else {
+					short_vib_notif = 0;
+				}
 			}
-			if (should_start_bln()) {
-				// store haptic blinking, so if ambient display blocks the bln, later in BLANK screen off, still it can be triggered
-				bln_on_screenoff = 1;
-				pr_info("%s kad bln_on_screenoff %d\n", __func__, bln_on_screenoff);
-				if (!is_kernel_ambient_display() && !screen_on) queue_work(g_vk_work_queue, &vk_blink_work);
+		} else {
+			// if same length but time diff too long, check for single vibration patter over a 100 msec length...
+			if (value>=100) {
+				single_vibration_interpreted_as_notif = true;
+				vib_notif_pattern_detected = true;
+			} else {
+				single_vibration_interpreted_as_notif = false;
 			}
-			if (should_start_pulse_blink_on_charger()) {
-				charging_notification_occured_for_rgb = 1;
-				rgb_blink_on_charge_async(); // call charging level based speedy pulse blink
-			}
-			// call flash blink for flashlight notif if lights_down mode (>1) is not active...
-			if (lights_down_divider==1) {
-				flash_blink(true);
-			}
-			kernel_ambient_display();
 		}
+	} else {
+		// checking first time vib length, if over a length, interpret as notif
+		if (value>=100) {
+			single_vibration_interpreted_as_notif = true;
+			vib_notif_pattern_detected = true;
+		} else {
+			single_vibration_interpreted_as_notif = false;
+		}
+	}
+
+	if (vib_notif_pattern_detected) {
+		if (should_start_bln()) {
+			// store haptic blinking, so if ambient display blocks the bln, later in BLANK screen off, still it can be triggered
+			bln_on_screenoff = 1;
+			pr_info("%s kad bln_on_screenoff %d\n", __func__, bln_on_screenoff);
+			if (!is_kernel_ambient_display() && !screen_on) queue_work(g_vk_work_queue, &vk_blink_work);
+		}
+		if (should_start_pulse_blink_on_charger()) {
+			charging_notification_occured_for_rgb = 1;
+			rgb_blink_on_charge_async(); // call charging level based speedy pulse blink
+		}
+		// call flash blink for flashlight notif if lights_down mode (>1) is not active...
+		if (lights_down_divider==1) {
+			flash_blink(true);
+		}
+		kernel_ambient_display();
 	}
 	last_value = value;
 	return value;
