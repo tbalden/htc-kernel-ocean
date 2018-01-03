@@ -323,6 +323,7 @@ static int squeeze_peek_kcal = 0;
 static int kad_two_finger_gesture = 0; // two finger gesture will wake KAD
 static int kad_three_finger_gesture = 1; // three finger gesture will wake KAD
 static int kad_start_after_proximity_left = 1; // start pending kad if leaving proximity
+static int kad_start_delay_halfseconds = 2; // how long KAD should wait before starting to avoid collision with notif sounds - min 1 max 4
 
 static int kad_kcal_val = 135;
 static int kad_kcal_cont = 255;
@@ -354,6 +355,9 @@ static int get_kad_three_finger_gesture(void) {
 }
 static int get_kad_two_finger_gesture(void) {
 	return uci_get_user_property_int_mm("kad_two_finger_gesture", kad_two_finger_gesture, 0, 1);
+}
+static int get_kad_start_delay_halfseconds(void) {
+	return uci_get_user_property_int_mm("kad_start_delay_halfseconds", kad_start_delay_halfseconds, 1, 6);
 }
 
 
@@ -2026,7 +2030,7 @@ void kernel_ambient_display(void) {
 		ktime_t wakeup_time;
 		ktime_t curr_time = { .tv64 = 0 };
 		wakeup_time = ktime_add_us(curr_time,
-			1100LL * 1000LL); // 1.5sec OREO is faster to turn screen on // TODO configurable... to avoid collision of notif sound and pwr button interrupt
+			( (get_kad_start_delay_halfseconds() * 500LL) + 100LL) * 1000LL); // config to avoid collision of notif sound and pwr button interrupt
 		alarm_cancel(&kad_repeat_rtc);
 		alarm_start_relative(&kad_repeat_rtc, wakeup_time); // start new...
 	}
@@ -3086,6 +3090,34 @@ static ssize_t kad_two_finger_gesture_dump(struct device *dev,
 static DEVICE_ATTR(kad_two_finger_gesture, (S_IWUSR|S_IRUGO),
 	kad_two_finger_gesture_show, kad_two_finger_gesture_dump);
 
+
+static ssize_t kad_start_delay_halfseconds_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", kad_start_delay_halfseconds);
+}
+
+static ssize_t kad_start_delay_halfseconds_dump(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int ret;
+	unsigned long input;
+
+	ret = kstrtoul(buf, 0, &input);
+	if (ret < 0)
+		return ret;
+
+	if (input < 1 || input > 6)
+		input = 2;
+
+	kad_start_delay_halfseconds = input;
+
+	return count;
+}
+
+static DEVICE_ATTR(kad_start_delay_halfseconds, (S_IWUSR|S_IRUGO),
+	kad_start_delay_halfseconds_show, kad_start_delay_halfseconds_dump);
+
 static ssize_t kad_repeat_period_sec_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
@@ -3769,6 +3801,10 @@ static int __init fpf_init(void)
 	rc = sysfs_create_file(fpf_kobj, &dev_attr_kad_repeat_period_sec.attr);
 	if (rc)
 		pr_err("%s: sysfs_create_file failed for kad_repeat_period_sec\n", __func__);
+
+	rc = sysfs_create_file(fpf_kobj, &dev_attr_kad_start_delay_halfseconds.attr);
+	if (rc)
+		pr_err("%s: sysfs_create_file failed for kad_start_delay_halfseconds\n", __func__);
 
 	rc = sysfs_create_file(fpf_kobj, &dev_attr_kad_repeat_times.attr);
 	if (rc)
