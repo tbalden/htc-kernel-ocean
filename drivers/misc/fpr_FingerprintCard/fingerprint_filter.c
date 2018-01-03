@@ -559,11 +559,13 @@ static void kcal_set(struct work_struct * kcal_set_work)
 	pr_info("%s kad ## !!!!!!!!!!!!!!!!!! set    screen %d kad %d overlay_on %d backed_up %d need_restore %d\n",__func__, screen_on, kad_running, kad_kcal_overlay_on, kad_kcal_backed_up, needs_kcal_restore_on_screen_on);
 	mutex_lock(&kcal_read_write_lock);
 	if (kad_running) {
+		// store local value to make sure in the full logic there's no sideeffect of changing these settings, while setting up kcal greyscale...
 		int local_kad_kcal = get_kad_kcal();
 		int local_squeeze_kcal = is_squeeze_peek_kcal(true);
 		pr_info("%s kad\n",__func__);
 		if (((is_kad_on() && local_kad_kcal) || local_squeeze_kcal) && !kad_kcal_overlay_on) // && !kad_kcal_backed_up ) 
 		{
+			// make sure to start only after enough time passed since screen on, because with srgb profile colors get wrong if concurs
 			unsigned int time_since_screen_on = 0;
 			int max_try = 3999;
 			while ((!screen_on) && max_try-->=0 ) {
@@ -576,6 +578,8 @@ static void kcal_set(struct work_struct * kcal_set_work)
 				usleep_range(650,700);
 				time_since_screen_on = jiffies - last_screen_on_early_time;
 			}
+			// ---- wait for screen on end
+
 			if ((local_kad_kcal || local_squeeze_kcal) && screen_on && !kad_kcal_overlay_on) {
 				int retry_count = 2;
 				pr_info("%s kad backup... BBBBBBBBBBBB   screen %d kad %d overlay_on %d backed_up %d need_restore %d\n",__func__, screen_on, kad_running, kad_kcal_overlay_on, kad_kcal_backed_up, needs_kcal_restore_on_screen_on);
@@ -1009,7 +1013,7 @@ static int get_squeeze_peek(void) {
 	return uci_get_user_property_int_mm("squeeze_peek", squeeze_peek, 0, 1);
 }
 static int get_squeeze_peek_halfseconds(void) {
-	return uci_get_user_property_int_mm("squeeze_peek_halfseconds", squeeze_peek_halfseconds, 0, 6);
+	return uci_get_user_property_int_mm("squeeze_peek_halfseconds", squeeze_peek_halfseconds, 2, 12);
 }
 
 
@@ -1995,7 +1999,6 @@ void do_kernel_ambient_display(void) {
 		kad_first_one_finger_done = 0;
 		squeeze_peekmode_trigger();
 		fpf_pwrtrigger(0,__func__);
-	// TODO framebuffer driver Brightness lowering...
 	}
 }
 
@@ -2023,7 +2026,7 @@ void kernel_ambient_display(void) {
 		ktime_t wakeup_time;
 		ktime_t curr_time = { .tv64 = 0 };
 		wakeup_time = ktime_add_us(curr_time,
-			1100LL * 1000LL); // 1.5sec OREO is faster to turn screen on
+			1100LL * 1000LL); // 1.5sec OREO is faster to turn screen on // TODO configurable... to avoid collision of notif sound and pwr button interrupt
 		alarm_cancel(&kad_repeat_rtc);
 		alarm_start_relative(&kad_repeat_rtc, wakeup_time); // start new...
 	}
@@ -2841,10 +2844,10 @@ static ssize_t squeeze_peek_halfseconds_dump(struct device *dev,
 	if (ret < 0)
 		return ret;
 
-	if (input < 0 || input > 6)
-		input = 0;				
+	if (input < 2 || input > 12)
+		input = 4;
 
-	squeeze_peek_halfseconds = input;			
+	squeeze_peek_halfseconds = input;
 	
 	return count;
 }
