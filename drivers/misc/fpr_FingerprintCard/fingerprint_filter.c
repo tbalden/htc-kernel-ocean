@@ -2220,6 +2220,8 @@ int get_block_power_key_in_pocket(void) {
 	return proximity && uci_get_user_property_int_mm("block_power_key_in_pocket", block_power_key_in_pocket, 0, 1);
 }
 
+//#define LOG_INPUT_EVENTS
+
 static bool ts_input_filter(struct input_handle *handle,
                                     unsigned int type, unsigned int code,
                                     int value)
@@ -2236,18 +2238,22 @@ static bool ts_input_filter(struct input_handle *handle,
 	//pr_info("%s ts input filter called t %d c %d v %d\n",__func__, type,code,value);
 
 	if (type == EV_KEY) {
+#ifdef LOG_INPUT_EVENTS
 		pr_info("%s _____ ts_input key %d %d %d\n",__func__,type,code,value);
+#endif
 		if (code == 116 && !screen_on && get_block_power_key_in_pocket()) {
 			pr_info("%s proximity ts_input power key filter\n",__func__);
 			return true;
 		}
 	}
+#ifdef LOG_INPUT_EVENTS
 	if (type == EV_ABS) {
 		pr_info("%s _____ ts_input abs %d %d %d\n",__func__,type,code,value);
 	}
 	if (type == EV_SYN) {
 		pr_info("%s _____ ts_input syn %d %d %d\n",__func__,type,code,value);
 	}
+#endif
 
 	if (type == EV_KEY && code == KEY_VOLUMEUP && value == 1) {
 		last_vol_keys_start = jiffies;
