@@ -328,9 +328,11 @@ static int kad_start_delay_halfseconds = 2; // how long KAD should wait before s
 static int kad_kcal_val = 135;
 static int kad_kcal_cont = 255;
 
+#ifdef CONFIG_FPF_KAD
 static int get_kad_start_after_proximity_left(void) {
 	return uci_get_user_property_int_mm("kad_start_after_proximity_left", kad_start_after_proximity_left, 0, 1);
 }
+#endif
 static int get_kad_kcal_val(void) {
 	return uci_get_user_property_int_mm("kad_kcal_val", kad_kcal_val, 0, 255);
 }
@@ -396,9 +398,11 @@ void override_kad_on(int override) {
 EXPORT_SYMBOL(override_kad_on);
 
 int is_kad_on(void) {
+#ifdef CONFIG_FPF_KAD
 	if (uci_get_user_property_int_mm("kad_on", kad_on, 0, 1) || kad_on_override) {
 		return 1;
 	}
+#endif
 	return 0;
 }
 
@@ -430,6 +434,7 @@ bool is_screen_locked(void) {
 * Will store kad_should_start_on_uci_sys_change = 1 if it's blocked by proximity/lock screen not on yet...
 */
 int should_kad_start(void) {
+#ifdef CONFIG_FPF_KAD
 	if (fpf_ringing || fpf_screen_waking_app) return 0;
 	if (uci_get_user_property_int_mm("kad_on", kad_on, 0, 1) || kad_on_override) {
 		int level = smart_get_notification_level(NOTIF_KAD);
@@ -447,6 +452,7 @@ int should_kad_start(void) {
 			}
 		}
 	}
+#endif
 	return 0;
 }
 
@@ -1248,6 +1254,10 @@ static void ts_poke_emulate(struct work_struct * ts_poke_emulate_work) {
 			while (y_steps-->0) {
 				if (first_steps) {
 					ts_track_event_gather(EV_ABS, ABS_MT_TRACKING_ID, --local_slot);
+#ifndef CONFIG_FPF_TS_PRESSURE
+					ts_track_event_gather(EV_KEY, BTN_TOUCH, 1);
+					ts_track_event_gather(EV_KEY, BTN_TOOL_FINGER, 1);
+#endif
 					first_steps = 0;
 				} else {
 					if (!second_step_done) {
@@ -1259,7 +1269,12 @@ static void ts_poke_emulate(struct work_struct * ts_poke_emulate_work) {
 				ts_track_event_gather(EV_ABS, ABS_MT_POSITION_X, 700+ (pseudo_rnd++)%2);
 				ts_track_event_gather(EV_ABS, ABS_MT_POSITION_Y, 1000+y_diff);
 				y_diff += y_delta;
+#ifdef CONFIG_FPF_TS_PRESSURE
 				ts_track_event_gather(EV_ABS, ABS_MT_PRESSURE, 70+ (pseudo_rnd%2));
+#else
+				ts_track_event_gather(EV_ABS, ABS_MT_TOUCH_MAJOR, 10+ (pseudo_rnd%2));
+				ts_track_event_gather(EV_ABS, ABS_MT_TOUCH_MINOR, 7+ (pseudo_rnd%2));
+#endif
 				ts_track_event_gather(EV_SYN, 0, 0);
 				ts_track_event_run();
 				udelay(5 * swipe_step_wait_time_mul);
@@ -1274,6 +1289,10 @@ static void ts_poke_emulate(struct work_struct * ts_poke_emulate_work) {
 			{
 				ts_track_event_clear(true);
 			}
+#ifndef CONFIG_FPF_TS_PRESSURE
+			ts_track_event_gather(EV_KEY, BTN_TOUCH, 0);
+			ts_track_event_gather(EV_KEY, BTN_TOOL_FINGER, 0);
+#endif
 			ts_track_event_gather(EV_ABS, ABS_MT_TRACKING_ID, -1);
 			ts_track_event_gather(EV_SYN, 0, 0);
 			ts_track_event_run();
@@ -1294,7 +1313,9 @@ static void ts_poke_emulate(struct work_struct * ts_poke_emulate_work) {
 					ts_track_event_gather(EV_ABS, ABS_MT_TRACKING_ID, highest_mt_slot+1);
 					ts_track_event_gather(EV_ABS, ABS_MT_POSITION_X, 0);
 					ts_track_event_gather(EV_ABS, ABS_MT_POSITION_Y, 0);
+#ifdef CONFIG_FPF_TS_PRESSURE
 					ts_track_event_gather(EV_ABS, ABS_MT_PRESSURE, 40);
+#endif
 					ts_track_event_gather(EV_SYN, 0, 0);
 					ts_track_event_run();
 					while(!ts_track_event_complete()) {
@@ -1320,7 +1341,9 @@ static void ts_poke_emulate(struct work_struct * ts_poke_emulate_work) {
 					ts_track_event_gather(EV_ABS, ABS_MT_TRACKING_ID, highest_mt_slot);
 					ts_track_event_gather(EV_ABS, ABS_MT_POSITION_X, 1);
 					ts_track_event_gather(EV_ABS, ABS_MT_POSITION_Y, 1);
+#ifdef CONFIG_FPF_TS_PRESSURE
 					ts_track_event_gather(EV_ABS, ABS_MT_PRESSURE, 41);
+#endif
 					ts_track_event_gather(EV_SYN, 0, 0);
 					ts_track_event_run();
 					while(!ts_track_event_complete()) {
@@ -1490,6 +1513,10 @@ static void ts_scroll_emulate(int down, int full) {
 			while (y_steps-->0) {
 				if (first_steps) {
 					ts_track_event_gather(EV_ABS, ABS_MT_TRACKING_ID, --local_slot);
+#ifndef CONFIG_FPF_TS_PRESSURE
+					ts_track_event_gather(EV_KEY, BTN_TOUCH, 1);
+					ts_track_event_gather(EV_KEY, BTN_TOOL_FINGER, 1);
+#endif
 					first_steps = 0;
 				} else {
 					if (!second_step_done) {
@@ -1501,7 +1528,12 @@ static void ts_scroll_emulate(int down, int full) {
 				ts_track_event_gather(EV_ABS, ABS_MT_POSITION_X, 800+ (pseudo_rnd++)%2);
 				ts_track_event_gather(EV_ABS, ABS_MT_POSITION_Y, 1000+y_diff);
 				y_diff += y_delta;
+#ifdef CONFIG_FPF_TS_PRESSURE
 				ts_track_event_gather(EV_ABS, ABS_MT_PRESSURE, 70+ (pseudo_rnd%2));
+#else
+				ts_track_event_gather(EV_ABS, ABS_MT_TOUCH_MAJOR, 10+ (pseudo_rnd%2));
+				ts_track_event_gather(EV_ABS, ABS_MT_TOUCH_MINOR, 7+ (pseudo_rnd%2));
+#endif
 				ts_track_event_gather(EV_SYN, 0, 0);
 				ts_track_event_run();
 				usleep_range(5 * swipe_step_wait_time_mul , (5 * swipe_step_wait_time_mul) + 1);
@@ -1518,6 +1550,10 @@ static void ts_scroll_emulate(int down, int full) {
 			{
 				ts_track_event_clear(true);
 			}
+#ifndef CONFIG_FPF_TS_PRESSURE
+			ts_track_event_gather(EV_KEY, BTN_TOUCH, 0);
+			ts_track_event_gather(EV_KEY, BTN_TOOL_FINGER, 0);
+#endif
 			ts_track_event_gather(EV_ABS, ABS_MT_TRACKING_ID, -1);
 			ts_track_event_gather(EV_SYN, 0, 0);
 			ts_track_event_run();
@@ -1538,7 +1574,9 @@ static void ts_scroll_emulate(int down, int full) {
 					ts_track_event_gather(EV_ABS, ABS_MT_TRACKING_ID, highest_mt_slot+1);
 					ts_track_event_gather(EV_ABS, ABS_MT_POSITION_X, 0);
 					ts_track_event_gather(EV_ABS, ABS_MT_POSITION_Y, 0);
+#ifdef CONFIG_FPF_TS_PRESSURE
 					ts_track_event_gather(EV_ABS, ABS_MT_PRESSURE, 40);
+#endif
 					ts_track_event_gather(EV_SYN, 0, 0);
 					ts_track_event_run();
 					while(!ts_track_event_complete()) {
@@ -1564,7 +1602,9 @@ static void ts_scroll_emulate(int down, int full) {
 					ts_track_event_gather(EV_ABS, ABS_MT_TRACKING_ID, highest_mt_slot);
 					ts_track_event_gather(EV_ABS, ABS_MT_POSITION_X, 1);
 					ts_track_event_gather(EV_ABS, ABS_MT_POSITION_Y, 1);
+#ifdef CONFIG_FPF_TS_PRESSURE
 					ts_track_event_gather(EV_ABS, ABS_MT_PRESSURE, 41);
+#endif
 					ts_track_event_gather(EV_SYN, 0, 0);
 					ts_track_event_run();
 					while(!ts_track_event_complete()) {
@@ -2196,11 +2236,17 @@ static bool ts_input_filter(struct input_handle *handle,
 	//pr_info("%s ts input filter called t %d c %d v %d\n",__func__, type,code,value);
 
 	if (type == EV_KEY) {
-		pr_info("%s ts_input key %d %d %d\n",__func__,type,code,value);
+		pr_info("%s _____ ts_input key %d %d %d\n",__func__,type,code,value);
 		if (code == 116 && !screen_on && get_block_power_key_in_pocket()) {
 			pr_info("%s proximity ts_input power key filter\n",__func__);
 			return true;
 		}
+	}
+	if (type == EV_ABS) {
+		pr_info("%s _____ ts_input abs %d %d %d\n",__func__,type,code,value);
+	}
+	if (type == EV_SYN) {
+		pr_info("%s _____ ts_input syn %d %d %d\n",__func__,type,code,value);
 	}
 
 	if (type == EV_KEY && code == KEY_VOLUMEUP && value == 1) {
