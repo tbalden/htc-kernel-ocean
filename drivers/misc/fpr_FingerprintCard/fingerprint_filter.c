@@ -30,7 +30,7 @@ MODULE_LICENSE("GPL");
 #define JIFFY_MUL 1
 #endif
 
-#define fpf_PWRKEY_DUR          60
+#define FPF_PWRKEY_DUR          60
 #define FUNC_CYCLE_DUR          9 + JIFFY_MUL
 #define VIB_STRENGTH		20
 
@@ -659,10 +659,10 @@ static void fpf_presspwr(struct work_struct * fpf_presspwr_work) {
 	}
 	input_event(fpf_pwrdev, EV_KEY, KEY_POWER, 1);
 	input_event(fpf_pwrdev, EV_SYN, 0, 0);
-	msleep(fpf_PWRKEY_DUR);
+	msleep(FPF_PWRKEY_DUR);
 	input_event(fpf_pwrdev, EV_KEY, KEY_POWER, 0);
 	input_event(fpf_pwrdev, EV_SYN, 0, 0);
-	msleep(fpf_PWRKEY_DUR/2);
+	msleep(FPF_PWRKEY_DUR/2);
 	// resetting this do_home_button_off_too_in_work_func when powering down, as it causes the running HOME button func work 
 	//	to trigger a HOME button release sync event to input device, resulting in an unwanted  screen on.
 	do_home_button_off_too_in_work_func = 0;
@@ -1037,7 +1037,7 @@ static void start_kad_running(int for_squeeze) {
 	kad_running_for_kcal_only = for_squeeze;
 	pr_info("%s kad\n",__func__);
 	if (is_screen_locked()) {
-		if ((is_kad_on()&&get_kad_kcal())||is_squeeze_peek_kcal(true)) {
+		if ((is_kad_on()&&get_kad_kcal())||(for_squeeze&&is_squeeze_peek_kcal(true))) {
 			schedule_work(&kcal_set_work);//kcal_internal_override_sat(128);
 			kcal_push_restore = 0;
 			kcal_push_break = 0;
