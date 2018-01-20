@@ -34,6 +34,16 @@ MODULE_LICENSE("GPL");
 #define FUNC_CYCLE_DUR          9 + JIFFY_MUL
 #define VIB_STRENGTH		20
 
+#define FPF_SWITCH_STOCK 0
+#define FPF_SWITCH_HOME 1
+#define FPF_SWITCH_DTAP 2
+#define FPF_SWITCH_DTAP_LDTAP 3 // for back fingerprint scanner, 
+			// to act only as Home on doubletapping, 
+			// and act as power off on a longer period doubletap
+			// ...over a threshold don't do anything
+#define FPF_SWITCH_DTAP_TTAP 4 // double tap home, triple tap screen off
+
+
 extern void set_vibrate(int value);
 
 static int fpf_switch = 2;
@@ -65,7 +75,7 @@ unsigned int get_global_seconds(void) {
 static struct workqueue_struct *kcal_listener_wq;
 
 static int get_fpf_switch(void) {
-	return uci_get_user_property_int_mm("fingerprint_mode", fpf_switch, 0, 2);
+	return uci_get_user_property_int_mm("fingerprint_mode", fpf_switch, 0, 4);
 }
 static int get_vib_strength(void) {
 	return uci_get_user_property_int_mm("fp_vib_strength", vib_strength, 0, 90);
@@ -912,6 +922,27 @@ void register_fp_irq(void) {
 	}
 }
 EXPORT_SYMBOL(register_fp_irq);
+
+
+static unsigned long last_fp_down = 0;
+static unsigned long last_fp_short_touch = 0;
+
+static bool triple_tap_wait = false;
+
+static struct alarm triple_tap_rtc;
+static enum alarmtimer_restart triple_tap_rtc_callback(struct alarm *al, ktime_t now)
+{
+	triple_tap_wait = false;
+// home button simulation
+	input_report_key(fpf_pwrdev, KEY_HOME, 1);
+	input_sync(fpf_pwrdev);
+	input_report_key(fpf_pwrdev, KEY_HOME, 0);
+	input_sync(fpf_pwrdev);
+	return ALARMTIMER_NORESTART;
+}
+
+
+
 /*
     filter will work on FP card events.
     if screen is not on it will work on powering it on when needed (except when Button released start (button press) was started while screen was still on: powering_down_with_fingerprint_still_pressed = 1)
@@ -941,7 +972,100 @@ static bool fpf_input_filter(struct input_handle *handle,
 	}
 
 
-	if (get_fpf_switch() == 2) {
+	if (get_fpf_switch() == FPF_SWITCH_DTAP_TTAP) {
+		if (value > 0) {
+		// finger touching sensor
+			if (!screen_on) {
+				return false; // don't filter so pin appears
+			} else {
+				// screen is on, first touch on fp
+				fingerprint_pressed = 1;
+				last_fp_down = jiffies;
+				fpf_vib();
+			}
+			if (triple_tap_wait) {
+				// third tap touching, cancel job, to let user rethink, and hold tap to do nothing instead of home
+				// this is fine to cancel here, because we do not set triple_tap_wait to false -> so short fp tap lift can still mean Screen off
+				alarm_cancel(&triple_tap_rtc);
+			}
+		} else {
+		// finger leaving sensor
+			if (fingerprint_pressed) {
+				if (!screen_on) {
+					return false;
+				} else {
+					unsigned int fp_down_up_diff = jiffies - last_fp_down;
+					fingerprint_pressed = 0;
+					// release
+					if (fp_down_up_diff < 20 * JIFFY_MUL) {
+						// this was an intentional short tap on the fp, let's see doubletapping times..
+						unsigned int last_short_tap_diff = jiffies - last_fp_short_touch;
+						last_fp_short_touch = jiffies;
+						if (last_short_tap_diff> (DT_WAIT_PERIOD_BASE_VALUE + 9 + get_doubletap_wait_period()*2) * JIFFY_MUL) {
+							// to big difference between the two taps
+							return false;
+						} else {
+							if (triple_tap_wait) { // triple tap happened, power off
+								alarm_cancel(&triple_tap_rtc);
+								triple_tap_wait = false;
+								fpf_pwrtrigger(0,__func__);
+							} else {
+								ktime_t wakeup_time;
+								ktime_t curr_time = { .tv64 = 0 };
+								triple_tap_wait = true;
+								wakeup_time = ktime_add_us(curr_time,
+									    (((DT_WAIT_PERIOD_BASE_VALUE + 9 + get_doubletap_wait_period()*2)*10LL + 5LL) * 1000LL)); // msec to usec 30+ jiffies (300msec)
+								alarm_cancel(&triple_tap_rtc);
+								alarm_start_relative(&triple_tap_rtc, wakeup_time); // start new...
+							}
+						}
+					}
+				}
+			}
+		}
+	} else if (get_fpf_switch() == FPF_SWITCH_DTAP_LDTAP) {
+	// phone back fingerprint sensor working : home button dtap, longer dtap sleep
+		if (value > 0) {
+		// finger touching sensor
+			if (!screen_on) {
+				return false; // don't filter so pin appears
+			} else {
+				// screen is on, first touch on fp
+				fingerprint_pressed = 1;
+				last_fp_down = jiffies;
+				fpf_vib();
+			}
+		} else {
+		// finger leaving sensor
+			if (fingerprint_pressed) {
+				if (!screen_on) {
+					return false;
+				} else {
+					unsigned int fp_down_up_diff = jiffies - last_fp_down;
+					fingerprint_pressed = 0;
+					// release
+					if (fp_down_up_diff < 20 * JIFFY_MUL) {
+						// this was an intentional short tap on the fp, let's see doubletapping times..
+						unsigned int last_short_tap_diff = jiffies - last_fp_short_touch;
+						last_fp_short_touch = jiffies;
+						if (last_short_tap_diff> 60 * JIFFY_MUL) {
+							return false;
+						} else {
+							if (last_short_tap_diff > (DT_WAIT_PERIOD_BASE_VALUE + 9 + get_doubletap_wait_period()*2) * JIFFY_MUL) { // long doubletap
+								fpf_pwrtrigger(0,__func__);
+							} else { // short doubletap
+								// home button simulation
+								input_report_key(fpf_pwrdev, KEY_HOME, 1);
+								input_sync(fpf_pwrdev);
+								input_report_key(fpf_pwrdev, KEY_HOME, 0);
+								input_sync(fpf_pwrdev);
+							}
+						}
+					}
+				}
+			}
+		}
+	} else if (get_fpf_switch() == FPF_SWITCH_DTAP) {
 	//standalone kernel mode. double tap means switch off
 	if (value > 0) {
 		if (!screen_on) {
@@ -2653,10 +2777,10 @@ static ssize_t fpf_dump(struct device *dev,
 	if (ret < 0)
 		return ret;
 
-	if (input < 0 || input > 2)
-		input = 0;				
+	if (input < 0 || input > 4)
+		input = 0;
 
-	fpf_switch = input;			
+	fpf_switch = input;
 	
 	return count;
 }
@@ -3982,6 +4106,8 @@ static int __init fpf_init(void)
 		ts_poke_rtc_callback);
 	alarm_init(&vibrate_rtc, ALARM_REALTIME,
 		vibrate_rtc_callback);
+	alarm_init(&triple_tap_rtc, ALARM_REALTIME,
+		triple_tap_rtc_callback);
 	uci_add_sys_listener(fpf_uci_sys_listener);
 	init_done = 1;
 	smart_last_user_activity_time = get_global_seconds();
