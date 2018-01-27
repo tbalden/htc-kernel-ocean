@@ -45,6 +45,7 @@
 #define BRI_GAIN_CHECK(x) (x>0 && x<=20000)
 #define BACKLIGHT_CALI(ori,comp) ((unsigned int)(ori*comp/BL_CALI_DEF))
 #define VALID_CALI_BKLT(val,min,max) ((min) > (val) ? (min) : ((val) > (max) ? (max) : (val)))
+#define DEFAUTL_AP_LEVLE 142
 
 enum {
 	CABC_INDEX = 0,
@@ -86,4 +87,5 @@ void htc_hal_color_feature_enabled(bool enable);
 void htc_ddic_color_mode_supported(bool enable);
 void htc_dimming_on(struct msm_fb_data_type *mfd);
 void htc_dimming_off(void);
+void htc_hal_rgbfilter_by_color(bool enable);
 #endif /* MDSS_FB_H */

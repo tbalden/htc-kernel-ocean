@@ -38,7 +38,7 @@ void htc_set_usbmode(bool on)
 #if defined(CONFIG_TUSB1044)
 extern void set_redriver_status(void);
 #if !IS_ENABLED(CONFIG_HTC_DEF_SSUSB)
-int usb_lock_speed = 1;
+int usb_lock_speed = 0; //default usb3
 static ssize_t show_lock_speed(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {

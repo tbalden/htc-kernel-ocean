@@ -1933,8 +1933,7 @@ int tas2557_set_program(struct tas2557_priv *pTAS2557,
 			pTAS2557->enableIRQ(pTAS2557, false);
 
 		nResult = tas2557_dev_load_data(pTAS2557, p_tas2557_shutdown_data);
-		if (nResult < 0)
-			goto end;
+		/* even if shutdown sequence fails, we still have the chance to recover after hardware reset */
 	}
 
 	pTAS2557->hw_reset(pTAS2557);

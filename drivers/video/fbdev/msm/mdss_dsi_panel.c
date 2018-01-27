@@ -3194,6 +3194,8 @@ static int mdss_panel_parse_dt(struct device_node *np,
 		of_property_read_bool(np,"htc,hal_color_feature_enabled"));
 	htc_ddic_color_mode_supported(
 		of_property_read_bool(np,"htc,ddic_color_mode"));
+	htc_hal_rgbfilter_by_color(
+		of_property_read_bool(np,"htc,hal_rgbfilter_by_color"));
 
 	return 0;
 

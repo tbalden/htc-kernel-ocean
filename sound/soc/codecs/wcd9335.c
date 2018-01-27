@@ -6209,7 +6209,9 @@ static u32 tasha_get_dmic_sample_rate(struct snd_soc_codec *codec,
 	} else {
 		dmic_fs = pdata->dmic_sample_rate;
 	}
-
+/* HTC_AUD_START */
+	dmic_fs = WCD9XXX_DMIC_SAMPLE_RATE_2P4MHZ;
+/* HTC_AUD_END */
 	return dmic_fs;
 }
 

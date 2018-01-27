@@ -1585,10 +1585,16 @@ static int mdss_dp_on_irq(struct mdss_dp_drv_pdata *dp_drv, bool lt_needed)
 	pr_debug("enter, lt_needed=%s\n", lt_needed ? "true" : "false");
 
 	do {
+		mutex_lock(&dp_drv->train_mutex);
+
+		if (!dp_drv->dp_initialized) {
+			pr_err("DP not initialized\n");
+			mutex_unlock(&dp_drv->train_mutex);
+			return -EINVAL;
+		}
+
 		if (ret == -EAGAIN)
 			mdss_dp_mainlink_ctrl(&dp_drv->ctrl_io, false);
-
-		mutex_lock(&dp_drv->train_mutex);
 
 		dp_init_panel_info(dp_drv, dp_drv->vic);
 		ret = mdss_dp_get_lane_mapping(dp_drv, dp_drv->orientation,
@@ -1658,6 +1664,12 @@ int mdss_dp_on_hpd(struct mdss_dp_drv_pdata *dp_drv)
 	/* wait until link training is completed */
 	mutex_lock(&dp_drv->train_mutex);
 
+	if (!dp_drv->dp_initialized) {
+		pr_err("DP not initialized\n");
+		ret = -EINVAL;
+		goto exit;
+	}
+
 	pr_debug("Enter++ cont_splash=%d\n", dp_drv->cont_splash);
 
 	if (dp_drv->cont_splash) {
@@ -1681,7 +1693,6 @@ int mdss_dp_on_hpd(struct mdss_dp_drv_pdata *dp_drv)
 	dp_drv->link_rate = mdss_dp_gen_link_clk(dp_drv);
 	if (!dp_drv->link_rate) {
 		pr_err("Unable to configure required link rate\n");
-		mdss_dp_clk_ctrl(dp_drv, DP_CORE_PM, false);
 		ret = -EINVAL;
 		goto exit;
 	}
@@ -1782,11 +1793,14 @@ int mdss_dp_on(struct mdss_panel_data *pdata)
 	 * init/deinit during unrelated resume/suspend events,
 	 * add host initialization call before DP power-on.
 	 */
+	mutex_lock(&dp_drv->train_mutex);
 	if (!dp_drv->dp_initialized) {
 		rc = mdss_dp_host_init(pdata);
+		mutex_unlock(&dp_drv->train_mutex);
 		if (rc < 0)
 			return rc;
 	}
+	mutex_unlock(&dp_drv->train_mutex);
 
 	return mdss_dp_on_hpd(dp_drv);
 }
@@ -1810,15 +1824,17 @@ static bool mdss_dp_is_ds_bridge_no_local_edid(struct mdss_dp_drv_pdata *dp)
 
 static int mdss_dp_off_irq(struct mdss_dp_drv_pdata *dp_drv)
 {
-	if (!dp_drv->power_on) {
-		pr_debug("panel already powered off\n");
-		return 0;
-	}
+	int ret = 0;
 
 	/* wait until link training is completed */
 	mutex_lock(&dp_drv->train_mutex);
 
 	pr_debug("start\n");
+
+	if (!dp_drv->power_on) {
+		pr_debug("panel already powered off\n");
+		goto exit;
+	}
 
 	mdss_dp_mainlink_ctrl(&dp_drv->ctrl_io, false);
 	mdss_dp_audio_enable(&dp_drv->ctrl_io, false);
@@ -1833,22 +1849,25 @@ static int mdss_dp_off_irq(struct mdss_dp_drv_pdata *dp_drv)
 	if (mdss_dp_is_ds_bridge_sink_count_zero(dp_drv))
 		dp_init_panel_info(dp_drv, HDMI_VFRMT_UNKNOWN);
 
+exit:
 	mutex_unlock(&dp_drv->train_mutex);
 
 	pr_debug("end\n");
 
-	return 0;
+	return ret;
 }
 
 static int mdss_dp_off_hpd(struct mdss_dp_drv_pdata *dp_drv)
 {
-	if (!dp_drv->power_on) {
-		pr_debug("panel already powered off\n");
-		return 0;
-	}
 
 	/* wait until link training is completed */
 	mutex_lock(&dp_drv->train_mutex);
+
+	if (!dp_drv->power_on) {
+		pr_debug("panel already powered off\n");
+		mutex_unlock(&dp_drv->train_mutex);
+		return 0;
+	}
 
 	pr_debug("Entered++, cont_splash=%d\n", dp_drv->cont_splash);
 
@@ -2202,7 +2221,11 @@ notify:
 
 	atomic_set(&dp->notification_pending, 1);
 	if (connect) {
-		mdss_dp_host_init(&dp->panel_data);
+		mutex_lock(&dp->train_mutex);
+		if (!dp->dp_initialized)
+			mdss_dp_host_init(&dp->panel_data);
+		mutex_unlock(&dp->train_mutex);
+
 		ret = mdss_dp_send_video_notification(dp, true);
 	} else {
 		mdss_dp_send_audio_notification(dp, false);
@@ -2227,16 +2250,25 @@ end:
 
 static int mdss_dp_process_hpd_high(struct mdss_dp_drv_pdata *dp)
 {
-	int ret;
+	int ret =0;
 	u32 max_pclk_khz;
 
 	pr_debug("start\n");
+
+	mutex_lock(&dp->train_mutex);
+
+	if (!dp->dp_initialized) {
+		pr_err("DP not initialized yet\n");
+		mutex_unlock(&dp->train_mutex);
+		goto end;
+	}
 
 	ret = mdss_dp_dpcd_cap_read(dp);
 	if (ret || !mdss_dp_aux_is_link_rate_valid(dp->dpcd.max_link_rate) ||
 		!mdss_dp_aux_is_lane_count_valid(dp->dpcd.max_lane_count)) {
 		if (ret == EDP_AUX_ERR_TOUT) {
 			pr_err("DPCD read timedout, skip connect notification\n");
+			mutex_unlock(&dp->train_mutex);
 			goto end;
 		}
 		/*
@@ -2248,6 +2280,7 @@ static int mdss_dp_process_hpd_high(struct mdss_dp_drv_pdata *dp)
 		mdss_dp_set_default_link_parameters(dp);
 		/*AUX channel communication failed, stop DP output*/
 		pr_err("dpcd read failed, stop DP output\n");
+		mutex_unlock(&dp->train_mutex);
 		goto end;
 	}
 
@@ -2263,12 +2296,18 @@ static int mdss_dp_process_hpd_high(struct mdss_dp_drv_pdata *dp)
 		if (mdss_dp_is_ds_bridge_no_local_edid(dp))
 			pr_debug("No local EDID present on DS branch device\n");
 		pr_info("no downstream devices, skip client notification\n");
+		mutex_unlock(&dp->train_mutex);
 		goto end;
 	}
 
 /*read_edid:*/
 	ret = mdss_dp_edid_read(dp);
 	if (ret) {
+		if (ret == -ENODEV) {
+			mutex_unlock(&dp->train_mutex);
+			goto end;
+		}
+
 		pr_err("edid read error, setting default resolution\n");
 		goto notify;
 	}
@@ -2307,9 +2346,11 @@ notify:
 		pr_info("PHY_TEST_PATTERN requested by sink\n");
 		mdss_dp_process_phy_test_pattern_request(dp);
 		pr_info("skip client notification\n");
+		mutex_unlock(&dp->train_mutex);
 		goto end;
 	}
 
+	mutex_unlock(&dp->train_mutex);
 	mdss_dp_notify_clients(dp, NOTIFY_CONNECT);
 
 end:
@@ -2627,7 +2668,10 @@ static int mdss_dp_psm_config(struct mdss_dp_drv_pdata *dp, bool enable)
 		if (mdss_dp_is_test_ongoing(dp)) {
 			mdss_dp_link_maintenance(dp, true);
 		} else {
-			mdss_dp_host_init(&dp->panel_data);
+			mutex_lock(&dp->train_mutex);
+			if (!dp->dp_initialized)
+				mdss_dp_host_init(&dp->panel_data);
+			mutex_unlock(&dp->train_mutex);
 			mdss_dp_notify_clients(dp, NOTIFY_CONNECT);
 		}
 	}
@@ -2717,7 +2761,10 @@ static ssize_t mdss_dp_wta_hpd(struct device *dev,
 
 	if (dp->hpd && cable_connected) {
 		if (dp->alt_mode.current_state & DP_CONFIGURE_DONE) {
-			mdss_dp_host_init(&dp->panel_data);
+			mutex_lock(&dp->train_mutex);
+			if (!dp->dp_initialized)
+				mdss_dp_host_init(&dp->panel_data);
+			mutex_unlock(&dp->train_mutex);
 			mdss_dp_process_hpd_high(dp);
 		} else {
 			dp_send_events(dp, EV_USBPD_DISCOVER_MODES);
@@ -3204,9 +3251,11 @@ static int mdss_dp_event_handler(struct mdss_panel_data *pdata,
 		 * when you connect DP sink while the
 		 * device is in suspend state.
 		 */
+		mutex_lock(&dp->train_mutex);
 		if ((!dp->power_on) && (dp->dp_initialized))
 			rc = mdss_dp_host_deinit(dp);
 
+		mutex_unlock(&dp->train_mutex);
 		/*
 		 * For DP suspend/resume use case, CHECK_PARAMS is
 		 * not called if the cable status is not changed.
@@ -3612,7 +3661,19 @@ static void usbpd_disconnect_callback(struct usbpd_svid_handler *hdlr)
 		mdss_dp_mainlink_push_idle(&dp_drv->panel_data);
 		mdss_dp_off_hpd(dp_drv);
 	} else {
+		reinit_completion(&dp_drv->notification_comp);
 		mdss_dp_notify_clients(dp_drv, NOTIFY_DISCONNECT);
+
+		if (atomic_read(&dp_drv->notification_pending)) {
+			int ret;
+			pr_err("waiting for the disconnect to finish\n");
+			ret = wait_for_completion_timeout(&dp_drv->notification_comp, 5 * HZ);
+			if (ret <= 0) {
+				pr_warn("NOTIFY_DISCONNECT timed out\n");
+				return;
+			}
+			pr_err("wait done for disconnect to finish\n");
+		}
 	}
 
 	/*
@@ -3633,8 +3694,12 @@ static void usbpd_disconnect_callback(struct usbpd_svid_handler *hdlr)
 	 * we re-configure the orientation settings during
 	 * the next connect event.
 	 */
+	mutex_lock(&dp_drv->train_mutex);
+
 	if ((!dp_drv->power_on) && (dp_drv->dp_initialized))
 		mdss_dp_host_deinit(dp_drv);
+
+	mutex_unlock(&dp_drv->train_mutex);
 }
 
 static int mdss_dp_validate_callback(u8 cmd,
@@ -4049,7 +4114,16 @@ static int mdss_dp_process_hpd_irq_high(struct mdss_dp_drv_pdata *dp)
 
 	mdss_dp_reset_test_data(dp);
 
+	mutex_lock(&dp->train_mutex);
+
+	if (!dp->dp_initialized) {
+		pr_err("DP not initialized yet\n");
+		mutex_unlock(&dp->train_mutex);
+		goto exit;
+	}
 	mdss_dp_aux_parse_sink_status_field(dp);
+
+	mutex_unlock(&dp->train_mutex);
 
 	ret = mdss_dp_process_downstream_port_status_change(dp);
 	if (!ret)
@@ -4147,7 +4221,10 @@ static void usbpd_response_callback(struct usbpd_svid_handler *hdlr, u8 cmd,
 		pr_debug("Configure: config USBPD to DP done\n");
 		mdss_dp_usbpd_ext_dp_status(&dp_drv->alt_mode.dp_status);
 
-		mdss_dp_host_init(&dp_drv->panel_data);
+		mutex_lock(&dp_drv->train_mutex);
+		if (!dp_drv->dp_initialized)
+			mdss_dp_host_init(&dp_drv->panel_data);
+		mutex_unlock(&dp_drv->train_mutex);
 
 		if (dp_drv->alt_mode.dp_status.hpd_high)
 			mdss_dp_process_hpd_high(dp_drv);
@@ -4234,7 +4311,10 @@ static void mdss_dp_process_attention(struct mdss_dp_drv_pdata *dp_drv)
 	dp_drv->alt_mode.current_state |= DP_STATUS_DONE;
 
 	if (dp_drv->alt_mode.current_state & DP_CONFIGURE_DONE) {
-		mdss_dp_host_init(&dp_drv->panel_data);
+		mutex_lock(&dp_drv->train_mutex);
+		if (!dp_drv->dp_initialized)
+			mdss_dp_host_init(&dp_drv->panel_data);
+		mutex_unlock(&dp_drv->train_mutex);
 		mdss_dp_process_hpd_high(dp_drv);
 	} else {
 		dp_send_events(dp_drv, EV_USBPD_DP_CONFIGURE);

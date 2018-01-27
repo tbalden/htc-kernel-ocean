@@ -2845,7 +2845,7 @@ static int cyttsp5_get_config_ver_(struct cyttsp5_core_data *cd)
 	si->cydata.fw_ver_conf = config_ver;
 
 exit:
-	cyttsp5_hid_output_resume_scanning_(cd);
+	rc = cyttsp5_hid_output_resume_scanning_(cd);
 error:
 	dev_dbg(cd->dev, "%s: CONFIG_VER:%04X\n", __func__, config_ver);
 	return rc;
@@ -5008,7 +5008,7 @@ static int cyttsp5_get_ic_crc_(struct cyttsp5_core_data *cd, u8 ebid)
 	si->ttconfig.crc = stored_crc;
 
 exit:
-	cyttsp5_hid_output_resume_scanning_(cd);
+	rc = cyttsp5_hid_output_resume_scanning_(cd);
 error:
 	dev_dbg(cd->dev, "%s: CRC: ebid:%d, crc:0x%04X\n",
 			__func__, ebid, si->ttconfig.crc);
@@ -5240,16 +5240,24 @@ reset:
 	/* Read config version directly if PIP version < 1.2 */
 	if (!IS_PIP_VER_GE(&cd->sysinfo, 1, 2)) {
 		rc = cyttsp5_get_config_ver_(cd);
-		if (rc)
+		if (rc) {
 			htc_dev_err(cd->dev, "%s: failed to read config version rc=%d\n",
 				__func__, rc);
+			if (retry--)
+				goto reset;
+			goto exit;
+		}
 	}
 
 	rc = cyttsp5_get_ic_crc_(cd, CY_TCH_PARM_EBID);
-	if (rc)
+	if (rc) {
 		htc_dev_err(cd->dev, "%s: failed to crc data rc=%d\n",
 			__func__, rc);
+		 if (retry--)
+			 goto reset;
+		goto exit;
 
+	}
 	rc = cyttsp5_restore_parameters_(cd);
 	if (rc)
 		htc_dev_err(cd->dev, "%s: failed to restore parameters rc=%d\n",

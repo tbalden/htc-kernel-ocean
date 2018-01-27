@@ -313,6 +313,15 @@ static ssize_t ddic_color_mode_supported_show(struct device *dev,
 	return ret;
 }
 
+static unsigned hal_rgbfilter_by_color = 0;
+static ssize_t hal_rgbfilter_by_color_show(struct device *dev,
+        struct device_attribute *attr, char *buf)
+{
+	ssize_t ret =0;
+	ret = scnprintf(buf, PAGE_SIZE, "%u\n", hal_rgbfilter_by_color);
+	return ret;
+}
+
 static ssize_t attrs_show(struct device *dev,
         struct device_attribute *attr, char *buf)
 {
@@ -529,6 +538,7 @@ static DEVICE_ATTR(disp_cali, S_IRUGO | S_IWUSR, rgb_gain_show, rgb_gain_store);
 static DEVICE_ATTR(disp_cali_enable, S_IRUGO | S_IWUSR, attrs_show, attr_store);
 static DEVICE_ATTR(hal_disp_color_enable, S_IRUGO, hal_color_feature_enabled_show, NULL);
 static DEVICE_ATTR(ddic_color_mode_supported, S_IRUGO, ddic_color_mode_supported_show, NULL);
+static DEVICE_ATTR(hal_disp_rgbfilter_by_color, S_IRUGO, hal_rgbfilter_by_color_show, NULL);
 static struct attribute *htc_extend_attrs[] = {
 	&dev_attr_backlight_info.attr,
 	&dev_attr_cabc_level_ctl.attr,
@@ -541,6 +551,7 @@ static struct attribute *htc_extend_attrs[] = {
 	&dev_attr_disp_cali_enable.attr,
 	&dev_attr_hal_disp_color_enable.attr,
 	&dev_attr_ddic_color_mode_supported.attr,
+	&dev_attr_hal_disp_rgbfilter_by_color.attr,
 	NULL,
 };
 
@@ -689,9 +700,8 @@ void htc_update_bl_cali_data(struct msm_fb_data_type *mfd)
 	struct mdss_panel_info *panel_info = mfd->panel_info;
 	struct htc_backlight1_table *brt_bl_table = &panel_info->brt_bl_table;
 	int size = brt_bl_table->size;
-	int bl_lvl = 0;
-	u16 *bl_data_raw;
-	u16 tmp_cali_value = 0;
+	int bl_lvl = 0, defaut_level_index = 1, i;
+	u16 *bl_data_raw, *bl_data_temp, *bl_ap_level;
 
 	pdata = dev_get_platdata(&mfd->pdev->dev);
 
@@ -715,13 +725,6 @@ void htc_update_bl_cali_data(struct msm_fb_data_type *mfd)
 
 	brt_bl_table->apply_cali = htc_attr_status[BL_CALI_ENABLE_INDEX].cur_value;
 
-	/* free the old calibrated data first, then restore raw bl data again */
-	kfree(brt_bl_table->bl_data);
-	brt_bl_table->bl_data = kzalloc(size * sizeof(u16), GFP_KERNEL);
-	if (!brt_bl_table->bl_data) {
-		pr_err("unable to allocate memory for bl_data\n");
-		return;
-	}
 	memcpy(brt_bl_table->bl_data, brt_bl_table->bl_data_raw, size * sizeof(u16));
 
 	/* Not define brt table */
@@ -729,17 +732,39 @@ void htc_update_bl_cali_data(struct msm_fb_data_type *mfd)
 		return;
 
 	bl_data_raw = brt_bl_table->bl_data_raw;
+	bl_data_temp = brt_bl_table->bl_data;
+	bl_ap_level = brt_bl_table->brt_data;
 
-	/* calibrates on Min and Max node */
-	tmp_cali_value = BACKLIGHT_CALI(bl_data_raw[0], gain->BKL);
-	brt_bl_table->bl_data[0] = VALID_CALI_BKLT(tmp_cali_value, 0, bl_data_raw[1]);
-	tmp_cali_value = BACKLIGHT_CALI(bl_data_raw[size - 1], gain->BKL);
-	brt_bl_table->bl_data[size - 1] = VALID_CALI_BKLT(tmp_cali_value, bl_data_raw[size - 2], panel_info->bl_max);
+	for (i = 0; i < size; i++){
+		if (bl_ap_level[i] == DEFAUTL_AP_LEVLE){
+			defaut_level_index = i;
+			break;
+		}
+	}
 
-	/* Calibrate default brightness */
-	if (brt_bl_table->apply_cali) {
-		tmp_cali_value = BACKLIGHT_CALI(bl_data_raw[1], gain->BKL);
-		brt_bl_table->bl_data[1] = VALID_CALI_BKLT(tmp_cali_value, bl_data_raw[0], bl_data_raw[2]);
+
+	for (i = 0;i < size; i++){
+		/* ap level 142 condition no need to apply calibration gain
+		   when calibration apply disable */
+		if (!brt_bl_table->apply_cali && i == defaut_level_index){
+			pr_debug("%s apply_cali:%d, ap level:%d,bl raw code:%d," \
+			"bl cali code:%d\n",__func__, brt_bl_table->apply_cali,
+			bl_ap_level[i], bl_data_raw[i], bl_data_temp[i]);
+			continue;
+		}
+		bl_data_temp[i] = BACKLIGHT_CALI(bl_data_raw[i], gain->BKL);
+		pr_debug("%s apply_cali:%d, ap level:%d,bl raw code:%d," \
+			"bl cali code:%d\n",__func__, brt_bl_table->apply_cali,
+			bl_ap_level[i], bl_data_raw[i], bl_data_temp[i]);
+	}
+
+	/* if bl table no smooth, then set back to original state*/
+	for (i = 0; i < size-1; i++){
+		if (bl_data_temp[i] > bl_data_temp[i+1]){
+			memcpy(bl_data_temp, bl_data_raw, size * sizeof(u16));
+			pr_debug("%s fall back to raw bl_table\n", __func__);
+			break;
+		}
 	}
 
 	if (mfd->bl_level && mfd->last_bri1) {
@@ -1065,6 +1090,13 @@ void htc_ddic_color_mode_supported(bool enabled)
 {
 	if (enabled){
 		ddic_color_mode_supported = 1;
+	}
+}
+
+void htc_hal_rgbfilter_by_color(bool enabled)
+{
+	if (enabled){
+		hal_rgbfilter_by_color = 1;
 	}
 }
 

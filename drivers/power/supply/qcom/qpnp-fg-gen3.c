@@ -406,6 +406,9 @@ module_param_named(
 
 static int fg_restart;
 static bool fg_sram_dump;
+#ifdef CONFIG_HTC_BATT
+static bool fg_fake_batt_temp = false;
+#endif // CONFIG_HTC_BATT
 
 /* All getters HERE */
 
@@ -616,6 +619,27 @@ static int fg_get_battery_temp(struct fg_chip *chip, int *val)
 
 	/* Value is in Kelvin; Convert it to deciDegC */
 	temp = (temp - 273) * 10;
+#ifdef CONFIG_HTC_BATT
+	{
+		u16 adc;
+		rc = fg_read(chip, ADC_RR_BATT_THERM_LSB(chip), buf, 2);
+		if (rc < 0) {
+			pr_err("failed to read addr=0x%04x, rc=%d\n",
+				ADC_RR_BATT_THERM_LSB(chip), rc);
+			return rc;
+		}
+
+		adc = ((u16)(buf[1] & BATT_TEMP_MSB_MASK) << 8) |
+			(buf[0] & BATT_TEMP_LSB_MASK);
+
+		if (fg_fake_batt_temp &&
+		    (temp > 600) && (adc < 0x85)) {
+			pr_err("[BattTemp] MSB: %x, LSB: %x, %x, fg_batt_temp: %d!\n",
+				buf[1], buf[0], adc, temp);
+			temp = 690;
+		}
+	}
+#endif // CONFIG_HTC_BATT
 	*val = temp;
 	return 0;
 }
@@ -4799,6 +4823,11 @@ static int fg_parse_dt(struct fg_chip *chip)
 		if (temp >= 60 || temp <= 240)
 			chip->dt.esr_meas_curr_ma = temp;
 	}
+
+#ifdef CONFIG_HTC_BATT
+	fg_fake_batt_temp = of_property_read_bool(node,
+				"htc,fg-fake-batt-temp");
+#endif // CONFIG_HTC_BATT
 
 	return 0;
 }

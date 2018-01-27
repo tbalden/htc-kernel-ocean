@@ -592,6 +592,7 @@ Optional properites:
 					"tp_reg_check" = TP driver monitor IC status to check if need to recover panel.
 - htc,hal_color_feature_enabled: A boolean property to decide if need to use hal color feature
 for htc color calibration.
+- htc,hal_rgbfilter_by_color: A boolean property to decide if need to enable indepent rgb_filter to  corresponding color mode.
 htc,ddic_color_mode: A boolean property to decide if need to set color mode via DDIC.
 
 

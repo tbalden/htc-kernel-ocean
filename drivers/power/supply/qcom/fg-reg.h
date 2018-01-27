@@ -16,6 +16,10 @@
 /* FG_ADC_RR register definitions used only for READ */
 #define ADC_RR_FAKE_BATT_LOW_LSB(chip)		(chip->rradc_base + 0x58)
 #define ADC_RR_FAKE_BATT_HIGH_LSB(chip)		(chip->rradc_base + 0x5A)
+#ifdef CONFIG_HTC_BATT
+#define ADC_RR_BATT_THERM_LSB(chip)		(chip->rradc_base + 0x74)
+#define ADC_RR_BATT_THERM_MSB(chip)		(chip->rradc_base + 0x75)
+#endif // CONFIG_HTC_BATT
 
 /* FG_BATT_SOC register definitions */
 #define BATT_SOC_FG_ALG_STS(chip)		(chip->batt_soc_base + 0x06)
