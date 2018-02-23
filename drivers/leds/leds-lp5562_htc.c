@@ -112,6 +112,8 @@ static int probe_finished = 0;
 
 static int bln_switch = 1; // 0 - off / 1 - on
 static int bln_no_charger_switch = 1; // 0 - only do BLN when on charger / 1 - BLN when not on charger
+static int bln_ignore_vibration = 0; // 0 - detect vib pattern for notifications / 1 - do not start notification on vibration
+static int flash_ignore_vibration = 0; // 0 - detect vib pattern for notifications / 1 - do not start notification on vibration
 static int bln_number = BUTTON_BLINK_NUMBER_DEFAULT; // infinite = 0 - number of max button blinks when not on charger
 static int bln_speed = BUTTON_BLINK_SPEED_DEFAULT;
 static int bln_dim_blink = 0; // continue quarter strength blinking after bln_number passed blinking
@@ -133,6 +135,12 @@ static int colored_charge_level = 1; // if set to 1, colored charge level handli
 static int get_bln_switch(void) {
 	if (!vk_present) return 0;
 	return uci_get_user_property_int_mm("bln", bln_switch, 0, 1);
+}
+static int get_bln_ignore_vibration(void) {
+	return uci_get_user_property_int_mm("bln_ignore_vibration", bln_ignore_vibration, 0, 1);
+}
+static int get_flash_ignore_vibration(void) {
+	return uci_get_user_property_int_mm("flash_ignore_vibration", flash_ignore_vibration, 0, 1);
 }
 static int get_bln_no_charger_switch(void) {
 	return uci_get_user_property_int_mm("bln_no_charger_switch", bln_no_charger_switch, 0, 1);
@@ -1792,19 +1800,23 @@ int register_haptic(int value)
 	}
 
 	if (vib_notif_pattern_detected) {
-		if (should_start_bln()) {
-			// store haptic blinking, so if ambient display blocks the bln, later in BLANK screen off, still it can be triggered
-			bln_on_screenoff = 1;
-			pr_info("%s kad bln_on_screenoff %d\n", __func__, bln_on_screenoff);
-			if (!is_kernel_ambient_display() && !screen_on) queue_work(g_vk_work_queue, &vk_blink_work);
+		if (!get_bln_ignore_vibration()) {
+			if (should_start_bln()) {
+				// store haptic blinking, so if ambient display blocks the bln, later in BLANK screen off, still it can be triggered
+				bln_on_screenoff = 1;
+				pr_info("%s kad bln_on_screenoff %d\n", __func__, bln_on_screenoff);
+				if (!is_kernel_ambient_display() && !screen_on) queue_work(g_vk_work_queue, &vk_blink_work);
+			}
 		}
+
 		if (should_start_pulse_blink_on_charger()) {
 			charging_notification_occured_for_rgb = 1;
 			rgb_blink_on_charge_async(); // call charging level based speedy pulse blink
 		}
 		// call flash blink for flashlight notif if lights_down mode (>1) is not active...
 		if (lights_down_divider==1) {
-			flash_blink(true);
+			if (!get_flash_ignore_vibration())
+				flash_blink(true);
 		}
 		kernel_ambient_display();
 	}
