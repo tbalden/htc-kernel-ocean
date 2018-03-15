@@ -1,4 +1,0 @@
-TOOL=/home/android/10/toolchain/aarch64-linux-android-4.9
-mkdir -p out_oce_stock
-make ARCH=arm64 CROSS_COMPILE=$TOOL/bin/aarch64-linux-android- O=out_oce_stock msmcortex_stock_defconfig
-make ARCH=arm64 CROSS_COMPILE=$TOOL/bin/aarch64-linux-android- O=out_oce_stock -j16
