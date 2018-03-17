@@ -17,7 +17,7 @@
 
 #define DRIVER_AUTHOR "illes pal <illespal@gmail.com>"
 #define DRIVER_DESCRIPTION "fingerprint_filter driver"
-#define DRIVER_VERSION "1.0"
+#define DRIVER_VERSION "3.0"
 
 MODULE_AUTHOR(DRIVER_AUTHOR);
 MODULE_DESCRIPTION(DRIVER_DESCRIPTION);
@@ -141,6 +141,7 @@ static int smart_hibernate_pulse_light = NOTIF_DIM;
 */
 static int kad_should_start_on_uci_sys_change = 0;
 void kernel_ambient_display(void);
+void kernel_ambient_display_led_based(void);
 
 static int smart_silent_mode_stop = 1;
 static int smart_silent_mode_hibernate = 1;
@@ -375,22 +376,22 @@ static int get_kad_start_delay_halfseconds(void) {
 
 static int smart_get_kad_halfseconds(void) {
 	int level = smart_get_notification_level(NOTIF_KAD);
-	int ret = uci_get_user_property_int_mm("kad_halfseconds", kad_halfseconds, 0, 1);
+	int ret = uci_get_user_property_int_mm("kad_halfseconds", kad_halfseconds, 5, 20);
 	if (level != NOTIF_DEFAULT) {
-		ret = max(5,uci_get_user_property_int_mm("kad_halfseconds", kad_halfseconds, 0, 1)/2);
+		ret = max(5,uci_get_user_property_int_mm("kad_halfseconds", kad_halfseconds, 5, 20)/2);
 	}
 	pr_info("%s smart_notif =========== level: %d  kad halfsec %d \n",__func__, level, ret);
 	return ret;
 }
 static int smart_get_kad_repeat_times(void) {
 	int level = smart_get_notification_level(NOTIF_KAD);
-	if (level == NOTIF_DEFAULT) return uci_get_user_property_int_mm("kad_repeat_times", kad_repeat_times, 0, 1);
-	return max(1,uci_get_user_property_int_mm("kad_repeat_times", kad_repeat_times, 0, 1)/2);
+	if (level == NOTIF_DEFAULT) return uci_get_user_property_int_mm("kad_repeat_times", kad_repeat_times, 1, 10);
+	return max(1,uci_get_user_property_int_mm("kad_repeat_times", kad_repeat_times, 1, 10)/2);
 }
 static int smart_get_kad_repeat_period_sec(void) {
 	int level = smart_get_notification_level(NOTIF_KAD);
-	if (level == NOTIF_DEFAULT) return uci_get_user_property_int_mm("kad_repeat_period_sec", kad_repeat_period_sec, 0, 1);
-	return uci_get_user_property_int_mm("kad_repeat_period_sec", kad_repeat_period_sec, 0, 1)*2;
+	if (level == NOTIF_DEFAULT) return uci_get_user_property_int_mm("kad_repeat_period_sec", kad_repeat_period_sec, 4, 20);
+	return uci_get_user_property_int_mm("kad_repeat_period_sec", kad_repeat_period_sec, 4, 20)*2;
 }
 
 
@@ -614,15 +615,18 @@ static void kcal_set(struct work_struct * kcal_set_work)
 			}
 		}
 		if (((is_kad_on() && local_kad_kcal) || local_squeeze_kcal) && kad_kcal_backed_up && !kad_kcal_overlay_on) {
-			int retry_count = 2;
+			int retry_count = 60;
+			bool done = false;
 			pr_info("%s kad override... SSSSSSSSSS   screen %d kad %d overlay_on %d backed_up %d need_restore %d\n",__func__, screen_on, kad_running, kad_kcal_overlay_on, kad_kcal_backed_up, needs_kcal_restore_on_screen_on);
 			while (retry_count-->0) {
 				if (screen_on && kcal_internal_override(128,get_kad_kcal_val(),get_kad_kcal_cont(), kad_kcal_r, kad_kcal_g, kad_kcal_b)) {
-					kad_kcal_overlay_on = 1; 
+					kad_kcal_overlay_on = 1;
+					done = true;
 					break;
 				}
-				msleep(5);
+				msleep(10);
 			}
+			if (!done) pr_info("%s kad SSSS kcal DIDN'T HAPPEN\n",__func__);
 		}
 	}
 	mutex_unlock(&kcal_read_write_lock);
@@ -705,7 +709,7 @@ static void fpf_input_event(struct input_handle *handle, unsigned int type,
 }
 
 static int fpf_input_dev_filter(struct input_dev *dev) {
-	if (strstr(dev->name, "uinput-fpc")) {
+	if (strstr(dev->name, "uinput-fpc") || strstr(dev->name, "fpc1020")) {
 		return 0;
 	} else {
 		return 1;
@@ -1509,15 +1513,18 @@ static enum alarmtimer_restart ts_poke_rtc_callback(struct alarm *al, ktime_t no
 	schedule_work(&ts_poke_emulate_work);
 	return ALARMTIMER_NORESTART;
 }
-
+#define CONFIG_FPF_POKE
 static void ts_poke(void) {
+#ifndef CONFIG_FPF_POKE
+	return;
+#else
 	ktime_t wakeup_time;
 	ktime_t curr_time = { .tv64 = 0 };
 	wakeup_time = ktime_add_us(curr_time,
 		(100LL)); // msec to usec
 	alarm_cancel(&ts_poke_rtc);
 	alarm_start_relative(&ts_poke_rtc,wakeup_time);
-
+#endif
 }
 
 /*
@@ -1826,6 +1833,18 @@ static void squeeze_longcount_trigger(void) {
 	schedule_work(&squeeze_longcount_work);
 }
 
+// last time when screen was switched off by KAD ending uninterrupted
+unsigned long last_kad_screen_off_time = 0;
+#define KAD_SCREEN_OFF_NEAR_TIME_MAX 320
+bool is_near_kad_screen_off_time(void) {
+	unsigned int diff = jiffies - last_kad_screen_off_time;
+	pr_info("%s difference since last kad_screen_off %u < %d\n",__func__,diff, KAD_SCREEN_OFF_NEAR_TIME_MAX * JIFFY_MUL);
+	if (diff < KAD_SCREEN_OFF_NEAR_TIME_MAX * JIFFY_MUL) {
+		return true;
+	}
+	return false;
+}
+
 // through this peekmode wait (while kad is on) can be interrupted for earlier kad ending and powerdown
 static int interrupt_kad_peekmode_wait = 0;
 static void squeeze_peekmode(struct work_struct * squeeze_peekmode_work) {
@@ -1854,6 +1873,7 @@ static void squeeze_peekmode(struct work_struct * squeeze_peekmode_work) {
 	}
 	// screen still on and sqeueeze peek wait was not interrupted...
 	if (screen_on && squeeze_peek_wait) {
+		last_kad_screen_off_time = jiffies;
 		fpf_pwrtrigger(0,__func__);
 		if (kad_running && !kad_running_for_kcal_only && !interrupt_kad_peekmode_wait) { // not interrupted, and kad mode peek.. see if re-schedule is needed...
 			kad_repeat_counter++;
@@ -2181,13 +2201,15 @@ static enum alarmtimer_restart kad_repeat_rtc_callback(struct alarm *al, ktime_t
 
 // KAD KernelAmbientDisplay in-kernel...
 // this method is to initialize peek screen on aka "in-kernel AmbientDisplay" feature
-void kernel_ambient_display(void) {
+static void kernel_ambient_display_internal(bool led_intercepted) {
 
 	if (!should_kad_start()) return;
 	pr_info("%s kad -- ||||||| +++++++++++++ KAD +++++++++++++ ////// screen_on %d kad_running %d \n",__func__,screen_on, kad_running);
-	kad_repeat_counter = 0;
+	if (!led_intercepted || !is_near_kad_screen_off_time()) {
+		kad_repeat_counter = 0;
+	}
 	//do_kernel_ambient_display();
-	if (!screen_on && !kad_running)
+	if (!screen_on && !kad_running && (!led_intercepted || !is_near_kad_screen_off_time())) // not screen on, not already running, and not too much close to previous KAD stop (LED rom store call can false positive trigger KAD if set only to LED when screen is off!)
 	{
 		// alarm timer
 		// ...to wait a bit with starting the first instance, because of phone calls/alarms can turn screen on in the meantime
@@ -2199,7 +2221,15 @@ void kernel_ambient_display(void) {
 		alarm_start_relative(&kad_repeat_rtc, wakeup_time); // start new...
 	}
 }
+void kernel_ambient_display(void) {
+	kernel_ambient_display_internal(false);
+}
 EXPORT_SYMBOL(kernel_ambient_display);
+void kernel_ambient_display_led_based(void) {
+	kernel_ambient_display_internal(true);
+}
+EXPORT_SYMBOL(kernel_ambient_display_led_based);
+
 void stop_kernel_ambient_display(bool interrupt_ongoing) {
 	if (init_done) {
 		alarm_cancel(&kad_repeat_rtc);
@@ -2590,9 +2620,10 @@ static void ts_input_event(struct input_handle *handle, unsigned int type,
 static int ts_input_dev_filter(struct input_dev *dev) {
 	if (
 		strstr(dev->name, "himax-touchscreen") ||
-		strstr(dev->name, "cyttsp") ||
-		strstr(dev->name, "nvt_touchscreen") ||
 		strstr(dev->name, "synaptics_dsx") ||
+		strstr(dev->name, "max1187x_touchscreen_0") ||
+		strstr(dev->name, "nvt_touchscreen") ||
+		strstr(dev->name, "cyttsp") ||
 		strstr(dev->name, "gpio")
 	    ) {
 		// storing static ts_device for using outside this handle context as well
@@ -2603,6 +2634,8 @@ static int ts_input_dev_filter(struct input_dev *dev) {
 		if (strstr(dev->name, "nvt_touchscreen")) ts_device = dev;
 		// U11+
 		if (strstr(dev->name, "synaptics_dsx")) ts_device = dev;
+		// m10
+		if (strstr(dev->name, "max1187x_touchscreen_0")) ts_device = dev;
 
 		return 0;
 	} else {
@@ -2871,6 +2904,8 @@ static DEVICE_ATTR(phone_ring_in_silent_mode, (S_IWUSR|S_IRUGO),
 	phone_ring_in_silent_mode_show, phone_ring_in_silent_mode_dump);
 
 // ------------------- squeeze
+#define CONFIG_FPF_SQUEEZE
+#ifdef CONFIG_FPF_SQUEEZE
 static ssize_t squeeze_sleep_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
@@ -3090,6 +3125,7 @@ static ssize_t squeeze_swipe_vibration_dump(struct device *dev,
 
 static DEVICE_ATTR(squeeze_swipe_vibration, (S_IWUSR|S_IRUGO),
 	squeeze_swipe_vibration_show, squeeze_swipe_vibration_dump);
+#endif
 
 // -------------------- notification booster
 static ssize_t notification_booster_show(struct device *dev,
@@ -3830,6 +3866,7 @@ static int fb_notifier_callback(struct notifier_block *self,
 		screen_on = 0;
 		screen_off_early = 1;
 		//screen_on_full = 0;
+		last_kad_screen_off_time = jiffies;
 		pr_info("fpf kad screen off -early\n");
             break;
         }
@@ -3855,6 +3892,7 @@ static int fb_notifier_callback(struct notifier_block *self,
         case FB_BLANK_NORMAL:
 		screen_on = 0;
 		screen_on_full = 0;
+		last_kad_screen_off_time = jiffies;
 		last_screen_event_timestamp = jiffies;
 		last_screen_off_seconds = get_global_seconds();
 		last_screen_lock_check_was_false = 0;
@@ -3934,6 +3972,7 @@ static int __init fpf_init(void)
 	if (rc)
 		pr_err("%s: sysfs_create_file failed for fpf\n", __func__);
 
+#ifdef CONFIG_FPF_SQUEEZE
 	rc = sysfs_create_file(fpf_kobj, &dev_attr_squeeze_wake.attr);
 	if (rc)
 		pr_err("%s: sysfs_create_file failed for swake\n", __func__);
@@ -3961,6 +4000,7 @@ static int __init fpf_init(void)
 	rc = sysfs_create_file(fpf_kobj, &dev_attr_squeeze_swipe_vibration.attr);
 	if (rc)
 		pr_err("%s: sysfs_create_file failed for sswipevibr\n", __func__);
+#endif
 
 	rc = sysfs_create_file(fpf_kobj, &dev_attr_kad_on.attr);
 	if (rc)

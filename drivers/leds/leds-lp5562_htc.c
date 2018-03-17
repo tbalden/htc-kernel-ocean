@@ -1082,6 +1082,7 @@ static void virtual_key_led_blink(int onoff, int dim)
 extern void flash_blink(bool haptic);
 extern void flash_stop_blink(void);
 extern void kernel_ambient_display(void);
+extern void kernel_ambient_display_led_based(void);
 extern int is_kernel_ambient_display(void);
 extern void stop_kernel_ambient_display(bool interrupt_ongoing);
 
@@ -2042,7 +2043,7 @@ static void lp5562_color_blink(struct i2c_client *client, uint8_t red, uint8_t g
 		if ((vk_screen_is_off() || !wake_by_user) && (lights_down_divider==1)) { // only flash if lights_down mode is not active...
 			flash_blink(false);
 		}
-		kernel_ambient_display();
+		kernel_ambient_display_led_based();
 		if (!get_bln_pulse_rgb_blink()) {
 		green = green / (get_bln_rgb_blink_light_level()*smart_get_pulse_dimming());
 #endif
