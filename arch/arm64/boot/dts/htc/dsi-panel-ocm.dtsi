@@ -162,7 +162,7 @@
 		aod-power-on-cmds = [
 			01 80
 			00 FF
-			16 0C
+			16 03
 			A1 9F
 			A2 20
 			A3 46
@@ -177,7 +177,7 @@
 			16 3f
 			];
 		aod-enable-cmds = [
-			16 0C
+			16 03
 			];
 	};
 
@@ -512,11 +512,13 @@
 		qcom,mdss-dsi-panel-timings = [00 1D 08 07 23 22 07 07 05 03 04 00];
 		qcom,mdss-dsi-reset-sequence = <0 10>,<1 50>;
 		htc,rst-keep-high;
+		htc,hal_color_feature_enabled;
+		htc,hal_rgbfilter_by_color;
 		qcom,mdss-dsi-t-clk-post = <0x0D>;
 		qcom,mdss-dsi-t-clk-pre = <0x2E>;
 		qcom,mdss-dsi-bl-pmic-control-type = "bl_ctrl_backlight";
 		htc,mdss-dsi-bl-backlight = <&lp8556_bl>;
-		htc,brt-bl-table = <30 11>, <142 683>, <255 2304>;
+		htc,brt-bl-table = <10 15>,<40 28>,<142 683>,<255 2304>;
 		htc,mdss-camera-blk = <189>;
 		htc,burst-on-level = <13>;
 		htc,burst-off-level = <12>;
@@ -569,6 +571,11 @@
 		qcom,mdss-dsi-lp11-init;
 		qcom,panel-supply-entries = <&dsi_panel_pwr_supply_td4353>;
 		qcom,config-select = <&dsi_dual_jdi_td4353_cmd_config1>;
+		qcom,mdss-dsi-panel-hdr-enabled;
+		qcom,mdss-dsi-panel-hdr-color-primaries = <14500 15500 32000
+			17000 15500 30000 8000 3000>;
+		qcom,mdss-dsi-panel-peak-brightness = <4200000>;
+		qcom,mdss-dsi-panel-blackness-level = <3230>;
 
 		dsi_dual_jdi_td4353_cmd_config0: config0 {
 			qcom,split-mode = "dualctl-split";
