@@ -131,6 +131,11 @@ static int pulse_rgb_blink_on_charger = 0; // 0 - not blink on charger, 1 - do b
 static int pulse_rgb_blink_on_charger_red_limit = 95; // 0-100 percentage where color from red switches to green
 
 static int colored_charge_level = 1; // if set to 1, colored charge level handling is enabled, 0 - not
+static int colored_charge_level_discrete = 0; // if set to 0 charge level coloring changes continuously, otherwwise 4 levels...set by user
+
+static int colored_charge_level_0 = 35;
+static int colored_charge_level_1 = 75;
+static int colored_charge_level_2 = 95;
 
 static int get_bln_switch(void) {
 	if (!vk_present) return 0;
@@ -171,6 +176,18 @@ static int get_bln_pulse_rgb_pattern(void) {
 }
 static int get_bln_rgb_batt_colored(void) {
 	return uci_get_user_property_int_mm("bln_rgb_batt_colored", colored_charge_level, 0, 1);
+}
+static int get_bln_rgb_batt_colored_discrete(void) {
+	return uci_get_user_property_int_mm("bln_rgb_batt_colored_discrete", colored_charge_level_discrete, 0, 1);
+}
+static int get_bln_rgb_batt_colored_lvl_0(void) {
+	return uci_get_user_property_int_mm("bln_rgb_batt_colored_lvl_0", colored_charge_level_0, 0, 99);
+}
+static int get_bln_rgb_batt_colored_lvl_1(void) {
+	return uci_get_user_property_int_mm("bln_rgb_batt_colored_lvl_1", colored_charge_level_1, 0, 99);
+}
+static int get_bln_rgb_batt_colored_lvl_2(void) {
+	return uci_get_user_property_int_mm("bln_rgb_batt_colored_lvl_2", colored_charge_level_2, 0, 99);
 }
 static int get_bln_pulse_rgb_blink_on_charger(void) {
 	return uci_get_user_property_int_mm("bln_rgb_pulse_blink_on_charger", pulse_rgb_blink_on_charger, 0, 1);
@@ -1517,19 +1534,39 @@ static void led_multi_color_charge_level(int level, bool force) {
 	last_charge_state = 1;
 	last_level = level;
 
-	if (green_coeff < 1) green_coeff = 10;
+	if (!get_bln_rgb_batt_colored_discrete()) {
+		if (green_coeff < 1) green_coeff = 10;
 
-	if (level<5) { // under 5, always full RED but low light for red
-		red_coeff = 80;
-		green_coeff = 1;
-	} else
-	if (level<15) { // under 15, always full RED but lower light for red
-		red_coeff = 160;
-		green_coeff = 3;
-	} else
-	if (level<20) { // under 20, always full RED full light for red
-		red_coeff = 255;
-		green_coeff = 7;
+		if (level<5) { // under 5, always full RED but low light for red
+			red_coeff = 80;
+			green_coeff = 1;
+		} else
+		if (level<15) { // under 15, always full RED but lower light for red
+			red_coeff = 160;
+			green_coeff = 3;
+		} else
+		if (level<20) { // under 20, always full RED full light for red
+			red_coeff = 255;
+			green_coeff = 7;
+		}
+	} else {
+#if 1
+		if (level < get_bln_rgb_batt_colored_lvl_0()) {
+			green_coeff = 0;
+			red_coeff = 40;
+		} else
+		if (level < get_bln_rgb_batt_colored_lvl_1()) {
+			green_coeff = 40;
+			red_coeff = 160;
+		} else
+		if (level < get_bln_rgb_batt_colored_lvl_2()) {
+			green_coeff = 120;
+			red_coeff = 90;
+		} else {
+			green_coeff = 235;
+			red_coeff = 20;
+		}
+#endif
 	}
 
 	if (level == 100) { // at 100, always full GREEN
