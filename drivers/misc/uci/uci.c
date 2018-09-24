@@ -28,7 +28,7 @@
 
 #define DRIVER_AUTHOR "illes pal <illespal@gmail.com>"
 #define DRIVER_DESCRIPTION "uci driver"
-#define DRIVER_VERSION "1.0"
+#define DRIVER_VERSION "1.2"
 
 MODULE_AUTHOR(DRIVER_AUTHOR);
 MODULE_DESCRIPTION(DRIVER_DESCRIPTION);
@@ -94,7 +94,7 @@ struct file* uci_fopen(const char* path, int flags, int rights) {
 
 #define MAX_PARAMS 100
 #define MAX_STR_LEN 100
-#define MAX_FILE_SIZE 2500
+#define MAX_FILE_SIZE 3000
 
 char *user_cfg_keys[MAX_PARAMS];
 char *user_cfg_values[MAX_PARAMS];
@@ -141,6 +141,19 @@ int parse_uci_cfg_file(const char *file_name, bool sys) {
 		if (fsize==0) {
 			pr_err("uci file being deleted\n"); 
 			return -2;
+		}
+		if (sys) { // check file age for sys cfg. Older files are from before reboot completed or power up,
+			// may contain data that confuses functionality, like uci proximity (power press blocking...)
+			struct timespec mtime = inode->i_mtime;
+			struct timespec delta_t, now;
+			getnstimeofday(&now);
+			delta_t = timespec_sub(now, mtime);
+			if (delta_t.tv_sec > 3) {
+				pr_err("%s uci sys file too old, don't parse, return error. Age: %d\n",__func__,(int)delta_t.tv_sec);
+				return -3;
+			} else {
+				pr_info("%s uci sys file age ok, do parse. Age: %d\n",__func__,(int)delta_t.tv_sec);
+			}
 		}
 
 		buf=(char *) kmalloc(fsize+1,GFP_KERNEL);
@@ -310,6 +323,14 @@ void parse_uci_sys_cfg_file(void) {
 		count++;
 		if (count>5) break;
 	}
+	if (rc==-3) {
+		// file too old. broadcast sys listeners, to get default values instead of outdated parsed state, till a parse is successful..
+		int i=0;
+		sys_cfg_parsed = false;
+		for (;i<sys_listener_counter;i++) {
+			(*sys_listeners[i])();
+		}
+	}
 	if (!rc) { 
 		int i=0;
 		sys_cfg_parsed = true; should_parse_sys = false; 
@@ -393,7 +414,7 @@ EXPORT_SYMBOL(uci_get_sys_property_str);
 int uci_get_sys_property_int(const char* property, int default_value) {
 	const char* str = uci_get_sys_property_str(property, 0);
 	long int ret = 0;
-	pr_info("%s uci %s str = %s\n",__func__, property, str?str:"NULL");
+	//pr_info("%s uci %s str = %s\n",__func__, property, str?str:"NULL");
 	if (!str) return default_value;
         if (kstrtol(str, 10, &ret) < 0)
                 return -EINVAL;
@@ -404,7 +425,7 @@ EXPORT_SYMBOL(uci_get_sys_property_int);
 int uci_get_sys_property_int_mm(const char* property, int default_value, int min, int max) {
 	int ret = uci_get_sys_property_int(property, default_value);
 	if (ret<min || ret>max) ret = default_value;
-	pr_info("%s uci get sys prop %s = %d\n",__func__, property, ret);
+	//pr_info("%s uci get sys prop %s = %d\n",__func__, property, ret);
 	return ret;
 }
 EXPORT_SYMBOL(uci_get_sys_property_int_mm);
