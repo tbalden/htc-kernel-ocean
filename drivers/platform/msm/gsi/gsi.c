@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -1089,6 +1089,7 @@ int gsi_alloc_evt_ring(struct gsi_evt_ring_props *props, unsigned long dev_hdl,
 		pr_err("%s:%d gsi context not allocated\n", __func__, __LINE__);
 		return -GSI_STATUS_NODEV;
 	}
+	ee = gsi_ctx->per.ee;
 
 	ee = gsi_ctx->per.ee;
 
@@ -1616,6 +1617,7 @@ int gsi_alloc_channel(struct gsi_chan_props *props, unsigned long dev_hdl,
 		pr_err("%s:%d gsi context not allocated\n", __func__, __LINE__);
 		return -GSI_STATUS_NODEV;
 	}
+	ee = gsi_ctx->per.ee;
 
 	ee = gsi_ctx->per.ee;
 
@@ -2218,6 +2220,7 @@ int gsi_query_channel_info(unsigned long chan_hdl,
 		pr_err("%s:%d gsi context not allocated\n", __func__, __LINE__);
 		return -GSI_STATUS_NODEV;
 	}
+	ee = gsi_ctx->per.ee;
 
 	ee = gsi_ctx->per.ee;
 
@@ -2290,6 +2293,7 @@ int gsi_is_channel_empty(unsigned long chan_hdl, bool *is_empty)
 		pr_err("%s:%d gsi context not allocated\n", __func__, __LINE__);
 		return -GSI_STATUS_NODEV;
 	}
+	ee = gsi_ctx->per.ee;
 
 	ee = gsi_ctx->per.ee;
 
@@ -2479,6 +2483,7 @@ int gsi_poll_channel(unsigned long chan_hdl,
 		pr_err("%s:%d gsi context not allocated\n", __func__, __LINE__);
 		return -GSI_STATUS_NODEV;
 	}
+	ee = gsi_ctx->per.ee;
 
 	ee = gsi_ctx->per.ee;
 

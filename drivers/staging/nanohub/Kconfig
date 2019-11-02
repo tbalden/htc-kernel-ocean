@@ -57,7 +57,7 @@ config NANOHUB_SECOND_DISP
 
 config NANOHUB_AOD
 	bool "Always on display"
-	default y
+	default n
 	depends on NANOHUB_TP_SWITCH
 	help
 	  Always on display mode

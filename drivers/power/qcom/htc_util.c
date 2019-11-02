@@ -66,6 +66,23 @@ struct _htc_kernel_top {
 	unsigned long cpustat_time;
 	int top_loading_pid[NUM_BUSY_THREAD_CHECK];
 	spinlock_t lock;
+	struct _htc_thread_top *thread_top;
+};
+
+static const char *monitor_threads[] = {"system_server"};
+#define NUM_OF_MONITOR_THREAD (sizeof monitor_threads / sizeof monitor_threads[0])
+int tid_enabled = 0;
+int tid_top_prev_state = 0;
+int tid_top_accu_prev_state = 0;
+
+struct _htc_thread_top {
+	unsigned int *child_prev_proc_stat[NUM_OF_MONITOR_THREAD];
+	int *child_curr_proc_delta[NUM_OF_MONITOR_THREAD];
+	int *child_curr_proc_pid[NUM_OF_MONITOR_THREAD];
+	long *child_cpu_time[NUM_OF_MONITOR_THREAD];
+	struct task_struct **child_task_ptr_array[NUM_OF_MONITOR_THREAD];
+	int child_top_loading_pid[NUM_OF_MONITOR_THREAD][NUM_BUSY_THREAD_CHECK];
+	int monitor_pid[NUM_OF_MONITOR_THREAD];
 };
 
 struct st_htc_idle_statistic {
@@ -152,6 +169,38 @@ bool is_commercial()
     return get_radio_flag() == 0;
 }
 
+int check_top_malloc(struct _htc_kernel_top *ktop) {
+    struct _htc_kernel_top *top = ktop;
+	if(top->task_ptr_array && top->curr_proc_delta &&
+	    top->curr_proc_pid && top->prev_proc_stat &&
+	    top->cpu_time) {
+		return 1;
+	}
+
+	if(top->task_ptr_array) {
+		vfree(top->task_ptr_array);
+		top->task_ptr_array = NULL;
+	}
+	if(top->curr_proc_delta) {
+		vfree(top->curr_proc_delta);
+		top->curr_proc_delta = NULL;
+	}
+	if(top->curr_proc_pid) {
+		vfree(top->curr_proc_pid);
+		top->curr_proc_pid = NULL;
+	}
+	if(top->prev_proc_stat) {
+		vfree(top->prev_proc_stat);
+		top->prev_proc_stat = NULL;
+	}
+	if(top->cpu_time) {
+		vfree(top->cpu_time);
+		top->cpu_time = NULL;
+	}
+
+	return 0;
+}
+
 static void clear_process_monitor_array(struct process_monitor_statistic *pArray, int array_size)
 {
 	int j;
@@ -179,6 +228,10 @@ static void write_ktop_fd(struct _htc_kernel_top *ktop)
 	int pid, usage;
 	char *name;
 	unsigned long duration;
+
+	if(!check_top_malloc(ktop)) {
+		return;
+	}
 
 	fp = filp_open(KTOP_ACCU_FD, O_WRONLY, 0);
 	if (IS_ERR(fp)) {
@@ -638,22 +691,90 @@ static unsigned long htc_calculate_cpustat_time(struct kernel_cpustat curr_cpust
 	return (user_time + system_time + io_time + irq_time + idle_time);
 }
 
+static int init_thread_top(struct _htc_thread_top *tdtop)
+{
+	int i = 0;
+	struct _htc_thread_top *top = tdtop;
+	if(!top) {
+		return 0;
+	}
+
+	for(i = 0; i < NUM_OF_MONITOR_THREAD; i++) {
+		top->child_prev_proc_stat[i] = vmalloc(sizeof(int) * MAX_PID);
+		top->child_curr_proc_delta[i] = vmalloc(sizeof(int) * MAX_PID);
+		top->child_curr_proc_pid[i] = vmalloc(sizeof(int) * MAX_PID);
+		top->child_cpu_time[i] = vmalloc(sizeof(long) * MAX_PID);
+		top->child_task_ptr_array[i] = vmalloc(sizeof(struct task_struct *) * MAX_PID);
+
+		memset(top->child_prev_proc_stat[i], 0, sizeof(int) * MAX_PID);
+		memset(top->child_curr_proc_delta[i], 0, sizeof(int) * MAX_PID);
+		memset(top->child_curr_proc_pid[i], 0, sizeof(int) * MAX_PID);
+		memset(top->child_cpu_time[i], 0, sizeof(long) * MAX_PID);
+		memset(top->child_task_ptr_array[i], 0, sizeof(struct task_struct *) * MAX_PID);
+	}
+	memset(top->monitor_pid, 0, sizeof(int) * NUM_OF_MONITOR_THREAD);
+
+	return 1;
+}
+
+static int release_thread_top(struct _htc_thread_top *tdtop)
+{
+	int i = 0;
+	struct _htc_thread_top *top = tdtop;
+	if(!top) {
+		return 0;
+	}
+
+	for(i = 0; i < NUM_OF_MONITOR_THREAD; i++) {
+		vfree(top->child_prev_proc_stat[i]);
+		vfree(top->child_curr_proc_delta[i]);
+		vfree(top->child_curr_proc_pid[i]);
+		vfree(top->child_cpu_time[i]);
+		vfree(top->child_task_ptr_array[i]);
+
+		top->child_prev_proc_stat[i] = NULL;
+		top->child_curr_proc_delta[i] = NULL;
+		top->child_curr_proc_pid[i] = NULL;
+		top->child_cpu_time[i] = NULL;
+		top->child_task_ptr_array[i] = NULL;
+	}
+
+	return 1;
+}
+
+extern int htc_tid_enabled(void);
 static void htc_kernel_top_cal(struct _htc_kernel_top *ktop, int type)
 {
 	int pid_cnt = 0;
 	int pid_num = 0;
+	int child_pid_cnt[NUM_OF_MONITOR_THREAD] = {0};
+	int child_pid_num = 0;
+
+	int need_monitor = -1;
+	int mon_num = 0;
+	struct _htc_thread_top *tdtop;
 	struct task_struct *process;
-	struct task_cputime cputime;
+	struct task_cputime cputime = {0, 0};
 	// audio problem:
 	// TOP log execution time > 8ms with ieq disabled will randomly cause sound playback problem
 	// ulong flags;
 
-	if (ktop->task_ptr_array == NULL ||
-	    ktop->curr_proc_delta == NULL ||
-	    ktop->curr_proc_pid == NULL ||
-	    ktop->prev_proc_stat == NULL ||
-	    ktop->cpu_time == NULL)
-	  return;
+	if(!check_top_malloc(ktop)) {
+		return;
+	}
+
+	if(tid_enabled) {
+		tdtop = ktop->thread_top;
+		for(mon_num = 0; mon_num < NUM_OF_MONITOR_THREAD; mon_num++) {
+			if (tdtop->child_task_ptr_array[mon_num] == NULL ||
+				tdtop->child_curr_proc_delta[mon_num] == NULL ||
+				tdtop->child_curr_proc_pid[mon_num] == NULL ||
+				tdtop->child_prev_proc_stat[mon_num] == NULL ||
+				tdtop->child_cpu_time[mon_num] == NULL) {
+				return;
+			}
+		}
+	}
 	// audio problem
 	// spin_lock_irqsave(&ktop->lock, flags);
 
@@ -663,11 +784,36 @@ static void htc_kernel_top_cal(struct _htc_kernel_top *ktop, int type)
 	rcu_read_lock();
 #endif
 	for_each_process(process) {
-		thread_group_cputime(process, &cputime);
-		if (process->pid < MAX_PID) {
+		if(tid_enabled) {
+			for(mon_num = 0; mon_num < NUM_OF_MONITOR_THREAD; mon_num++) {
+				if(process && process->comm &&
+				   strncmp(process->comm, monitor_threads[mon_num],
+						   sizeof(process->comm)) == 0) {
+					need_monitor = mon_num;
+					break;
+				}
+			}
+
+			if(need_monitor >= 0 && need_monitor < NUM_OF_MONITOR_THREAD) {
+				htc_thread_group_cputime(process, &cputime,
+										 tdtop->child_cpu_time[need_monitor],
+										 tdtop->child_task_ptr_array[need_monitor],
+										 MAX_PID);
+				tdtop->monitor_pid[need_monitor] = process->pid;
+			} else {
+				if(process)
+					thread_group_cputime(process, &cputime);
+			}
+		} else {
+			thread_group_cputime(process, &cputime);
+		}
+
+		if (process && (process->pid < MAX_PID)) {
 			ktop->cpu_time[process->pid] = cputime.utime + cputime.stime;
 			ktop->task_ptr_array[process->pid] = process;
 		}
+
+		need_monitor = -1;
 	}
 #ifndef CONFIG_ARCH_SDM630
 	rcu_read_unlock();
@@ -684,9 +830,36 @@ static void htc_kernel_top_cal(struct _htc_kernel_top *ktop, int type)
 			ktop->curr_proc_pid[pid_cnt] = pid_num;
 			pid_cnt++;
 		}
+
+		if(tid_enabled) {
+			for(mon_num = 0; mon_num < NUM_OF_MONITOR_THREAD; mon_num++) {
+				if(tdtop->monitor_pid[mon_num] == pid_num) {
+					for(child_pid_num = 0; child_pid_num < MAX_PID; child_pid_num++) {
+						long cpu_time = tdtop->child_cpu_time[mon_num][child_pid_num];
+						tdtop->child_curr_proc_delta[mon_num][child_pid_num] =
+							cpu_time - tdtop->child_prev_proc_stat[mon_num][child_pid_num];
+						tdtop->child_prev_proc_stat[mon_num][child_pid_num] = cpu_time;
+
+						if (tdtop->child_curr_proc_delta[mon_num][child_pid_num] > 0) {
+							tdtop->child_curr_proc_pid[mon_num][child_pid_cnt[mon_num]] =
+								child_pid_num;
+							child_pid_cnt[mon_num]++;
+						}
+					}
+
+				}
+			}
+		}
 	}
 	sort_cputime_by_pid(ktop->curr_proc_delta, ktop->curr_proc_pid, pid_cnt, ktop->top_loading_pid);
-
+	if(tid_enabled) {
+		for(mon_num = 0; mon_num < NUM_OF_MONITOR_THREAD; mon_num++) {
+			sort_cputime_by_pid(tdtop->child_curr_proc_delta[mon_num],
+								tdtop->child_curr_proc_pid[mon_num],
+								child_pid_cnt[mon_num],
+								tdtop->child_top_loading_pid[mon_num]);
+		}
+	}
 	/* Calculate cpu time of cpus */
 	get_all_cpustat(&ktop->curr_cpustat);
 	ktop->cpustat_time = htc_calculate_cpustat_time(ktop->curr_cpustat, ktop->prev_cpustat);
@@ -716,6 +889,13 @@ static void htc_kernel_top_cal(struct _htc_kernel_top *ktop, int type)
 static void htc_kernel_top_show(struct _htc_kernel_top *ktop, int type)
 {
 	int top_n_pid = 0, i;
+	int child_is_in_top = 0;
+	int mon_num = 0;
+	struct _htc_thread_top *tdtop;
+
+	if(!check_top_malloc(ktop)) {
+		return;
+	}
 
 	/* Print most time consuming processes */
 	pr_info("[K]%sCPU Usage\t\tPID\t\tName\n", type == KERNEL_TOP_ACCU ? "[KTOP]" : " ");
@@ -730,8 +910,57 @@ static void htc_kernel_top_show(struct _htc_kernel_top *ktop, int type)
 		}
 
 	}
+
+	if(tid_enabled) {
+		tdtop = ktop->thread_top;
+		for(mon_num = 0; mon_num < NUM_OF_MONITOR_THREAD; mon_num++) {
+			if(tdtop->monitor_pid[mon_num] <= 0) {
+				break;
+			}
+
+			for (i = 0; i < NUM_BUSY_THREAD_CHECK; i++) {
+				if(ktop->cpustat_time > 0) {
+					top_n_pid = ktop->top_loading_pid[i];
+					if(top_n_pid == tdtop->monitor_pid[mon_num]) {
+						child_is_in_top = 1;
+						break;
+					}
+				}
+			}
+
+			if(!child_is_in_top) {
+				continue;
+			}
+
+			pr_info("[K]%s%s Usage\n",
+					type == KERNEL_TOP_ACCU ? "[KTOP]" : " ",
+					monitor_threads[mon_num]);
+			for (i = 0; i < NUM_BUSY_THREAD_CHECK; i++) {
+				if (ktop->cpustat_time > 0 &&
+					ktop->curr_proc_delta[tdtop->monitor_pid[mon_num]] > 0) {
+					top_n_pid = tdtop->child_top_loading_pid[mon_num][i];
+					pr_info("[K]%s%8d%%\t\t%d\t\t%s\t\t%d\n",
+							type == KERNEL_TOP_ACCU ? "[KTOP]" : " ",
+							tdtop->child_curr_proc_delta[mon_num][top_n_pid] *
+							100 / ktop->curr_proc_delta[tdtop->monitor_pid[mon_num]],
+							top_n_pid,
+							tdtop->child_task_ptr_array[mon_num][top_n_pid]->comm,
+							tdtop->child_curr_proc_delta[mon_num][top_n_pid]);
+				}
+
+			}
+
+			child_is_in_top = 0;
+			memset(tdtop->child_curr_proc_delta[mon_num], 0, sizeof(int) * MAX_PID);
+			memset(tdtop->child_task_ptr_array[mon_num], 0, sizeof(int) * MAX_PID);
+			memset(tdtop->child_curr_proc_pid[mon_num], 0, sizeof(int) * MAX_PID);
+		}
+
+		memset(tdtop->monitor_pid, 0, sizeof(int) * NUM_OF_MONITOR_THREAD);
+	}
+
 	memset(ktop->curr_proc_delta, 0, sizeof(int) * MAX_PID);
-	memset(ktop->task_ptr_array, 0, sizeof(int) * MAX_PID);
+	memset(ktop->task_ptr_array, 0, sizeof(struct task_struct *) * MAX_PID);
 	memset(ktop->curr_proc_pid, 0, sizeof(int) * MAX_PID);
 }
 
@@ -767,6 +996,7 @@ extern void htc_print_pon_boot_reason(void);
 extern void dump_vm_events_counter(void);
 extern void htc_lmh_stat_show(void);
 extern void htc_lmh_stat_clear(void);
+extern void htc_show_pm_qos_state(void);
 static void htc_pm_monitor_work_func(struct work_struct *work)
 {
 	struct _htc_kernel_top *ktop = container_of(work, struct _htc_kernel_top,
@@ -803,6 +1033,9 @@ static void htc_pm_monitor_work_func(struct work_struct *work)
 	htc_xo_vddmin_stat_show();
 	msm_rpm_dump_stat(true);
 
+	/* PM_QOS stats*/
+	htc_show_pm_qos_state();
+
 #if 0 //FIX ME
 	/* Show timer stats */
 	htc_timer_stats_onoff('0');
@@ -812,12 +1045,23 @@ static void htc_pm_monitor_work_func(struct work_struct *work)
 	/* Show wakeup source */
 	htc_print_active_wakeup_sources();
 
+	tid_enabled = htc_tid_enabled();
+	if(tid_enabled && (tid_enabled != tid_top_prev_state)) {
+		init_thread_top(ktop->thread_top);
+		tid_top_prev_state = tid_enabled;
+	}
+
 	queue_delayed_work(htc_pm_monitor_wq, &ktop->dwork, msecs_to_jiffies(msm_htc_util_delay_time));
 	htc_kernel_top_cal(ktop, KERNEL_TOP);
 	htc_kernel_top_show(ktop, KERNEL_TOP);
 
-	dump_vm_events_counter();
+	tid_enabled = htc_tid_enabled();
+	if(!tid_enabled && (tid_enabled != tid_top_prev_state)) {
+		release_thread_top(ktop->thread_top);
+		tid_top_prev_state = tid_enabled;
+	}
 
+	dump_vm_events_counter();
 	pr_info("[K][PM] hTC PM Statistic done\n");
 }
 
@@ -841,9 +1085,22 @@ static void htc_kernel_top_accumulation_monitor_work_func(struct work_struct *wo
 			tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
 
 	queue_delayed_work(htc_kernel_top_monitor_wq, &ktop->dwork, msecs_to_jiffies(msm_htc_util_top_delay_time));
+
+	tid_enabled = htc_tid_enabled();
+	if(tid_enabled && (tid_enabled != tid_top_accu_prev_state)) {
+		init_thread_top(ktop->thread_top);
+		tid_top_accu_prev_state = tid_enabled;
+	}
+
 	htc_kernel_top_cal(ktop, KERNEL_TOP_ACCU);
 	write_ktop_fd(ktop);
 	htc_kernel_top_show(ktop, KERNEL_TOP_ACCU);
+
+	tid_enabled = htc_tid_enabled();
+	if(!tid_enabled && (tid_enabled != tid_top_accu_prev_state)) {
+		release_thread_top(ktop->thread_top);
+		tid_top_accu_prev_state = tid_enabled;
+	}
 
 	if (pm_monitor_enabled)
 		printk("[K][KTOP] hTC Kernel Top Statistic done\n");
@@ -872,24 +1129,28 @@ void htc_monitor_init(void)
 		} else {
 			spin_lock_init(&htc_kernel_top->lock);
 
-			htc_kernel_top->prev_proc_stat = vmalloc(sizeof(long) * MAX_PID);
-			htc_kernel_top->curr_proc_delta = vmalloc(sizeof(long) * MAX_PID);
-			htc_kernel_top->task_ptr_array = vmalloc(sizeof(long) * MAX_PID);
-			htc_kernel_top->curr_proc_pid = vmalloc(sizeof(long) * MAX_PID);
+			htc_kernel_top->prev_proc_stat = vmalloc(sizeof(int) * MAX_PID);
+			htc_kernel_top->curr_proc_delta = vmalloc(sizeof(int) * MAX_PID);
+			htc_kernel_top->task_ptr_array = vmalloc(sizeof(struct task_struct *) * MAX_PID);
+			htc_kernel_top->curr_proc_pid = vmalloc(sizeof(int) * MAX_PID);
 			htc_kernel_top->cpu_time = vmalloc(sizeof(long) * MAX_PID);
 
-			memset(htc_kernel_top->prev_proc_stat, 0, sizeof(long) * MAX_PID);
-			memset(htc_kernel_top->curr_proc_delta, 0, sizeof(long) * MAX_PID);
-			memset(htc_kernel_top->task_ptr_array, 0, sizeof(long) * MAX_PID);
-			memset(htc_kernel_top->curr_proc_pid, 0, sizeof(long) * MAX_PID);
-			memset(htc_kernel_top->cpu_time, 0, sizeof(long) * MAX_PID);
+			htc_kernel_top->thread_top = vmalloc(sizeof(*(htc_kernel_top->thread_top)));
 
-			get_all_cpustat(&htc_kernel_top->curr_cpustat);
-			get_all_cpustat(&htc_kernel_top->prev_cpustat);
+			if(check_top_malloc(htc_kernel_top)) {
+				memset(htc_kernel_top->prev_proc_stat, 0, sizeof(int) * MAX_PID);
+				memset(htc_kernel_top->curr_proc_delta, 0, sizeof(int) * MAX_PID);
+				memset(htc_kernel_top->task_ptr_array, 0, sizeof(struct task_struct *) * MAX_PID);
+				memset(htc_kernel_top->curr_proc_pid, 0, sizeof(int) * MAX_PID);
+				memset(htc_kernel_top->cpu_time, 0, sizeof(long) * MAX_PID);
 
-			INIT_DELAYED_WORK(&htc_kernel_top->dwork, htc_pm_monitor_work_func);
-			queue_delayed_work(htc_pm_monitor_wq, &htc_kernel_top->dwork,
-							   msecs_to_jiffies(msm_htc_util_delay_time));
+				get_all_cpustat(&htc_kernel_top->curr_cpustat);
+				get_all_cpustat(&htc_kernel_top->prev_cpustat);
+
+				INIT_DELAYED_WORK(&htc_kernel_top->dwork, htc_pm_monitor_work_func);
+				queue_delayed_work(htc_pm_monitor_wq, &htc_kernel_top->dwork,
+								   msecs_to_jiffies(msm_htc_util_delay_time));
+			}
 		}
 	}
 
@@ -922,24 +1183,28 @@ void htc_monitor_init(void)
 	} else {
 		spin_lock_init(&htc_kernel_top_accu->lock);
 
-		htc_kernel_top_accu->prev_proc_stat = vmalloc(sizeof(long) * MAX_PID);
-		htc_kernel_top_accu->curr_proc_delta = vmalloc(sizeof(long) * MAX_PID);
-		htc_kernel_top_accu->task_ptr_array = vmalloc(sizeof(long) * MAX_PID);
-		htc_kernel_top_accu->curr_proc_pid = vmalloc(sizeof(long) * MAX_PID);
+		htc_kernel_top_accu->prev_proc_stat = vmalloc(sizeof(int) * MAX_PID);
+		htc_kernel_top_accu->curr_proc_delta = vmalloc(sizeof(int) * MAX_PID);
+		htc_kernel_top_accu->task_ptr_array = vmalloc(sizeof(struct task_struct *) * MAX_PID);
+		htc_kernel_top_accu->curr_proc_pid = vmalloc(sizeof(int) * MAX_PID);
 		htc_kernel_top_accu->cpu_time = vmalloc(sizeof(long) * MAX_PID);
 
-		memset(htc_kernel_top_accu->prev_proc_stat, 0, sizeof(long) * MAX_PID);
-		memset(htc_kernel_top_accu->curr_proc_delta, 0, sizeof(long) * MAX_PID);
-		memset(htc_kernel_top_accu->task_ptr_array, 0, sizeof(long) * MAX_PID);
-		memset(htc_kernel_top_accu->curr_proc_pid, 0, sizeof(long) * MAX_PID);
-		memset(htc_kernel_top_accu->cpu_time, 0, sizeof(long) * MAX_PID);
+		htc_kernel_top_accu->thread_top = vmalloc(sizeof(*(htc_kernel_top_accu->thread_top)));
 
-		get_all_cpustat(&htc_kernel_top_accu->curr_cpustat);
-		get_all_cpustat(&htc_kernel_top_accu->prev_cpustat);
-		INIT_DELAYED_WORK(&htc_kernel_top_accu->dwork,
-						  htc_kernel_top_accumulation_monitor_work_func);
-		queue_delayed_work(htc_kernel_top_monitor_wq, &htc_kernel_top_accu->dwork,
-						   msecs_to_jiffies(msm_htc_util_top_delay_time));
+		if(check_top_malloc(htc_kernel_top_accu)) {
+			memset(htc_kernel_top_accu->prev_proc_stat, 0, sizeof(int) * MAX_PID);
+			memset(htc_kernel_top_accu->curr_proc_delta, 0, sizeof(int) * MAX_PID);
+			memset(htc_kernel_top_accu->task_ptr_array, 0, sizeof(struct task_struct *) * MAX_PID);
+			memset(htc_kernel_top_accu->curr_proc_pid, 0, sizeof(int) * MAX_PID);
+			memset(htc_kernel_top_accu->cpu_time, 0, sizeof(long) * MAX_PID);
+
+			get_all_cpustat(&htc_kernel_top_accu->curr_cpustat);
+			get_all_cpustat(&htc_kernel_top_accu->prev_cpustat);
+			INIT_DELAYED_WORK(&htc_kernel_top_accu->dwork,
+							  htc_kernel_top_accumulation_monitor_work_func);
+			queue_delayed_work(htc_kernel_top_monitor_wq, &htc_kernel_top_accu->dwork,
+							   msecs_to_jiffies(msm_htc_util_top_delay_time));
+		}
 	}
 }
 

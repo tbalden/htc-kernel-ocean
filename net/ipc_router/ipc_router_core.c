@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -41,6 +41,16 @@
 #include "ipc_router_private.h"
 #include "ipc_router_security.h"
 
+#ifdef CONFIG_HTC_DEBUG_RIL_PCN0010_HTC_DUMP_IPCROUTER_LOG
+#include <linux/kallsyms.h>
+#include <linux/ptrace.h>
+#endif
+
+#ifdef CONFIG_HTC_DEBUG_RIL_PCN0011_HTC_DUMP_IPC_UNREAD_PACKAGE
+#define IPC_RX_DATA_CHECK_WQ_DELAY_TIME (5 * 1000)
+#define IPC_RX_DATA_CHECK_WQ_DELAY_TIME_MAX (5 * 60 * 1000)
+#endif
+
 enum {
 	SMEM_LOG = 1U << 0,
 	RTR_DBG = 1U << 1,
@@ -51,6 +61,12 @@ module_param_named(debug_mask, msm_ipc_router_debug_mask,
 		   int, S_IRUGO | S_IWUSR | S_IWGRP);
 #define MODULE_NAME "ipc_router"
 
+#ifdef CONFIG_HTC_DEBUG_RIL_PCN0011_HTC_DUMP_IPC_UNREAD_PACKAGE
+static int msm_ipc_router_delete_unread_data = 1;
+module_param_named(delete_unread_data, msm_ipc_router_delete_unread_data,
+		   int, S_IRUGO | S_IWUSR | S_IWGRP);
+#endif
+
 #define IPC_RTR_INFO_PAGES 6
 
 #define IPC_RTR_INFO(log_ctx, x...) do { \
@@ -59,6 +75,14 @@ if (log_ctx) \
 if (msm_ipc_router_debug_mask & RTR_DBG) \
 	pr_info("[IPCRTR] "x); \
 } while (0)
+
+#ifdef CONFIG_HTC_DEBUG_RIL_PCN0011_HTC_DUMP_IPC_UNREAD_PACKAGE
+#define IPC_RTR_INFO_DUMP(log_ctx, x...) do { \
+if (log_ctx) \
+	ipc_log_string(log_ctx, x); \
+pr_info("[IPCRTR] "x); \
+} while (0)
+#endif
 
 #define IPC_ROUTER_LOG_EVENT_TX         0x01
 #define IPC_ROUTER_LOG_EVENT_RX         0x02
@@ -197,6 +221,14 @@ static void *ipc_router_get_log_ctx(char *sub_name);
 static int process_resume_tx_msg(union rr_control_msg *msg,
 				 struct rr_packet *pkt);
 static void ipc_router_reset_conn(struct msm_ipc_router_remote_port *rport_ptr);
+
+#ifdef CONFIG_HTC_DEBUG_RIL_PCN0010_HTC_DUMP_IPCROUTER_LOG
+static struct msm_ipc_server *ipc_router_get_server_ref( uint32_t svc, uint32_t ins, uint32_t node_id, uint32_t port_id );
+void print_ipc_router_modem_log(void);
+static int get_task_wchan(struct task_struct *task, char *buffer);
+static int get_proc_pid_cmdline(struct task_struct *task, char * buffer, int buff_len);
+#endif
+
 static int ipc_router_get_xprt_info_ref(
 		struct msm_ipc_router_xprt_info *xprt_info);
 static void ipc_router_put_xprt_info_ref(
@@ -222,6 +254,25 @@ static bool is_wakeup_source_allowed;
 void msm_ipc_router_set_ws_allowed(bool flag)
 {
 	is_wakeup_source_allowed = flag;
+}
+
+/**
+ * is_sensor_port() - Check if the remote port is sensor service or not
+ * @rport: Pointer to the remote port.
+ *
+ * Return: true if the remote port is sensor service else false.
+ */
+static int is_sensor_port(struct msm_ipc_router_remote_port *rport)
+{
+	u32 svcid = 0;
+
+	if (rport && rport->server) {
+		svcid = rport->server->name.service;
+		if (svcid == 400 || (svcid >= 256 && svcid <= 320))
+			return true;
+	}
+
+	return false;
 }
 
 static void init_routing_table(void)
@@ -277,7 +328,7 @@ static uint32_t ipc_router_calc_checksum(union rr_control_msg *msg)
  */
 static void skb_copy_to_log_buf(struct sk_buff_head *skb_head,
 				unsigned int pl_len, unsigned int hdr_offset,
-				uint64_t *log_buf)
+				unsigned char *log_buf)
 {
 	struct sk_buff *temp_skb;
 	unsigned int copied_len = 0, copy_len = 0;
@@ -357,7 +408,8 @@ static void ipc_router_log_msg(void *log_ctx, uint32_t xchng_type,
 			else if (hdr->version == IPC_ROUTER_V2)
 				hdr_offset = sizeof(struct rr_header_v2);
 		}
-		skb_copy_to_log_buf(skb_head, buf_len, hdr_offset, &pl_buf);
+		skb_copy_to_log_buf(skb_head, buf_len, hdr_offset,
+				    (unsigned char *)&pl_buf);
 
 		if (port_ptr && rport_ptr && (port_ptr->type == CLIENT_PORT)
 				&& (rport_ptr->server != NULL)) {
@@ -1178,6 +1230,32 @@ static int post_pkt_to_port(struct msm_ipc_port *port_ptr,
 	if (pkt->ws_need)
 		__pm_stay_awake(port_ptr->port_rx_ws);
 
+#ifdef CONFIG_HTC_DEBUG_RIL_PCN0011_HTC_DUMP_IPC_UNREAD_PACKAGE
+	do {
+		port_ptr->rx_data_check_wq_delay_time = IPC_RX_DATA_CHECK_WQ_DELAY_TIME;
+		cancel_delayed_work(&port_ptr->rx_data_check_wq);
+		schedule_delayed_work(&port_ptr->rx_data_check_wq, msecs_to_jiffies(IPC_RX_DATA_CHECK_WQ_DELAY_TIME));
+	} while ( 0 );
+#endif//CONFIG_HTC_DEBUG_RIL_PCN0011_HTC_DUMP_IPC_UNREAD_PACKAGE
+
+#ifdef CONFIG_HTC_DEBUG_RIL_PCN0010_HTC_DUMP_IPCROUTER_LOG
+	if ( port_ptr->port_rx_ws->event_count % 1000 == 0 ) {
+		//dump log message every 1000 times
+		pr_info("post_pkt_to_port: ws name=[%s], event_count=[%lu], pid=[%d], tgid=[%d]\n", port_ptr->port_rx_ws->name, port_ptr->port_rx_ws->event_count, current->pid, current->tgid);
+		if ( port_ptr->type == SERVER_PORT ) {
+			struct msm_ipc_server *server = NULL;
+			server = ipc_router_get_server_ref(port_ptr->port_name.service, port_ptr->port_name.instance, port_ptr->this_port.node_id, port_ptr->this_port.port_id);
+			if ( server ) {
+				pr_info("post_pkt_to_port: ws name=[%s], server name=[%s]\n", port_ptr->port_rx_ws->name, server->pdev_name);
+			}
+		}
+		//dump log if debug enable
+		if (msm_ipc_router_debug_mask & RTR_DBG) {
+			print_ipc_router_modem_log();
+		}
+	}
+#endif
+
 	list_add_tail(&temp_pkt->list, &port_ptr->port_rx_q);
 	wake_up(&port_ptr->port_rx_wait_q);
 	notify = port_ptr->notify;
@@ -1293,6 +1371,198 @@ void msm_ipc_router_add_local_port(struct msm_ipc_port *port_ptr)
 	up_write(&local_ports_lock_lhc2);
 }
 
+int msm_ipc_router_get_current_cmd_line(char * buffer, int buff_len)
+{
+	int r = 0;
+	char cmdline[KSYM_NAME_LEN];
+	char full_task_name[KSYM_NAME_LEN];
+	char * cstr1 = NULL;
+
+	sprintf(cmdline, "%s", "");
+	sprintf(full_task_name, "%s", "");
+
+	get_proc_pid_cmdline(current, cmdline, sizeof(cmdline));
+
+	//Analysis full_task_name
+	if ( strlen( cmdline ) > 0 ) {
+		cstr1 = strrchr( cmdline, '/' );
+
+		if (cstr1 == NULL) {
+			snprintf(full_task_name, sizeof(full_task_name), "%s", cmdline);
+		} else if ( cstr1 != NULL && strlen( cstr1 ) > 1 ) {
+			cstr1++;
+			snprintf(full_task_name, sizeof(full_task_name), "%s", cstr1);
+		}
+		if ( strcmp (full_task_name, "system_server") == 0 ) {
+			//If task name is system_server, use current->comm
+			snprintf(buffer, buff_len, "%s", current->comm);
+		} else if ( strlen (full_task_name) <= 0 ) {
+			//If task name is zero, use current->comm
+			snprintf(buffer, buff_len, "%s", current->comm);
+		} else if ( strcmp (full_task_name, current->comm) == 0 ) {
+			//If task name == current->comm, use current->comm
+			snprintf(buffer, buff_len, "%s", current->comm);
+		} else {
+			//use current->comm + full_task_name
+			snprintf(buffer, buff_len, "%s_%s", current->comm, full_task_name);
+		}
+	}else {
+		//use current->comm
+		snprintf(buffer, buff_len, "%s", current->comm);
+	}
+
+	//add pid and tgid
+	snprintf(buffer, buff_len, "%s_%d_%d", buffer, current->pid, current->tgid);
+
+	return r;
+}
+
+#ifdef CONFIG_HTC_DEBUG_RIL_PCN0011_HTC_DUMP_IPC_UNREAD_PACKAGE
+static void msm_ipc_router_rx_data_check_func(struct work_struct *work)
+{
+	struct delayed_work* rx_data_check_wq = to_delayed_work(work);
+
+	struct msm_ipc_port *port_ptr = container_of(rx_data_check_wq,
+						struct msm_ipc_port, rx_data_check_wq);
+	struct sock *sk;
+	//void (*data_ready)(struct sock *sk, int bytes) = NULL;
+	void (*data_ready)(struct sock *sk) = NULL;
+
+	int can_delete_data = 0;
+
+	mutex_lock(&port_ptr->port_rx_q_lock_lhc3);
+
+	if ( port_ptr == NULL ) {
+		pr_info("[RX DATA CHECK]%s: port_ptr is NULL\n", __func__);
+		mutex_unlock(&port_ptr->port_rx_q_lock_lhc3);
+		return;
+	}
+
+	IPC_RTR_INFO_DUMP(NULL, "[RX DATA CHECK]%s: ws name=[%s], event_count=[%lu], pid=[%d], tgid=[%d]\n", __func__, port_ptr->port_rx_ws->name, port_ptr->port_rx_ws->event_count, current->pid, current->tgid);
+	if ( port_ptr->type == SERVER_PORT ) {
+		struct msm_ipc_server *server = NULL;
+		server = ipc_router_get_server_ref(port_ptr->port_name.service, port_ptr->port_name.instance, port_ptr->this_port.node_id, port_ptr->this_port.port_id);
+		if ( server ) {
+			IPC_RTR_INFO_DUMP(NULL, "[RX DATA CHECK]%s: ws name=[%s], server name=[%s]\n", __func__, port_ptr->port_rx_ws->name, server->pdev_name);
+		}
+	}
+
+	sk = (struct sock *)port_ptr->endpoint;
+	if (sk) {
+		read_lock(&sk->sk_callback_lock);
+		data_ready = sk->sk_data_ready;
+		read_unlock(&sk->sk_callback_lock);
+	}
+
+	if ( data_ready ) {
+		IPC_RTR_INFO_DUMP(NULL, "[RX DATA CHECK]%s: ipc: [%s], data_ready=[[<%p>] %pS]\n", __func__, port_ptr->port_rx_ws->name, (void *) data_ready, (void *) data_ready);
+	} else {
+		IPC_RTR_INFO_DUMP(NULL, "[RX DATA CHECK]%s: ipc: [%s], data_ready is null\n", __func__, port_ptr->port_rx_ws->name);
+	}
+
+	//check if we can delete unused data
+	if ( msm_ipc_router_delete_unread_data
+		&& port_ptr->rx_data_check_wq_delay_time >= IPC_RX_DATA_CHECK_WQ_DELAY_TIME_MAX ) {
+		can_delete_data = 1;
+	}
+
+	do {
+		int rx_list_empty = 0;
+
+		rx_list_empty = list_empty(&port_ptr->port_rx_q);
+		IPC_RTR_INFO_DUMP(NULL, "[RX DATA CHECK]%s: Check ipc rx list is %s\n", __func__, rx_list_empty ? "empty" : "not empty");
+
+		if ( rx_list_empty ) {
+			port_ptr->rx_data_check_wq_delay_time = IPC_RX_DATA_CHECK_WQ_DELAY_TIME;
+			break;
+		}
+
+{
+		struct rr_packet *pkt, *temp_pkt;
+		//try dump and clear list
+		list_for_each_entry_safe(pkt, temp_pkt, &port_ptr->port_rx_q, list) {
+			struct rr_header_v1 *hdr = &pkt->hdr;
+			uint32_t svcId = 0;
+			uint32_t svcIns = 0;
+			uint64_t pl_buf = 0;
+			uint32_t buf_len = 8;
+			struct sk_buff *skb;
+			struct sk_buff_head *skb_head = NULL;
+			unsigned int hdr_offset = 0;
+			IPC_RTR_INFO_DUMP(NULL, "[RX DATA CHECK]%s: pkt->hdr.type=[%d]\n", __func__, hdr->type);
+
+			if (hdr->type == IPC_ROUTER_CTRL_CMD_DATA) {
+				skb_head = pkt->pkt_fragment_q;
+				skb = skb_peek(skb_head);
+				if (!skb || !skb->data|| !skb_head) {
+					IPC_RTR_INFO_DUMP(NULL, "[RX DATA CHECK]%s: No SKBs in skb_queue\n", __func__);
+					continue;
+				}
+
+				if (skb_queue_len(skb_head) == 1 && skb->len < 8)
+					buf_len = skb->len;
+
+				skb_copy_to_log_buf(skb_head, buf_len, hdr_offset, (unsigned char *)&pl_buf);
+
+				if (port_ptr && (port_ptr->type == SERVER_PORT)) {
+					svcId = port_ptr->port_name.service;
+					svcIns = port_ptr->port_name.instance;
+					IPC_RTR_INFO_DUMP(NULL, "[RX DATA CHECK]%s: svcId=[%d], svcIns=[%d]\n", __func__, svcId, svcIns);
+				}
+				IPC_RTR_INFO_DUMP(NULL, "[RX DATA CHECK]%s: Len:0x%x T:0x%x CF:0x%x SVC:<0x%x:0x%x> SRC:<0x%x:0x%x> DST:<0x%x:0x%x> DATA: %08x %08x\n", __func__,
+					hdr->size, hdr->type, hdr->control_flag,
+					svcId, svcIns, hdr->src_node_id, hdr->src_port_id,
+					hdr->dst_node_id, hdr->dst_port_id,
+					(unsigned int)pl_buf, (unsigned int)(pl_buf>>32));
+			} else {
+					union rr_control_msg *msg = (union rr_control_msg *)pkt;
+				if (msg->cmd == IPC_ROUTER_CTRL_CMD_NEW_SERVER ||
+					msg->cmd == IPC_ROUTER_CTRL_CMD_REMOVE_SERVER)
+					IPC_RTR_INFO_DUMP(NULL, "[RX DATA CHECK]%s: CTL MSG: cmd:0x%x SVC:<0x%x:0x%x> ADDR:<0x%x:0x%x>\n", __func__,
+					msg->cmd, msg->srv.service, msg->srv.instance,
+					msg->srv.node_id, msg->srv.port_id);
+				else if (msg->cmd == IPC_ROUTER_CTRL_CMD_REMOVE_CLIENT ||
+						msg->cmd == IPC_ROUTER_CTRL_CMD_RESUME_TX)
+					IPC_RTR_INFO_DUMP(NULL, "[RX DATA CHECK]%s: CTL MSG: cmd:0x%x ADDR: <0x%x:0x%x>\n", __func__,
+					msg->cmd, msg->cli.node_id, msg->cli.port_id);
+				else if (msg->cmd == IPC_ROUTER_CTRL_CMD_HELLO && hdr)
+					IPC_RTR_INFO_DUMP(NULL, "[RX DATA CHECK]%s: CTL MSG cmd:0x%x ADDR:0x%x\n", __func__,
+					msg->cmd, hdr->src_node_id);
+				else
+					IPC_RTR_INFO_DUMP(NULL, "[RX DATA CHECK]%s: UNKNOWN cmd:0x%x\n", __func__,
+					msg->cmd);
+			}
+			if ( can_delete_data == 1 ) {
+				list_del(&pkt->list);
+				release_pkt(pkt);
+				IPC_RTR_INFO_DUMP(NULL, "[RX DATA CHECK]%s: data deleted\n", __func__);
+			}
+		}
+}
+
+		//check ws state and relax ws
+		if ( port_ptr->port_rx_ws->active ) {
+			if ( can_delete_data == 1 ) {//data cleared, release wake source
+				IPC_RTR_INFO_DUMP(NULL, "[RX DATA CHECK]%s: relax wake source %s\n", __func__, port_ptr->port_rx_ws->name);
+				__pm_relax(port_ptr->port_rx_ws);
+			} else {
+				port_ptr->rx_data_check_wq_delay_time = port_ptr->rx_data_check_wq_delay_time * 2;
+				if ( port_ptr->rx_data_check_wq_delay_time > IPC_RX_DATA_CHECK_WQ_DELAY_TIME_MAX )
+					port_ptr->rx_data_check_wq_delay_time = IPC_RX_DATA_CHECK_WQ_DELAY_TIME_MAX;//set to 5 mins if delay over 5 mins
+
+				IPC_RTR_INFO_DUMP(NULL, "[RX DATA CHECK]%s: schedule_delayed_work, delay=[%d]\n", __func__, port_ptr->rx_data_check_wq_delay_time);
+				schedule_delayed_work(&port_ptr->rx_data_check_wq, msecs_to_jiffies(port_ptr->rx_data_check_wq_delay_time));
+			}
+		} else {
+			port_ptr->rx_data_check_wq_delay_time = IPC_RX_DATA_CHECK_WQ_DELAY_TIME;
+		}
+
+	} while (0);
+
+	mutex_unlock(&port_ptr->port_rx_q_lock_lhc3);
+}
+#endif//#ifdef CONFIG_HTC_DEBUG_RIL_PCN0011_HTC_DUMP_IPC_UNREAD_PACKAGE
+
 /**
  * msm_ipc_router_create_raw_port() - Create an IPC Router port
  * @endpoint: User-space space socket information to be cached.
@@ -1315,6 +1585,10 @@ struct msm_ipc_port *msm_ipc_router_create_raw_port(void *endpoint,
 {
 	struct msm_ipc_port *port_ptr;
 
+#ifdef CONFIG_HTC_DEBUG_RIL_PCN0010_HTC_DUMP_IPCROUTER_LOG
+	char cmdline[KSYM_NAME_LEN];
+#endif
+
 	port_ptr = kzalloc(sizeof(struct msm_ipc_port), GFP_KERNEL);
 	if (!port_ptr)
 		return NULL;
@@ -1331,11 +1605,26 @@ struct msm_ipc_port *msm_ipc_router_create_raw_port(void *endpoint,
 	INIT_LIST_HEAD(&port_ptr->port_rx_q);
 	mutex_init(&port_ptr->port_rx_q_lock_lhc3);
 	init_waitqueue_head(&port_ptr->port_rx_wait_q);
+
+#ifdef CONFIG_HTC_DEBUG_RIL_PCN0011_HTC_DUMP_IPC_UNREAD_PACKAGE
+	port_ptr->rx_data_check_wq_delay_time = IPC_RX_DATA_CHECK_WQ_DELAY_TIME;
+	INIT_DELAYED_WORK(&port_ptr->rx_data_check_wq, msm_ipc_router_rx_data_check_func);
+#endif
+
+#ifdef CONFIG_HTC_DEBUG_RIL_PCN0010_HTC_DUMP_IPCROUTER_LOG
+	msm_ipc_router_get_current_cmd_line(cmdline, sizeof(cmdline));
+
+	snprintf(port_ptr->rx_ws_name, MAX_WS_NAME_SZ,
+		 "ipc%08x_%s",
+		 port_ptr->this_port.port_id,
+		 cmdline);
+#else
 	snprintf(port_ptr->rx_ws_name, MAX_WS_NAME_SZ,
 		 "ipc%08x_%d_%s",
 		 port_ptr->this_port.port_id,
 		 task_pid_nr(current),
 		 current->comm);
+#endif
 	port_ptr->port_rx_ws = wakeup_source_register(port_ptr->rx_ws_name);
 	if (!port_ptr->port_rx_ws) {
 		kfree(port_ptr);
@@ -1348,9 +1637,19 @@ struct msm_ipc_port *msm_ipc_router_create_raw_port(void *endpoint,
 	port_ptr->notify = notify;
 	port_ptr->priv = priv;
 
+#ifdef CONFIG_HTC_DEBUG_RIL_PCN0010_HTC_DUMP_IPCROUTER_LOG
+	port_ptr->pid = current->pid;
+	port_ptr->tgid = current->tgid;
+#endif
+
 	msm_ipc_router_add_local_port(port_ptr);
 	if (endpoint)
 		sock_hold(ipc_port_sk(endpoint));
+
+#ifdef CONFIG_HTC_DEBUG_RIL_PCN0010_HTC_DUMP_IPCROUTER_LOG
+	pr_info("%s: create raw port id=[0x%08x], ws=[%s], current=[(%s)%p], endpoint=[%p]\n", __func__, port_ptr->this_port.port_id, port_ptr->rx_ws_name, current->comm, current, (port_ptr->endpoint ? port_ptr->endpoint : 0 ));
+#endif
+
 	return port_ptr;
 }
 
@@ -1395,10 +1694,21 @@ void ipc_router_release_port(struct kref *ref)
 		list_del(&pkt->list);
 		release_pkt(pkt);
 	}
+
+#ifdef CONFIG_HTC_DEBUG_RIL_PCN0011_HTC_DUMP_IPC_UNREAD_PACKAGE
+	cancel_delayed_work(&port_ptr->rx_data_check_wq);
+	__pm_relax(port_ptr->port_rx_ws);
+#endif
+
 	mutex_unlock(&port_ptr->port_rx_q_lock_lhc3);
 	wakeup_source_unregister(port_ptr->port_rx_ws);
 	if (port_ptr->endpoint)
 		sock_put(ipc_port_sk(port_ptr->endpoint));
+
+#ifdef CONFIG_HTC_DEBUG_RIL_PCN0010_HTC_DUMP_IPCROUTER_LOG
+	pr_info("%s: release raw port id=[0x%08x], ws=[%s], current=[(%s)%p], endpoint=[%p]\n", __func__, port_ptr->this_port.port_id, port_ptr->rx_ws_name, current->comm, current, (port_ptr->endpoint ? port_ptr->endpoint : 0 ));
+#endif
+
 	kfree(port_ptr);
 }
 
@@ -2731,7 +3041,6 @@ static void do_read_data(struct work_struct *work)
 	struct rr_packet *pkt = NULL;
 	struct msm_ipc_port *port_ptr;
 	struct msm_ipc_router_remote_port *rport_ptr;
-	int ret;
 
 	struct msm_ipc_router_xprt_info *xprt_info =
 		container_of(work,
@@ -2739,16 +3048,7 @@ static void do_read_data(struct work_struct *work)
 			     read_data);
 
 	while ((pkt = rr_read(xprt_info)) != NULL) {
-		if (pkt->length < calc_rx_header_size(xprt_info) ||
-		    pkt->length > MAX_IPC_PKT_SIZE) {
-			IPC_RTR_ERR("%s: Invalid pkt length %d\n",
-				__func__, pkt->length);
-			goto read_next_pkt1;
-		}
 
-		ret = extract_header(pkt);
-		if (ret < 0)
-			goto read_next_pkt1;
 		hdr = &(pkt->hdr);
 
 		if ((hdr->dst_node_id != IPC_ROUTER_NID_LOCAL) &&
@@ -2937,6 +3237,10 @@ static int loopback_data(struct msm_ipc_port *src,
 	}
 
 	temp_skb = skb_peek_tail(pkt->pkt_fragment_q);
+	if (!temp_skb) {
+		IPC_RTR_ERR("%s: Empty skb\n", __func__);
+		return -EINVAL;
+	}
 	align_size = ALIGN_SIZE(pkt->length);
 	skb_put(temp_skb, align_size);
 	pkt->length += align_size;
@@ -3098,6 +3402,11 @@ static int msm_ipc_router_write_pkt(struct msm_ipc_port *src,
 	}
 
 	temp_skb = skb_peek_tail(pkt->pkt_fragment_q);
+	if (!temp_skb) {
+		IPC_RTR_ERR("%s: Abort invalid pkt\n", __func__);
+		ret = -EINVAL;
+		goto out_write_pkt;
+	}
 	align_size = ALIGN_SIZE(pkt->length);
 	skb_put(temp_skb, align_size);
 	pkt->length += align_size;
@@ -3315,8 +3624,13 @@ int msm_ipc_router_read(struct msm_ipc_port *port_ptr,
 		return -ETOOSMALL;
 	}
 	list_del(&pkt->list);
-	if (list_empty(&port_ptr->port_rx_q))
+	if (list_empty(&port_ptr->port_rx_q)) {
+#ifdef CONFIG_HTC_DEBUG_RIL_PCN0011_HTC_DUMP_IPC_UNREAD_PACKAGE
+		port_ptr->rx_data_check_wq_delay_time = IPC_RX_DATA_CHECK_WQ_DELAY_TIME;
+		cancel_delayed_work(&port_ptr->rx_data_check_wq);
+#endif
 		__pm_relax(port_ptr->port_rx_ws);
+	}
 	*read_pkt = pkt;
 	mutex_unlock(&port_ptr->port_rx_q_lock_lhc3);
 	if (pkt->hdr.control_flag & CONTROL_FLAG_CONFIRM_RX)
@@ -3425,7 +3739,8 @@ int msm_ipc_router_recv_from(struct msm_ipc_port *port_ptr,
 	align_size = ALIGN_SIZE(data_len);
 	if (align_size) {
 		temp_skb = skb_peek_tail((*pkt)->pkt_fragment_q);
-		skb_trim(temp_skb, (temp_skb->len - align_size));
+		if (temp_skb)
+			skb_trim(temp_skb, (temp_skb->len - align_size));
 	}
 	return data_len;
 }
@@ -3866,6 +4181,234 @@ static void dump_control_ports(struct seq_file *s)
 	up_read(&control_ports_lock_lha5);
 }
 
+#ifdef CONFIG_HTC_DEBUG_RIL_PCN0010_HTC_DUMP_IPCROUTER_LOG
+static struct task_struct * get_task_by_pid(pid_t pid, pid_t tgid)
+{
+	struct task_struct *g, *p;
+	do_each_thread(g, p) {
+		if(p->pid == pid && p->tgid == tgid) {
+			return p;
+		}
+	} while_each_thread(g, p);
+	return NULL;
+}
+
+static int get_task_wchan(struct task_struct *task, char *buffer)
+{
+	unsigned long wchan;
+	char symname[KSYM_NAME_LEN];
+	wchan = get_wchan(task);
+
+	if (lookup_symbol_name(wchan, symname) < 0) {
+		if (!ptrace_may_access(task, PTRACE_MODE_READ)){
+			return 0;
+		}else{
+			return sprintf(buffer, "%lu", wchan);
+		}
+	} else {
+		return sprintf(buffer, "%s", symname);
+	}
+	return 0;
+}
+
+static int get_proc_pid_cmdline(struct task_struct *task, char * buffer, int buff_len)
+{
+	int res = 0;
+	unsigned int len;
+	struct mm_struct *mm = get_task_mm(task);
+	if (!mm)
+		goto out;
+	if (!mm->arg_end)
+		goto out_mm;	/* Shh! No looking before we're done */
+
+	len = mm->arg_end - mm->arg_start;
+
+	if (len > buff_len)
+		len = buff_len;
+
+	res = access_process_vm(task, mm->arg_start, buffer, len, 0);
+
+	// If the nul at the end of args has been overwritten, then
+	// assume application is using setproctitle(3).
+	if (res > 0 && buffer[res-1] != '\0' && len < buff_len) {
+		len = strnlen(buffer, res);
+		if (len < res) {
+		    res = len;
+		} else {
+			len = mm->env_end - mm->env_start;
+			if (len > buff_len - res)
+				len = buff_len - res;
+			res += access_process_vm(task, mm->env_start, buffer+res, len, 0);
+			res = strnlen(buffer, res);
+		}
+	}
+out_mm:
+	mmput(mm);
+out:
+	return res;
+}
+
+static char* get_ipc_port_type(uint32_t type)
+{
+	switch (type){
+		case CLIENT_PORT:
+			return "CLIENT_PORT";
+		case SERVER_PORT:
+			return "SERVER_PORT";
+		case CONTROL_PORT:
+			return "CONTROL_PORT";
+		case IRSC_PORT:
+			return "IRSC_PORT";
+		default:
+			return "UNKNOW";
+	}
+}
+
+void print_ipc_router_local_ports(void)
+{
+	int j;
+	struct msm_ipc_port *port_ptr;
+
+	pr_info("### DUMP ipc router local port start ###\n");
+	pr_info("%-11s|%-11s|%-20s |%-8s |%-8s |%-14s |%-30s |%-8s |%-8s |%-14s |%-20s |%-14s |%-14s\n",
+			"Node_id", "Port_id", "Task Name", "PID", "TID", "Type name", "wake source name", "Serv id", "Inst id", "xprt name", "server name", "cmdline", "symname");
+	pr_info("------------------------------------------------------------------------------------------------------------------------\n");
+	down_read(&local_ports_lock_lhc2);
+	for (j = 0; j < LP_HASH_SIZE; j++) {
+		list_for_each_entry(port_ptr, &local_ports[j], list) {
+			struct msm_ipc_server *server = NULL;
+			struct msm_ipc_router_xprt_info *xprt_info = NULL;
+			struct comm_mode_info *mode_info = NULL;
+			struct msm_ipc_router_xprt *xprt = NULL;
+			struct task_struct *task = NULL;
+			char symname[KSYM_NAME_LEN];
+			char cmdline[KSYM_NAME_LEN];
+			mutex_lock(&port_ptr->port_lock_lhc3);
+
+			server = ipc_router_get_server_ref(port_ptr->port_name.service, port_ptr->port_name.instance, port_ptr->this_port.node_id, port_ptr->this_port.port_id);
+			mode_info = &(port_ptr->mode_info);
+			xprt_info = (struct msm_ipc_router_xprt_info*)mode_info->xprt_info;
+			if ( xprt_info )
+				xprt = xprt_info->xprt;
+
+			//get task
+			task = get_task_by_pid(port_ptr->pid, port_ptr->tgid);
+			if ( task != NULL ) {
+				get_task_wchan(task, symname);
+				get_proc_pid_cmdline(task, cmdline, sizeof(cmdline));
+			}
+
+			pr_info("0x%08x |0x%08x |%20s |%08d |%08d |%14s |%30s |%08d |%08d |%14s |%20s |%-14s |%-14s\n",
+					port_ptr->this_port.node_id,
+					port_ptr->this_port.port_id,
+					(task ? task->comm : "N/A"),
+					port_ptr->pid,
+					port_ptr->tgid,
+					get_ipc_port_type(port_ptr->type),
+					port_ptr->rx_ws_name,
+					port_ptr->port_name.service,
+					port_ptr->port_name.instance,
+					(xprt ? xprt->name : "N/A"),
+					(server ? server->pdev_name: "N/A"),
+					cmdline,
+					symname);
+			mutex_unlock(&port_ptr->port_lock_lhc3);
+		}
+	}
+	pr_info("### DUMP ipc router local port end ###\n");
+	up_read(&local_ports_lock_lhc2);
+}
+EXPORT_SYMBOL(print_ipc_router_local_ports);
+
+static char ipc_router_klog[PAGE_SIZE];
+
+void print_ipc_router_modem_log(void)
+{
+	int ret = 0;
+	void * log_ctx = NULL;
+#ifdef CONFIG_IPC_LOGGING
+	log_ctx = ipc_router_get_log_ctx("modem_IPCRTR");
+#else
+	return;
+#endif
+
+	if ( log_ctx == NULL )
+		return;
+
+	pr_info("### DUMP ipc router modem log Start ###\n");
+
+	do {
+
+		memset(ipc_router_klog, 0x0, PAGE_SIZE);
+		ret = ipc_log_extract( log_ctx, ipc_router_klog, PAGE_SIZE);
+		if ( ret >= 0 ) {
+			pr_info("%s\n", ipc_router_klog);
+		}
+
+	} while ( ret > 0 );
+
+	pr_info("### DUMP ipc router modem log end ###\n");
+
+}
+EXPORT_SYMBOL(print_ipc_router_modem_log);
+
+static void dump_local_ports_extend(struct seq_file *s)
+{
+	int j;
+	struct msm_ipc_port *port_ptr;
+
+	seq_printf(s, "%-11s|%-11s|%-20s |%-8s |%-8s |%-14s |%-30s |%-8s |%-8s |%-8s |%-8s |%-14s |%-20s |%-14s |%-14s\n",
+			"Node_id", "Port_id", "Task Name", "PID", "TID", "Type name", "wake source name", "ref", "evn count", "Serv id", "Inst id", "xprt name", "server name", "cmdline", "symname");
+	seq_puts(s, "------------------------------------------------------------------------------------------------------------------------\n");
+	down_read(&local_ports_lock_lhc2);
+	for (j = 0; j < LP_HASH_SIZE; j++) {
+		list_for_each_entry(port_ptr, &local_ports[j], list) {
+			struct msm_ipc_server *server = NULL;
+			struct msm_ipc_router_xprt_info *xprt_info = NULL;
+			struct comm_mode_info *mode_info = NULL;
+			struct msm_ipc_router_xprt *xprt = NULL;
+			struct task_struct *task = NULL;
+			char symname[KSYM_NAME_LEN];
+			char cmdline[KSYM_NAME_LEN];
+			mutex_lock(&port_ptr->port_lock_lhc3);
+
+			server = ipc_router_get_server_ref(port_ptr->port_name.service, port_ptr->port_name.instance, port_ptr->this_port.node_id, port_ptr->this_port.port_id);
+			mode_info = &(port_ptr->mode_info);
+			xprt_info = (struct msm_ipc_router_xprt_info*)mode_info->xprt_info;
+			if ( xprt_info )
+				xprt = xprt_info->xprt;
+
+			//get task
+			task = get_task_by_pid(port_ptr->pid, port_ptr->tgid);
+			if ( task != NULL ) {
+				get_task_wchan(task, symname);
+				get_proc_pid_cmdline(task, cmdline, sizeof(cmdline));
+			}
+
+			seq_printf(s, "0x%08x |0x%08x |%20s |%08d |%08d |%14s |%30s |%08d |%08lu |%08d |%08d |%14s |%20s |%-14s |%-14s\n",
+				       port_ptr->this_port.node_id,
+				       port_ptr->this_port.port_id,
+				       (task ? task->comm : "N/A"),
+				       port_ptr->pid,
+				       port_ptr->tgid,
+				       get_ipc_port_type(port_ptr->type),
+				       port_ptr->rx_ws_name,
+				       port_ptr->ref.refcount.counter,
+				       port_ptr->port_rx_ws->event_count,
+				       port_ptr->port_name.service,
+				       port_ptr->port_name.instance,
+				       (xprt ? xprt->name : "N/A"),
+				       (server ? server->pdev_name: "N/A"),
+				       cmdline,
+				       symname);
+			mutex_unlock(&port_ptr->port_lock_lhc3);
+		}
+	}
+	up_read(&local_ports_lock_lhc2);
+print_ipc_router_modem_log();
+}
+#endif//CONFIG_HTC_DEBUG_RIL_PCN0010_HTC_DUMP_IPCROUTER_LOG
+
 static void dump_local_ports(struct seq_file *s)
 {
 	int j;
@@ -3923,6 +4466,11 @@ static void debugfs_init(void)
 		return;
 
 	debug_create("dump_local_ports", dent, dump_local_ports);
+
+#ifdef CONFIG_HTC_DEBUG_RIL_PCN0010_HTC_DUMP_IPCROUTER_LOG
+	debug_create("dump_local_ports_extend", dent, dump_local_ports_extend);
+#endif
+
 	debug_create("dump_remote_ports", dent, dump_remote_ports);
 	debug_create("dump_control_ports", dent, dump_control_ports);
 	debug_create("dump_servers", dent, dump_servers);
@@ -4185,6 +4733,7 @@ void msm_ipc_router_xprt_notify(struct msm_ipc_router_xprt *xprt,
 {
 	struct msm_ipc_router_xprt_info *xprt_info = xprt->priv;
 	struct msm_ipc_router_xprt_work *xprt_work;
+	struct msm_ipc_router_remote_port *rport_ptr = NULL;
 	struct rr_packet *pkt;
 	int ret;
 
@@ -4237,16 +4786,40 @@ void msm_ipc_router_xprt_notify(struct msm_ipc_router_xprt *xprt,
 	if (!pkt)
 		return;
 
+	if (pkt->length < calc_rx_header_size(xprt_info) ||
+	    pkt->length > MAX_IPC_PKT_SIZE) {
+		IPC_RTR_ERR("%s: Invalid pkt length %d\n",
+			    __func__, pkt->length);
+		release_pkt(pkt);
+		return;
+	}
+
+	ret = extract_header(pkt);
+	if (ret < 0) {
+		release_pkt(pkt);
+		return;
+	}
+
 	pkt->ws_need = false;
+
+	if (pkt->hdr.type == IPC_ROUTER_CTRL_CMD_DATA)
+		rport_ptr = ipc_router_get_rport_ref(pkt->hdr.src_node_id,
+						     pkt->hdr.src_port_id);
+
 	mutex_lock(&xprt_info->rx_lock_lhb2);
 	list_add_tail(&pkt->list, &xprt_info->pkt_list);
-	if (!xprt_info->dynamic_ws) {
-		__pm_stay_awake(&xprt_info->ws);
-		pkt->ws_need = true;
-	} else {
-		if (is_wakeup_source_allowed) {
+	/* check every pkt is from SENSOR services or not and
+	 * avoid holding both edge and port specific wake-up sources
+	 */
+	if (!is_sensor_port(rport_ptr)) {
+		if (!xprt_info->dynamic_ws) {
 			__pm_stay_awake(&xprt_info->ws);
 			pkt->ws_need = true;
+		} else {
+			if (is_wakeup_source_allowed) {
+				__pm_stay_awake(&xprt_info->ws);
+				pkt->ws_need = true;
+			}
 		}
 	}
 	mutex_unlock(&xprt_info->rx_lock_lhb2);

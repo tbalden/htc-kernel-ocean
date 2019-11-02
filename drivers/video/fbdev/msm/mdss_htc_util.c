@@ -700,8 +700,9 @@ void htc_update_bl_cali_data(struct msm_fb_data_type *mfd)
 	struct mdss_panel_info *panel_info = mfd->panel_info;
 	struct htc_backlight1_table *brt_bl_table = &panel_info->brt_bl_table;
 	int size = brt_bl_table->size;
-	int bl_lvl = 0, defaut_level_index = 1, i;
-	u16 *bl_data_raw, *bl_data_temp, *bl_ap_level;
+	int bl_lvl = 0;
+	u16 *bl_data_raw;
+	u16 tmp_cali_value = 0;
 
 	pdata = dev_get_platdata(&mfd->pdev->dev);
 
@@ -732,39 +733,17 @@ void htc_update_bl_cali_data(struct msm_fb_data_type *mfd)
 		return;
 
 	bl_data_raw = brt_bl_table->bl_data_raw;
-	bl_data_temp = brt_bl_table->bl_data;
-	bl_ap_level = brt_bl_table->brt_data;
 
-	for (i = 0; i < size; i++){
-		if (bl_ap_level[i] == DEFAUTL_AP_LEVLE){
-			defaut_level_index = i;
-			break;
-		}
-	}
+	/* calibrates on Min and Max node */
+	tmp_cali_value = BACKLIGHT_CALI(bl_data_raw[0], gain->BKL);
+	brt_bl_table->bl_data[0] = VALID_CALI_BKLT(tmp_cali_value, 0, bl_data_raw[1]);
+	tmp_cali_value = BACKLIGHT_CALI(bl_data_raw[size - 1], gain->BKL);
+	brt_bl_table->bl_data[size - 1] = VALID_CALI_BKLT(tmp_cali_value, bl_data_raw[size - 2], panel_info->bl_max);
 
-
-	for (i = 0;i < size; i++){
-		/* ap level 142 condition no need to apply calibration gain
-		   when calibration apply disable */
-		if (!brt_bl_table->apply_cali && i == defaut_level_index){
-			pr_debug("%s apply_cali:%d, ap level:%d,bl raw code:%d," \
-			"bl cali code:%d\n",__func__, brt_bl_table->apply_cali,
-			bl_ap_level[i], bl_data_raw[i], bl_data_temp[i]);
-			continue;
-		}
-		bl_data_temp[i] = BACKLIGHT_CALI(bl_data_raw[i], gain->BKL);
-		pr_debug("%s apply_cali:%d, ap level:%d,bl raw code:%d," \
-			"bl cali code:%d\n",__func__, brt_bl_table->apply_cali,
-			bl_ap_level[i], bl_data_raw[i], bl_data_temp[i]);
-	}
-
-	/* if bl table no smooth, then set back to original state*/
-	for (i = 0; i < size-1; i++){
-		if (bl_data_temp[i] > bl_data_temp[i+1]){
-			memcpy(bl_data_temp, bl_data_raw, size * sizeof(u16));
-			pr_debug("%s fall back to raw bl_table\n", __func__);
-			break;
-		}
+	/* Calibrate default brightness */
+	if (brt_bl_table->apply_cali) {
+		tmp_cali_value = BACKLIGHT_CALI(bl_data_raw[1], gain->BKL);
+		brt_bl_table->bl_data[1] = VALID_CALI_BKLT(tmp_cali_value, bl_data_raw[0], bl_data_raw[2]);
 	}
 
 	if (mfd->bl_level && mfd->last_bri1) {

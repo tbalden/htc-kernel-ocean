@@ -4,6 +4,7 @@
 #include <linux/kernel_stat.h>
 #include <linux/static_key.h>
 #include <linux/context_tracking.h>
+#include <linux/cpufreq_times.h>
 #include "sched.h"
 
 
@@ -160,6 +161,9 @@ void account_user_time(struct task_struct *p, cputime_t cputime,
 
 	/* Account for user time used */
 	acct_account_cputime(p);
+
+	/* Account power usage for user time */
+	cpufreq_acct_update_power(p, cputime);
 }
 
 /*
@@ -210,6 +214,9 @@ void __account_system_time(struct task_struct *p, cputime_t cputime,
 
 	/* Account for system time used */
 	acct_account_cputime(p);
+
+	/* Account power usage for system time */
+	cpufreq_acct_update_power(p, cputime);
 }
 
 /*
@@ -324,6 +331,45 @@ void thread_group_cputime(struct task_struct *tsk, struct task_cputime *times)
 	done_seqretry_irqrestore(&sig->stats_lock, seq, flags);
 	rcu_read_unlock();
 }
+
+#ifdef CONFIG_HTC_POWER_DEBUG
+void htc_thread_group_cputime(struct task_struct *tsk, struct task_cputime *times,
+							  long *child_cpu_time, struct task_struct **child_task_ptr_array,
+							  int MAX_PID)
+{
+	struct signal_struct *sig = tsk->signal;
+	cputime_t utime, stime;
+	struct task_struct *t;
+	unsigned int seq, nextseq;
+	unsigned long flags;
+
+	rcu_read_lock();
+	/* Attempt a lockless read on the first round. */
+	nextseq = 0;
+	do {
+		seq = nextseq;
+		flags = read_seqbegin_or_lock_irqsave(&sig->stats_lock, &seq);
+		times->utime = sig->utime;
+		times->stime = sig->stime;
+		times->sum_exec_runtime = sig->sum_sched_runtime;
+
+		for_each_thread(tsk, t) {
+			task_cputime(t, &utime, &stime);
+			times->utime += utime;
+			times->stime += stime;
+			times->sum_exec_runtime += task_sched_runtime(t);
+			if(t->pid < MAX_PID) {
+				child_cpu_time[t->pid] = utime + stime;
+				child_task_ptr_array[t->pid] = t;
+			}
+		}
+		/* If lockless access failed, take the lock. */
+		nextseq = 1;
+	} while (need_seqretry(&sig->stats_lock, seq));
+	done_seqretry_irqrestore(&sig->stats_lock, seq, flags);
+	rcu_read_unlock();
+}
+#endif
 
 #ifdef CONFIG_IRQ_TIME_ACCOUNTING
 /*

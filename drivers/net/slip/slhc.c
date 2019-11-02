@@ -509,6 +509,10 @@ slhc_uncompress(struct slcompress *comp, unsigned char *icp, int isize)
 		if(x < 0 || x > comp->rslot_limit)
 			goto bad;
 
+		/* Check if the cstate is initialized */
+		if (!comp->rstate[x].initialized)
+			goto bad;
+
 		comp->flags &=~ SLF_TOSS;
 		comp->recv_current = x;
 	} else {
@@ -523,6 +527,20 @@ slhc_uncompress(struct slcompress *comp, unsigned char *icp, int isize)
 	cs = &comp->rstate[comp->recv_current];
 	thp = &cs->cs_tcp;
 	ip = &cs->cs_ip;
+
+#ifdef CONFIG_HTC_NETWORK_MODIFY
+	if(ip->ihl < 20 / 4)
+	{
+		printk(KERN_ERR "[NET][SSD_NETWORK] %s: The IP header length field is too small (icp=%p, ip->ihl=%d, comp->recv_current=%d, comp=%p)\n",
+							__func__,
+							icp,
+							ip->ihl,
+							comp->recv_current,
+							comp
+							);
+		goto bad;
+	}
+#endif
 
 	thp->check = *(__sum16 *)cp;
 	cp += 2;
@@ -673,6 +691,7 @@ slhc_remember(struct slcompress *comp, unsigned char *icp, int isize)
 	if (cs->cs_tcp.doff > 5)
 	  memcpy(cs->cs_tcpopt, icp + ihl*4 + sizeof(struct tcphdr), (cs->cs_tcp.doff - 5) * 4);
 	cs->cs_hsize = ihl*2 + cs->cs_tcp.doff*2;
+	cs->initialized = true;
 	/* Put headers back on packet
 	 * Neither header checksum is recalculated
 	 */

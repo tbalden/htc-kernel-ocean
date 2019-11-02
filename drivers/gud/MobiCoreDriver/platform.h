@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2017 TRUSTONIC LIMITED
+ * Copyright (c) 2013-2018 TRUSTONIC LIMITED
  * All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or
@@ -80,10 +80,10 @@ static inline int smc_fastcall(void *fc_generic, size_t size)
 			fc_generic, size);
 }
 
-/* Should be defined for all TZBSPv4 platform common flag */
-#ifndef CONFIG_TRUSTONIC_TEE_LPAE
-#define CONFIG_TRUSTONIC_TEE_LPAE
-#endif
+/*
+ * Do not start the TEE at driver init
+ */
+#define MC_DELAYED_TEE_START
 
 /*
  * Perform crypto clock enable/disable
@@ -93,6 +93,10 @@ static inline int smc_fastcall(void *fc_generic, size_t size)
  *     "iface_clk"
  */
 #define MC_CRYPTO_CLOCK_MANAGEMENT
+/*
+ * This should be defined only on SDM845
+ * #define TT_CRYPTO_NO_CLOCK_SUPPORT_FEATURE "qcom,no-clock-support"
+ */
 #define MC_CRYPTO_CLOCK_CORESRC_PROPNAME "qcom,ce-opp-freq"
 #define MC_CLOCK_CORESRC_DEFAULTRATE 100000000
 
@@ -100,8 +104,22 @@ static inline int smc_fastcall(void *fc_generic, size_t size)
  * Perform clock enable/disable for clock  "core_clk_src"
  */
 #define MC_DEVICE_PROPNAME "qcom,mcd"
+/*
+ * Platform Node
+ */
+#define TT_CLOCK_DEVICE_NAME "qcom,qseecom"
 
 /* All TZBSPv4 targets are using AARCH32_FC flag */
 #define MC_AARCH32_FC
+
+/* This should be defined only on SM8150
+ * Gold cores do not support TEE interfaces
+ * CPU_IDS should list only silver cores
+ */
+/* #define CPU_SELECTION */
+#if defined CPU_SELECTION
+#define NB_CPU 4
+#define CPU_IDS {0x0, 0x1, 0x2, 0x3}
+#endif
 
 #endif /* _MC_PLATFORM_H_ */

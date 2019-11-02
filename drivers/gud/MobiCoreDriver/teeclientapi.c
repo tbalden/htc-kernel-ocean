@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2017 TRUSTONIC LIMITED
+ * Copyright (c) 2013-2018 TRUSTONIC LIMITED
  * All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or
@@ -179,6 +179,7 @@ static u32 _teec_convert_error(int errno)
 u32 teec_initialize_context(const char *name, struct teec_context *context)
 {
 	struct tee_client *client;
+	int ret;
 	(void)name;
 
 	mc_dev_devel("== %s() ==============", __func__);
@@ -188,10 +189,17 @@ u32 teec_initialize_context(const char *name, struct teec_context *context)
 		return TEEC_ERROR_BAD_PARAMETERS;
 	}
 
+	/* Make sure TEE was started */
+	ret = mc_wait_tee_start();
+	if (ret) {
+		mc_dev_err(ret, "TEE failed to start, now or in the past");
+		return TEEC_ERROR_BAD_STATE;
+	}
+
 	/* Create client */
 	client = client_create(true);
 	if (!client)
-		return -ENOMEM;
+		return TEEC_ERROR_OUT_OF_MEMORY;
 
 	/* Store client in context */
 	context->imp.client = client;
@@ -238,8 +246,8 @@ u32 teec_open_session(struct teec_context *context,
 		      struct teec_operation *operation,
 		      u32 *return_origin)
 {
-	struct mc_uuid_t tauuid;
-	struct mc_identity identity;
+	struct mc_uuid_t uuid;
+	struct mc_identity identity = {0};
 	struct tee_client *client = NULL;
 	struct gp_operation gp_op;
 	struct gp_return gp_ret;
@@ -270,7 +278,7 @@ u32 teec_open_session(struct teec_context *context,
 	connection_method = TEEC_TT_LOGIN_KERNEL;
 	session->imp.active = false;
 
-	_lib_uuid_to_array(destination, tauuid.value);
+	_lib_uuid_to_array(destination, uuid.value);
 
 	memset(&gp_op, 0, sizeof(gp_op));
 	if (operation) {
@@ -285,16 +293,15 @@ u32 teec_open_session(struct teec_context *context,
 	/* Wait for GP loading to be possible, maximum 30s */
 	timeout = 30;
 	do {
-		ret = client_gp_open_session(client, &session->imp.session_id,
-					     &tauuid, &gp_op, &identity,
-					     &gp_ret, -1);
-		if (!ret || (ret != EAGAIN))
+		ret = client_gp_open_session(client, &uuid, &gp_op, &identity,
+					     &gp_ret, &session->imp.session_id);
+		if (!ret || ret != EAGAIN)
 			break;
 
 		msleep(1000);
 	} while (--timeout);
 
-	if (ret || (gp_ret.value != TEEC_SUCCESS)) {
+	if (ret || gp_ret.value != TEEC_SUCCESS) {
 		mc_dev_devel("client_gp_open_session failed(%08x) %08x", ret,
 			     gp_ret.value);
 		if (ret)
@@ -351,7 +358,7 @@ u32 teec_invoke_command(struct teec_session *session,
 	}
 
 	ret = client_gp_invoke_command(client, session->imp.session_id,
-				       command_id, &gp_op, &gp_ret, -1);
+				       command_id, &gp_op, &gp_ret);
 
 	if (ret || gp_ret.value != TEEC_SUCCESS) {
 		mc_dev_devel("client_gp_invoke_command failed(%08x) %08x", ret,
@@ -447,8 +454,8 @@ u32 teec_register_shared_memory(struct teec_context *context,
 	memref.buffer = (uintptr_t)shared_mem->buffer;
 	memref.flags = shared_mem->flags;
 	memref.size = shared_mem->size;
-	ret = client_gp_register_shared_mem(context->imp.client, &memref,
-					    &gp_ret, -1);
+	ret = client_gp_register_shared_mem(context->imp.client, NULL, NULL,
+					    &memref, &gp_ret);
 
 	if (ret)
 		return _teec_convert_error(-ret);
@@ -499,8 +506,8 @@ u32 teec_allocate_shared_memory(struct teec_context *context,
 	memref.buffer = (uintptr_t)shared_mem->buffer;
 	memref.flags = shared_mem->flags;
 	memref.size = shared_mem->size;
-	ret = client_gp_register_shared_mem(context->imp.client, &memref,
-					    &gp_ret, -1);
+	ret = client_gp_register_shared_mem(context->imp.client, NULL, NULL,
+					    &memref, &gp_ret);
 
 	if (ret) {
 		vfree(shared_mem->buffer);

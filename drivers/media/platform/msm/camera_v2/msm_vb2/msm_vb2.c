@@ -497,6 +497,8 @@ long msm_vb2_return_buf_by_idx(int session_id, unsigned int stream_id,
 				VB2_BUF_STATE_ERROR);
 			rc = 0;
 		} else {
+			pr_warn("s_st_i %d %d %d\n", session_id,
+					stream_id, index);
 			rc = -EINVAL;
 		}
 		break;

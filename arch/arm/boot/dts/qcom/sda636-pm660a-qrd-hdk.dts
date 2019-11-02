@@ -1,4 +1,4 @@
-/* Copyright (c) 2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -154,11 +154,15 @@
 	};
 };
 
+#include "sdm660-external-codec.dtsi"
+
 / {
 	model = "Qualcomm Technologies, Inc. SDA 636 PM660 + PM660A QRD HDK636";
 	compatible = "qcom,sda636-qrd", "qcom,sda636", "qcom,qrd";
 	qcom,board-id = <0x0016000b 0>;
-	qcom,pmic-id = <0x0001001b 0x0001011a 0x0 0x0>;
+	qcom,pmic-id = <0x0001001b 0x0001011a 0x0 0x0>,
+			<0x0001001b 0x0002001a 0x0 0x0>,
+			<0x0001001b 0x0202001a 0x0 0x0>;
 };
 
 &pm660a_oledb {
@@ -188,6 +192,7 @@
 	pinctrl-names = "mdss_default", "mdss_sleep";
 	pinctrl-0 = <&mdss_dsi_active &mdss_te_active>;
 	pinctrl-1 = <&mdss_dsi_suspend &mdss_te_suspend>;
+	oledb-supply = <&pm660a_oledb>;
 	lab-supply = <&lab_regulator>;
 	ibb-supply = <&ibb_regulator>;
 	qcom,platform-reset-gpio = <&tlmm 53 0>;
@@ -201,7 +206,24 @@
 	qcom,panel-supply-entries = <&dsi_panel_pwr_supply_labibb_amoled>;
 };
 
+/delete-node/ &tasha_hph_en0;
+/delete-node/ &tasha_hph_en1;
+
+&qusb_phy0 {
+	qcom,qusb-phy-init-seq = <0xf8 0x80
+				0xb3 0x84
+				0x83 0x88
+				0xc7 0x8c
+				0x30 0x08
+				0x79 0x0c
+				0x21 0x10
+				0x14 0x9c
+				0x9f 0x1c
+				0x00 0x18>;
+};
+
 &tasha_snd {
+	qcom,model = "sdm660-tasha-skus-snd-card";
 	qcom,audio-routing =
 		"AIF4 VI", "MCLK",
 		"RX_BIAS", "MCLK",
@@ -216,6 +238,12 @@
 		"MIC BIAS4", "Digital Mic5",
 		"SpkrLeft IN", "SPK1 OUT";
 	qcom,msm-mbhc-hphl-swh = <0>;
+	/delete-property/ qcom,us-euro-gpios;
+	/delete-property/ qcom,hph-en0-gpio;
+	/delete-property/ qcom,hph-en1-gpio;
+	qcom,wsa-max-devs = <1>;
+	qcom,wsa-devs = <&wsa881x_211>, <&wsa881x_213>;
+	qcom,wsa-aux-dev-prefix = "SpkrLeft", "SpkrLeft";
 };
 
 &usb2s {

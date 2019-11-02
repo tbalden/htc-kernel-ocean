@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2016 TRUSTONIC LIMITED
+ * Copyright (c) 2013-2017 TRUSTONIC LIMITED
  * All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or
@@ -14,8 +14,7 @@
 
 /*
  * This header file defines the implementation-dependent types,
- * constants and macros for all the Trusted Foundations implementations
- * of the TEE Client API
+ * constants and macros for all the Kinibi implementations of the TEE Client API
  */
 #ifndef __TEE_CLIENT_API_IMP_H__
 #define __TEE_CLIENT_API_IMP_H__

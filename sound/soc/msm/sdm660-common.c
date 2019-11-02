@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -2639,7 +2639,7 @@ void msm_mi2s_snd_shutdown(struct snd_pcm_substream *substream)
 			msm_cdc_pinctrl_select_sleep_state(pdata->tert_mi2s_gpio_p);
 //HTC_AUD_END: QCOM PATCH
 		ret = msm_mi2s_set_sclk(substream, false);
-		if (ret < 0) {
+		if (ret < 0)
 			pr_err("%s:clock disable failed for MI2S (%d); ret=%d\n",
 				__func__, index, ret);
 		if (q6core_is_adsp_ready()) //HTC_AUD

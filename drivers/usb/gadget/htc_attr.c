@@ -11,6 +11,7 @@
  * GNU General Public License for more details.
  *
  */
+#include <linux/delay.h>
 
 static ssize_t store_ats(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t count)
@@ -154,6 +155,7 @@ static ssize_t show_usb_cable_connect(struct device *dev,
 	int ret = 0;
 
 	if ((gi->cdev.sw_connect2pc.state == 1) && !usb_disable) {
+		mdelay(100);
 		if (cdev && cdev->gadget) {
 			if (cdev->gadget->speed == USB_SPEED_SUPER)
 				ret = 2;

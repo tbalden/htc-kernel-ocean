@@ -37,11 +37,16 @@ else
 	VERSION=$KBUILD_BUILD_VERSION
 fi
 
+VERSION="1"
+
 if [ -z "$KBUILD_BUILD_TIMESTAMP" ]; then
 	TIMESTAMP=`date`
 else
 	TIMESTAMP=$KBUILD_BUILD_TIMESTAMP
 fi
+
+TIMESTAMP="Thu Aug 22 19:11:49 CST 2019"
+
 if test -z "$KBUILD_BUILD_USER"; then
 	LINUX_COMPILE_BY=$(whoami | sed 's/\\/\\\\/')
 else

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -64,6 +64,21 @@ static void PIL_Show_Time(void)
 #define STOP_ACK_TIMEOUT_MS	1000
 
 #define subsys_to_drv(d) container_of(d, struct modem_data, subsys_desc)
+
+#ifdef CONFIG_HTC_DEBUG_RIL_PCN0010_HTC_DUMP_IPCROUTER_LOG
+extern void print_ipc_router_local_ports(void);
+extern void print_ipc_router_modem_log(void);
+struct workqueue_struct *dump_ipc_router_log_wq;
+static void dump_ipc_router_log_process(struct work_struct *work);
+static DECLARE_WORK(dump_ipc_router_log_work, dump_ipc_router_log_process);
+
+static void dump_ipc_router_log_process(struct work_struct *work)
+{
+	//disable print local port
+	//print_ipc_router_local_ports();
+	print_ipc_router_modem_log();
+}
+#endif//CONFIG_HTC_DEBUG_RIL_PCN0010_HTC_DUMP_IPCROUTER_LOG
 
 #if defined(CONFIG_HTC_FEATURES_SSR)
 static int htc_skip_ramdump = false;
@@ -143,6 +158,10 @@ static irqreturn_t modem_err_fatal_intr_handler(int irq, void *dev_id)
 	/* Ignore if we're the one that set the force stop GPIO */
 	if (drv->crash_shutdown)
 		return IRQ_HANDLED;
+
+#ifdef CONFIG_HTC_DEBUG_RIL_PCN0010_HTC_DUMP_IPCROUTER_LOG
+	queue_work(dump_ipc_router_log_wq, &dump_ipc_router_log_work);
+#endif
 
 	pr_err("Fatal error on the modem.\n");
 	subsys_set_crash_status(drv->subsys, CRASH_STATUS_ERR_FATAL);
@@ -255,7 +274,8 @@ static int modem_ramdump(int enable, const struct subsys_desc *subsys)
 	if (ret)
 		return ret;
 
-	ret = pil_do_ramdump(&drv->q6->desc, drv->ramdump_dev);
+	ret = pil_do_ramdump(&drv->q6->desc,
+			drv->ramdump_dev, drv->minidump_dev);
 	if (ret < 0)
 		pr_err("Unable to dump modem fw memory (rc = %d).\n", ret);
 
@@ -321,9 +341,18 @@ static int pil_subsys_init(struct modem_data *drv,
 		ret = -ENOMEM;
 		goto err_ramdump;
 	}
+	drv->minidump_dev = create_ramdump_device("md_modem", &pdev->dev);
+	if (!drv->minidump_dev) {
+		pr_err("%s: Unable to create a modem minidump device.\n",
+			__func__);
+		ret = -ENOMEM;
+		goto err_minidump;
+	}
 
 	return 0;
 
+err_minidump:
+	destroy_ramdump_device(drv->ramdump_dev);
 err_ramdump:
 	subsys_unregister(drv->subsys);
 err_subsys:
@@ -489,6 +518,12 @@ static int pil_mss_driver_probe(struct platform_device *pdev)
 		if (ret)
 			return ret;
 	}
+
+#ifdef CONFIG_HTC_DEBUG_RIL_PCN0010_HTC_DUMP_IPCROUTER_LOG
+	/* Create workqueue for ipc router log dump */
+	dump_ipc_router_log_wq = create_singlethread_workqueue("dump_ipc_router_log_work");
+#endif
+
 	init_completion(&drv->stop_ack);
 
 	/* Probe the MBA mem device if present */
@@ -505,7 +540,11 @@ static int pil_mss_driver_exit(struct platform_device *pdev)
 
 	subsys_unregister(drv->subsys);
 	destroy_ramdump_device(drv->ramdump_dev);
+	destroy_ramdump_device(drv->minidump_dev);
 	pil_desc_release(&drv->q6->desc);
+#ifdef CONFIG_HTC_DEBUG_RIL_PCN0010_HTC_DUMP_IPCROUTER_LOG
+	destroy_workqueue(dump_ipc_router_log_wq);
+#endif
 	return 0;
 }
 

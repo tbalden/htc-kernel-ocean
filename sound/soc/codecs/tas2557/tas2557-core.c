@@ -231,7 +231,6 @@ int tas2557_SA_DevChnSetup(struct tas2557_priv *pTAS2557, unsigned int mode)
 #endif
 /* HTC_AUD_END */
 
-	dev_dbg(pTAS2557->dev, "%s, mode %d\n", __func__, mode);
 	if ((pTAS2557->mpFirmware->mnPrograms == 0)
 		|| (pTAS2557->mpFirmware->mnConfigurations == 0)) {
 		dev_err(pTAS2557->dev, "%s, firmware not loaded\n", __func__);
@@ -239,6 +238,7 @@ int tas2557_SA_DevChnSetup(struct tas2557_priv *pTAS2557, unsigned int mode)
 	}
 
 	pProgram = &(pTAS2557->mpFirmware->mpPrograms[pTAS2557->mnCurrentProgram]);
+	dev_dbg(pTAS2557->dev, "%s, mode %d, mnAppMode %d\n", __func__, mode, pProgram->mnAppMode);
 	if (pProgram->mnAppMode != TAS2557_APP_TUNINGMODE) {
 		dev_err(pTAS2557->dev, "%s, not tuning mode\n", __func__);
 		goto end;
@@ -757,6 +757,19 @@ static void failsafe(struct tas2557_priv *pTAS2557)
 
 	if (hrtimer_active(&pTAS2557->mtimer))
 		hrtimer_cancel(&pTAS2557->mtimer);
+
+	if (pTAS2557->failsafe_retry < 10) {
+		pTAS2557->failsafe_retry++;
+		msleep(100);
+		dev_err(pTAS2557->dev, "I2C COMM error, restart SmartAmp.\n");
+		schedule_delayed_work(&pTAS2557->irq_work,
+				msecs_to_jiffies(100));
+		return;
+	} else {
+		pTAS2557->failsafe_retry = 0;
+		dev_err(pTAS2557->dev, "I2C COMM error, give up retry\n");
+	}
+
 	pTAS2557->enableIRQ(pTAS2557, channel_both, false);
 	tas2557_dev_load_data(pTAS2557, channel_both, p_tas2557_shutdown_data);
 	pTAS2557->mbPowerUp = false;
@@ -771,6 +784,7 @@ static void failsafe(struct tas2557_priv *pTAS2557)
 	}
 #endif
 /* HTD_ADU_END */
+	pTAS2557->failsafe_retry = 0;
 }
 
 int tas2557_checkPLL(struct tas2557_priv *pTAS2557)
@@ -838,7 +852,7 @@ static int tas2557_load_coefficient(struct tas2557_priv *pTAS2557,
 
 		if (pProgram->mnAppMode == TAS2557_APP_TUNINGMODE)
 			pTAS2557->enableIRQ(pTAS2557, channel_both, false);
-		dev_dbg(pTAS2557->dev, "%s, shutdown %d\n", __func__, chl);
+		dev_dbg(pTAS2557->dev, "%s, shutdown %d, mnAppMode %d\n", __func__, chl, pProgram->mnAppMode);
 		nResult = tas2557_dev_load_data(pTAS2557, chl, p_tas2557_shutdown_data);
 		if (nResult < 0)
 			goto end;
@@ -969,6 +983,7 @@ int tas2557_enable(struct tas2557_priv *pTAS2557, bool bEnable)
 		goto end;
 	if ((nValue&0xff) != TAS2557_SAFE_GUARD_PATTERN) {
 		dev_err(pTAS2557->dev, "ERROR Left channel safe guard failure!\n");
+		pTAS2557->mnErrCode |= ERROR_DEVA_I2C_COMM;
 		nResult = -EPIPE;
 		goto end;
 	}
@@ -977,11 +992,16 @@ int tas2557_enable(struct tas2557_priv *pTAS2557, bool bEnable)
 		goto end;
 	if ((nValue&0xff) != TAS2557_SAFE_GUARD_PATTERN) {
 		dev_err(pTAS2557->dev, "ERROR right channel safe guard failure!\n");
+		pTAS2557->mnErrCode |= ERROR_DEVB_I2C_COMM;
 		nResult = -EPIPE;
 		goto end;
 	}
 
 	pProgram = &(pTAS2557->mpFirmware->mpPrograms[pTAS2557->mnCurrentProgram]);
+
+	dev_dbg(pTAS2557->dev, "%s: program %d (%s), mnAppMode = %d\n",
+		__func__, pTAS2557->mnCurrentProgram, pProgram->mpName, pProgram->mnAppMode);
+
 	if (bEnable) {
 		if (!pTAS2557->mbPowerUp) {
 			if (pTAS2557->mbLoadConfigurationPrePowerUp) {
@@ -1063,6 +1083,8 @@ int tas2557_enable(struct tas2557_priv *pTAS2557, bool bEnable)
 	nResult = 0;
 
 end:
+	dev_dbg(pTAS2557->dev, "%s：nResult = %d\n", __func__, nResult);
+
 	if (nResult < 0) {
 		if (pTAS2557->mnErrCode & (ERROR_DEVA_I2C_COMM | ERROR_DEVB_I2C_COMM | ERROR_PRAM_CRCCHK | ERROR_YRAM_CRCCHK))
 			failsafe(pTAS2557);
@@ -1342,6 +1364,9 @@ static int fw_parse_program_data(struct tas2557_priv *pTAS2557,
 
 		n = fw_parse_data(pTAS2557, pFirmware, &(pProgram->mData), pData);
 		pData += n;
+
+		dev_dbg(pTAS2557->dev, "%s: program %d (%s), mnAppMode = %d\n",
+			__func__, nProgram, pProgram->mpName, pProgram->mnAppMode);
 	}
 
 end:
@@ -2211,7 +2236,7 @@ int tas2557_set_config(struct tas2557_priv *pTAS2557, int config)
 	nResult = tas2557_load_configuration(pTAS2557, nConfiguration, false);
 
 end:
-
+	dev_dbg(pTAS2557->dev, "%s: nResult %d \n", __func__, nResult);
 	return nResult;
 }
 
@@ -2579,8 +2604,8 @@ int tas2557_set_program(struct tas2557_priv *pTAS2557,
 	pProgram = &(pTAS2557->mpFirmware->mpPrograms[nProgram]);
 	if (pTAS2557->mbPowerUp) {
 		dev_info(pTAS2557->dev,
-			"device powered up, power down to load program %d (%s)\n",
-			nProgram, pProgram->mpName);
+			"device powered up, power down to load program %d (%s), mnAppMode %d\n",
+			nProgram, pProgram->mpName, pProgram->mnAppMode);
 		if (hrtimer_active(&pTAS2557->mtimer))
 			hrtimer_cancel(&pTAS2557->mtimer);
 
@@ -2600,7 +2625,7 @@ int tas2557_set_program(struct tas2557_priv *pTAS2557,
 	if (nResult < 0)
 		goto end;
 
-	dev_info(pTAS2557->dev, "load program %d (%s)\n", nProgram, pProgram->mpName);
+	dev_info(pTAS2557->dev, "load program %d (%s), mnAppMode %d\n", nProgram, pProgram->mpName, pProgram->mnAppMode);
 	nResult = tas2557_load_data(pTAS2557, &(pProgram->mData), TAS2557_BLOCK_PGM_ALL);
 	if (nResult < 0)
 		goto end;
@@ -2659,6 +2684,7 @@ int tas2557_set_program(struct tas2557_priv *pTAS2557,
 	}
 
 end:
+	dev_dbg(pTAS2557->dev, "%s: nResult %d\n", __func__, nResult);
 
 	if (nResult < 0) {
 		if (pTAS2557->mnErrCode & (ERROR_DEVA_I2C_COMM | ERROR_DEVB_I2C_COMM | ERROR_PRAM_CRCCHK | ERROR_YRAM_CRCCHK))

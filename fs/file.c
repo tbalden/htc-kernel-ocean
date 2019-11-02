@@ -722,9 +722,9 @@ void __fd_install(struct files_struct *files, unsigned int fd,
 	fdt = rcu_dereference_sched(files->fdt);
 	BUG_ON(fdt->fd[fd] != NULL);
 	rcu_assign_pointer(fdt->fd[fd], file);
-	rcu_read_unlock_sched();
 	fdt->user[fd].installer = current->pid;
 	fdt->user[fd].install_ts = htc_debug_get_sched_clock_ms();
+	rcu_read_unlock_sched();
 }
 
 void fd_install(unsigned int fd, struct file *file)

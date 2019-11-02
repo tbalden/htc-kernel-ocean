@@ -151,6 +151,7 @@ static unsigned int g_pre_total_level_raw = 0;
 
 /* Quick charger detection */
 static bool g_is_quick_charger = false;
+static unsigned int quickchg_detect_counter = 0;
 
 /* Screen ON ibat limitation */
 #define SCREEN_LIMIT_IBAT_DELAY_MS	60000
@@ -1896,7 +1897,8 @@ int update_ibat_setting (void)
 			ibat_ma = ibat_map_5v[idx][batt_thermal];
 			break;
 		default:
-			ibat_ma = ibat_max_ma;
+			/* ibat_ma = ibat_max_ma; */ //Kyle changed to be same with 5v for QC3 email request
+			ibat_ma = ibat_map_5v[idx][batt_thermal];
 			break;
 	}
 
@@ -1904,7 +1906,7 @@ int update_ibat_setting (void)
 	if (!(htc_batt_info.state & STATE_SCREEN_OFF) &&
 	    (strcmp(htc_get_bootmode(), "") == 0) &&
 	    g_is_screen_on_limit_ibat &&
-	    screen_on_limit_chg && (htc_batt_info.rep.charging_source != POWER_SUPPLY_TYPE_TYPEC))
+	    screen_on_limit_chg)
 		ibat_ma = min(ibat_ma, SCREEN_ON_LIMIT_MA);
 
 	/*  Limit charging when talking */
@@ -2665,7 +2667,7 @@ static void htc_iusb_5v_2a_ability_check_work(struct work_struct *work)
 static void htc_quick_charger_check_work(struct work_struct *work)
 {
 	int 	chg_type = get_property(htc_batt_info.usb_psy, POWER_SUPPLY_PROP_TYPE);
-	BATT_LOG("%s: charger type: %d", __func__, chg_type);
+//	BATT_LOG("%s: charger type: %d", __func__, chg_type);
 
 	if ((chg_type == POWER_SUPPLY_TYPE_USB_HVDCP) ||
 			(chg_type == POWER_SUPPLY_TYPE_USB_HVDCP_3) ||
@@ -2675,6 +2677,12 @@ static void htc_quick_charger_check_work(struct work_struct *work)
 		htc_batt_schedule_batt_info_update();
 	} else
 		g_is_quick_charger = false;
+
+	if((g_is_quick_charger == false) && (quickchg_detect_counter < 5)) {
+		schedule_delayed_work(&htc_batt_info.quick_charger_check_work, msecs_to_jiffies(4000));
+	}
+	quickchg_detect_counter++;
+	BATT_LOG("%s: charger type: %d, g_is_quick_charger: %d, quickchg_detect_counter: %d\n", __func__, chg_type, g_is_quick_charger, quickchg_detect_counter);
 }
 
 static void screen_ibat_limit_enable_worker(struct work_struct *work)
@@ -2708,6 +2716,7 @@ static void batt_worker(struct work_struct *work)
 	int max_iusb = 0;
 	unsigned long time_since_last_update_ms;
 	unsigned long cur_jiffies;
+	static int prev_cc_type = POWER_SUPPLY_TYPEC_SOURCE_DEFAULT;
 	int cc_type = POWER_SUPPLY_TYPEC_SOURCE_DEFAULT;
 	unsigned int aicl = 0;
 
@@ -2811,9 +2820,18 @@ static void batt_worker(struct work_struct *work)
 		}
 
 		if ((htc_batt_info.prev.charging_source == POWER_SUPPLY_TYPE_UNKNOWN) || (s_first)) {
-			schedule_delayed_work(&htc_batt_info.quick_charger_check_work, msecs_to_jiffies(10000));
+			schedule_delayed_work(&htc_batt_info.quick_charger_check_work, msecs_to_jiffies(4000));
 			schedule_delayed_work(&htc_batt_info.screen_ibat_limit_enable_work, msecs_to_jiffies(SCREEN_LIMIT_IBAT_DELAY_MS));
+		} else if (htc_batt_info.rep.charging_source == POWER_SUPPLY_TYPE_TYPEC) {
+			/* To support Donette Charger */
+			if (prev_cc_type != cc_type) {
+				g_is_screen_on_limit_ibat = false;
+				if (!delayed_work_pending(&htc_batt_info.screen_ibat_limit_enable_work))
+					cancel_delayed_work_sync(&htc_batt_info.screen_ibat_limit_enable_work);
+				schedule_delayed_work(&htc_batt_info.screen_ibat_limit_enable_work, msecs_to_jiffies(SCREEN_LIMIT_IBAT_DELAY_MS));
+			}
 		}
+		prev_cc_type = cc_type;
 
 		if ((htc_batt_info.rep.charging_source == POWER_SUPPLY_TYPE_USB_PD) ||
 				(htc_batt_info.rep.charging_source == POWER_SUPPLY_TYPE_TYPEC))
@@ -2943,10 +2961,12 @@ static void batt_worker(struct work_struct *work)
 			charging_enabled = 0;
 			pwrsrc_enabled = 0;
 			g_is_quick_charger = false;
+			quickchg_detect_counter = 0;
 			g_usb_overheat = false;
 			g_usb_overheat_check_count = 0;
 			g_need_to_check_impedance = true;
 			g_is_screen_on_limit_ibat = false;
+			prev_cc_type = POWER_SUPPLY_TYPEC_SOURCE_DEFAULT;
 			/* Symptom :
 			 *   In the case that host device charged to client device :
 			 *     When the device is host, the function will set CURRENT_MAX to 0.
@@ -3152,10 +3172,12 @@ static void batt_worker(struct work_struct *work)
 
 	aicl = get_property(htc_batt_info.usb_psy, POWER_SUPPLY_PROP_INPUT_CURRENT_SETTLED)/1000;
 	if (aicl == 25 && htc_batt_info.rep.overload == 1) {
-		htc_batt_info.icharger->register_write(USBIN_AICL_OPTIONS_CFG_REG, USBIN_AICL_EN_BIT, 0);
-		msleep(50);
-		htc_batt_info.icharger->register_write(USBIN_AICL_OPTIONS_CFG_REG, USBIN_AICL_EN_BIT, USBIN_AICL_EN_BIT);
-		set_batt_psy_property(POWER_SUPPLY_PROP_RERUN_AICL, 1);
+		if (htc_batt_info.icharger) {
+			htc_batt_info.icharger->register_write(USBIN_AICL_OPTIONS_CFG_REG, USBIN_AICL_EN_BIT, 0);
+			msleep(50);
+			htc_batt_info.icharger->register_write(USBIN_AICL_OPTIONS_CFG_REG, USBIN_AICL_EN_BIT, USBIN_AICL_EN_BIT);
+			set_batt_psy_property(POWER_SUPPLY_PROP_RERUN_AICL, 1);
+		}
 	}
 
 	wake_unlock(&htc_batt_timer.battery_lock);

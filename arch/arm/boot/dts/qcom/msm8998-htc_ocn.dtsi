@@ -307,31 +307,36 @@
 		htc,fastchg-current-ma = <3000>;
 		htc,health-level = <6>;
 		htc,batt-health-good = <2>;
-		htc,chg-vbatt-thresholds = <4250 4250 4250 4250 4250 4250>;	/* htc,health-level * 1 */
-		htc,chg-vbatt-recover-thresholds = <4000 4000 4000 4000 4000 4000>;
+		htc,chg-vbatt-thresholds = <4250 4250 4250 4250 3900 4250>; /*Kyle changed 4250 to 3900 for ATL and QC3.0 email request*/	/* htc,health-level * 1 */
+		htc,chg-vbatt-recover-thresholds = <4000 4000 4000 4000 3800 4000>;/*Kyle changed 4000 to 3800 for ATL and QC3.0 email request*/
 		htc,chg-temp-thresholds = <(-10000) 170>,			/* htc,health-level * 2 */
 					  <     150 220>,
 					  <     420 200>,			/* GOOD */
-					  <     450 400>,
+					  <     460 400>,           /* <     450 400>,*/  /*kyle del this layer 3 (start from layer 0) for ATL and QC3.0 email request*/
+					  <     550 440>,          /* kyle chaned these two layers for ATL and QC3.0 email request */
+					  <   10000 530>;
+                      /*
 					  <     470 430>,
 					  <   10000 450>;
+                      */
+
 		htc,chg-fcc-limits = <						/* 4 * htc,health-level */
-			1500 3000 3000 3000 1500 1500
-			1500 3000 3000 1000 1000 1000
-			 900 3000 3000 3000 1500    0
-			 900 3000 3000 1000 1000    0
+			1500 3000 3000 3000 1500    0   /*1500 3000 3000 3000 1500 1500 */ /* Kyle comment,Not Over Voltage ,Display off*/
+			1500 3000 3000 1000 1000    0   /*1500 3000 3000 1000 1000 1000 */   /*Not Over Voltage ,Display on */
+			900 3000 3000 3000     0    0   /*900 3000 3000 3000 1500    0 */  /*Over Voltage ,Dispaly off */
+			900 3000 3000 1000     0    0                                      /*Over Voltage ,Display on */
 		>;
 		htc,qc2-chg-fcc-limits = <					/* 4 * htc,health-level */
-			1500 3000 3000 2000 1500 1500
-			1500 3000 3000 1000 1000 1000
-			 900 1500 2100 2000 1500    0
-			 900 1500 2100 1000 1000    0
+			1500 3000 3000 2000 1500    0          /*1500 3000 3000 2000 1500 1500*/
+			1500 3000 3000 1000 1000    0         /*1500 3000 3000 1000 1000 1000*/
+			 900 1500 2100 2000    0    0         /*900 1500 2100 2000 1500    0 */
+			 900 1500 2100 1000    0    0         /*900 1500 2100 1000 1000    0 */
 		>;
 		htc,qc3-chg-fcc-limits = <					/* 4 * htc,health-level */
-			1500 3000 3000 2100 1500 1500
-			1500 3000 3000 2100 1500 1500
-			 900 1500 2100 2100 1500    0
-			 900 1500 2100 2100 1500    0
+			1500 3000 3000 2100 1500    0          /*1500 3000 3000 2100 1500 1500*/
+			1500 3000 3000 2100 1500    0          /*1500 3000 3000 2100 1500 1500*/
+			 900 1500 2100 2100    0    0          /*900 1500 2100 2100 1500    0 */
+			 900 1500 2100 2100    0    0         /*900 1500 2100 2100 1500    0*/
 		>;
 	};
 };

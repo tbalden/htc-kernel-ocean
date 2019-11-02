@@ -1717,6 +1717,8 @@ void msm_isp_halt_send_error(struct vfe_device *vfe_dev, uint32_t event)
 		/* Recovery is already in Progress */
 		return;
 
+	pr_warn("----rtnempt recov cnt %d evt %d----\n",
+			vfe_dev->axi_data.recovery_count, event);
 	if (event == ISP_EVENT_PING_PONG_MISMATCH &&
 		vfe_dev->axi_data.recovery_count < MAX_RECOVERY_THRESHOLD) {
 		pr_err("%s: ping pong mismatch on vfe%d recovery count %d\n",
@@ -3446,34 +3448,68 @@ static int msm_isp_request_frame(struct vfe_device *vfe_dev,
 	if (vfe_dev->axi_data.src_info[frame_src].active &&
 		frame_src == VFE_PIX_0 &&
 		vfe_dev->axi_data.src_info[frame_src].accept_frame == false) {
+#if 0 //htc added
 		pr_debug("%s:%d invalid time to request frame %d\n",
 			__func__, __LINE__, frame_id);
+//htc start
+#else
+		pr_warn("%s:%d invalid time to request frame %d\n",
+			__func__, __LINE__, frame_id);
+#endif
+//htc end
 		goto error;
 	}
 	if ((vfe_dev->axi_data.src_info[frame_src].active && (frame_id !=
 		vfe_dev->axi_data.src_info[frame_src].frame_id + vfe_dev->
 		axi_data.src_info[frame_src].sof_counter_step)) ||
 		((!vfe_dev->axi_data.src_info[frame_src].active))) {
+#if 0 //htc added
 		pr_debug("%s:%d invalid frame id %d cur frame id %d pix %d\n",
 			__func__, __LINE__, frame_id,
 			vfe_dev->axi_data.src_info[frame_src].frame_id,
 			vfe_dev->axi_data.src_info[frame_src].active);
+//htc start
+#else
+		pr_warn("%s:%d invalid frame id %d cur frame id %d pix %d\n",
+			__func__, __LINE__, frame_id,
+			vfe_dev->axi_data.src_info[frame_src].frame_id,
+			vfe_dev->axi_data.src_info[frame_src].active);
+#endif
+//htc end
 		goto error;
 	}
 	if (stream_info->undelivered_request_cnt >= MAX_BUFFERS_IN_HW) {
+#if 0 //htc added
 		pr_debug("%s:%d invalid undelivered_request_cnt %d frame id %d\n",
 			__func__, __LINE__,
 			stream_info->undelivered_request_cnt,
 			vfe_dev->axi_data.src_info[VFE_PIX_0].frame_id);
+//htc start
+#else
+		pr_warn("%s:%d invalid undelivered_request_cnt %d frame id %d\n",
+			__func__, __LINE__,
+			stream_info->undelivered_request_cnt,
+			vfe_dev->axi_data.src_info[VFE_PIX_0].frame_id);
+#endif
+//htc end
 		goto error;
 	}
 	if ((frame_src == VFE_PIX_0) && !stream_info->undelivered_request_cnt &&
 		MSM_VFE_STREAM_STOP_PERIOD !=
 		stream_info->activated_framedrop_period) {
+#if 0 //htc added
 		pr_debug("%s:%d vfe %d frame_id %d prev_pattern %x stream_id %x\n",
 			__func__, __LINE__, vfe_dev->pdev->id, frame_id,
 			stream_info->activated_framedrop_period,
 			stream_info->stream_id);
+//htc start
+#else
+		pr_warn("%s:%d vfe %d frame_id %d prev_pattern %x stream_id %x\n",
+			__func__, __LINE__, vfe_dev->pdev->id, frame_id,
+			stream_info->activated_framedrop_period,
+			stream_info->stream_id);
+#endif
+//htc end
 
 		rc = msm_isp_return_empty_buffer(vfe_dev, stream_info,
 			user_stream_id, frame_id, buf_index, frame_src);
@@ -3502,8 +3538,15 @@ static int msm_isp_request_frame(struct vfe_device *vfe_dev,
 		pingpong_bit = ((pingpong_status >>
 					stream_info->wm[vfe_idx][0]) & 0x1);
 		if (stream_info->sw_ping_pong_bit == !pingpong_bit) {
+#if 0 //htc added
 			ISP_DBG("%s:Return Empty Buffer stream id 0x%X\n",
 				__func__, stream_info->stream_id);
+//htc start
+#else
+			pr_warn("%s:Return Empty Buffer stream id 0x%X\n",
+				__func__, stream_info->stream_id);
+#endif
+//htc end
 			rc = msm_isp_return_empty_buffer(vfe_dev, stream_info,
 				user_stream_id, frame_id, buf_index,
 				frame_src);
@@ -4108,6 +4151,29 @@ void msm_isp_process_axi_irq_stream(struct vfe_device *vfe_dev,
 		stream_info->stream_id,
 		frame_id,
 		pingpong_bit);
+
+//htc start
+	if(!done_buf &&
+	   !(stream_info->stream_type == CONTINUOUS_STREAM || stream_info->runtime_num_burst_capture > 1)){
+		struct msm_isp_buffer *other_buf = NULL;
+		other_buf = stream_info->buf[!pingpong_bit];
+		if(other_buf){
+			pr_warn("----found abnormal pingpong buf,stream_id %d,cnt %d\n",
+					stream_info->stream_id,
+					stream_info->undelivered_request_cnt);
+			/*
+			pr_warn("cancel it\n");
+			stream_info->buf[!pingpong_bit] = NULL;
+			msm_isp_cfg_stream_scratch(stream_info, ~pingpong_status);
+			vfe_dev->buf_mgr->ops->put_buf(vfe_dev->buf_mgr,
+					other_buf->bufq_handle, other_buf->buf_idx);
+			if(stream_info->undelivered_request_cnt){
+				stream_info->undelivered_request_cnt--;
+			}
+			*/
+		}
+	}
+//htc end
 
 	stream_info->frame_id++;
 	stream_info->buf[pingpong_bit] = NULL;

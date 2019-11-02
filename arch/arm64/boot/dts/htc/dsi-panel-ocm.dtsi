@@ -162,7 +162,7 @@
 		aod-power-on-cmds = [
 			01 80
 			00 FF
-			16 03
+			16 0C
 			A1 9F
 			A2 20
 			A3 46
@@ -177,7 +177,7 @@
 			16 3f
 			];
 		aod-enable-cmds = [
-			16 03
+			16 0C
 			];
 	};
 
@@ -518,7 +518,7 @@
 		qcom,mdss-dsi-t-clk-pre = <0x2E>;
 		qcom,mdss-dsi-bl-pmic-control-type = "bl_ctrl_backlight";
 		htc,mdss-dsi-bl-backlight = <&lp8556_bl>;
-		htc,brt-bl-table = <10 15>,<40 28>,<142 683>,<255 2304>;
+		htc,brt-bl-table = <30 11>, <142 683>, <255 2304>;
 		htc,mdss-camera-blk = <189>;
 		htc,burst-on-level = <13>;
 		htc,burst-off-level = <12>;

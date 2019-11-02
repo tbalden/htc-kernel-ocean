@@ -239,6 +239,9 @@ static int32_t msm_ois_write_settings(struct msm_ois_ctrl_t *o_ctrl,
 		}
 			break;
 
+		case MSM_OIS_READ:
+			pr_err("MSM_OIS_READ, skip\n");
+			break;
 		case MSM_OIS_POLL: {
 			switch (settings[i].data_type) {
 			case MSM_CAMERA_I2C_BYTE_DATA:

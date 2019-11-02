@@ -30,7 +30,7 @@
 		qcom,mdss-pan-physical-width-dimension  = <64>;
 		qcom,mdss-pan-physical-height-dimension = <114>;
 		qcom,mdss-dsi-bpp = <24>;
-		qcom,mdss-dsi-underflow-color = <0x00>;
+		qcom,mdss-dsi-underflow-color = <0xff>;
 		qcom,mdss-dsi-border-color = <0>;
 		qcom,mdss-dsi-on-command = [
 			/* CABC commands start */
@@ -422,7 +422,7 @@
 		qcom,mdss-dsi-v-front-porch = <4>;
 		qcom,mdss-dsi-v-pulse-width = <2>;
 		qcom,mdss-dsi-bpp = <24>;
-		qcom,mdss-dsi-underflow-color = <0x00>;
+		qcom,mdss-dsi-underflow-color = <0xff>;
 		qcom,mdss-dsi-border-color = <0>;
 		qcom,mdss-dsi-on-command = [
 			/* CABC commands start */

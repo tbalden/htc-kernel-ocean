@@ -90,6 +90,7 @@
 #define TSENS_TM_CRITICAL_INT_EN		BIT(2)
 #define TSENS_TM_UPPER_INT_EN			BIT(1)
 #define TSENS_TM_LOWER_INT_EN			BIT(0)
+#define TSENS_TM_UPPER_LOWER_INT_DISABLE	0xffffffff
 
 #define TSENS_TM_UPPER_INT_MASK(n)	(((n) & 0xffff0000) >> 16)
 #define TSENS_TM_LOWER_INT_MASK(n)	((n) & 0xffff)
@@ -480,8 +481,8 @@ struct tsens_tm_device {
 	uint32_t			wd_bark_val;
 	int				tsens_irq;
 	int				tsens_critical_irq;
-	void				*tsens_addr;
-	void				*tsens_calib_addr;
+	void __iomem			*tsens_addr;
+	void __iomem			*tsens_calib_addr;
 	int				tsens_len;
 	int				calib_len;
 	struct resource			*res_tsens_mem;
@@ -2219,7 +2220,6 @@ static irqreturn_t tsens_tm_irq_thread(int irq, void *data)
 static void monitor_tsens_status(struct work_struct *work)
 {
 	unsigned int i, j, cntl;
-	int enable = 0;
 	int temp = 0, rc = 0;
 	unsigned int tsens_id = 0;
 	char message[MESSAGE_SIZE];
@@ -2237,17 +2237,13 @@ static void monitor_tsens_status(struct work_struct *work)
 		safe_strcat(thermal_message, message);
 		cntl >>= TSENS_SENSOR_SHIFT;
 
-		for (j = 0 ; j <= monitor_tsens_status_tmdev[i]->tsens_num_sensor; j++) {
-			enable = cntl & (0x1 << j);
-			if (enable > 0) {
-				rc = msm_tsens_get_temp(tsens_id, &temp);
-				if (!rc){
-					scnprintf(message, MESSAGE_SIZE, "%s(%d,%d.%d)", j > 0 ? "," : "", tsens_id, temp/10, abs(temp%10));
-					safe_strcat(thermal_message, message);
-				}else
-					tsens_id++;
+		for (j = 0 ; j < monitor_tsens_status_tmdev[i]->tsens_num_sensor; j++) {
+			tsens_id = monitor_tsens_status_tmdev[i]->sensor[j].sensor_client_id;
+			rc = msm_tsens_get_temp(tsens_id, &temp);
+			if (!rc){
+				scnprintf(message, MESSAGE_SIZE, "%s(%d,%d.%d)", j > 0 ? "," : "", tsens_id, temp/10, abs(temp%10));
+				safe_strcat(thermal_message, message);
 			}
-			tsens_id++;
 		}
 		printk("%s\n", thermal_message);
 		memset(thermal_message, 0, sizeof(thermal_message));
@@ -2349,6 +2345,7 @@ static int tsens_hw_init(struct tsens_tm_device *tmdev)
 	void __iomem *sensor_int_mask_addr;
 	unsigned int srot_val;
 	int crit_mask;
+	void __iomem *int_mask_addr;
 
 	if (!tmdev) {
 		pr_err("Invalid tsens device\n");
@@ -2374,6 +2371,10 @@ static int tsens_hw_init(struct tsens_tm_device *tmdev)
 			/*Update critical cycle monitoring*/
 			mb();
 		}
+		int_mask_addr = TSENS_TM_UPPER_LOWER_INT_MASK
+					(tmdev->tsens_addr);
+		writel_relaxed(TSENS_TM_UPPER_LOWER_INT_DISABLE,
+					int_mask_addr);
 		writel_relaxed(TSENS_TM_CRITICAL_INT_EN |
 			TSENS_TM_UPPER_INT_EN | TSENS_TM_LOWER_INT_EN,
 			TSENS_TM_INT_EN(tmdev->tsens_addr));

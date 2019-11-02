@@ -1,3 +1,5 @@
 &pm660_charger {
 	qcom,hvdcp-disable;
+
+	htc,wa-connect2phone;
 };

@@ -110,6 +110,14 @@ enum ipc_rtr_af_event_type {
  * @priv: Private information registered by the port owner.
  */
 struct msm_ipc_port {
+#ifdef CONFIG_HTC_DEBUG_RIL_PCN0010_HTC_DUMP_IPCROUTER_LOG
+	pid_t pid;
+	pid_t tgid;
+#endif
+#ifdef CONFIG_HTC_DEBUG_RIL_PCN0011_HTC_DUMP_IPC_UNREAD_PACKAGE
+	struct delayed_work rx_data_check_wq;
+	int rx_data_check_wq_delay_time;
+#endif
 	struct list_head list;
 	struct kref ref;
 

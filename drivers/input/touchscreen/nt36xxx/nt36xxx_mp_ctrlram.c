@@ -38,7 +38,7 @@
 #define OPEN_TEST_CSV_FILE "/data/OpenTest.csv"
 #define FW_RAWDATA_CSV_FILE "/data/FWMutualTest.csv"
 #define FW_CC_CSV_FILE "/data/FWCCTest.csv"
-#define NOISE_TEST_CSV_FILE "/data//NoiseTest.csv"
+#define NOISE_TEST_CSV_FILE "/data/NoiseTest.csv"
 
 
 static const int32_t TOTAL_AFE_CNT = 32;
@@ -206,20 +206,20 @@ static int32_t nvt_save_rawdata_to_csv(int32_t *rawdata, uint8_t x_ch, uint8_t y
 		for (x = 0; x < x_ch; x++) {
 			iArrayIndex = y * x_ch + x;
 			printk("%5d, ", rawdata[iArrayIndex]);
-			sprintf(fbufp + iArrayIndex * 7 + y * 2, "%5d, ", rawdata[iArrayIndex]);
+			snprintf(fbufp + iArrayIndex * 7 + y * 2, sizeof(fbufp), "%5d, ", rawdata[iArrayIndex]);
 		}
 		printk("\n");
-		sprintf(fbufp + (iArrayIndex + 1) * 7 + y * 2,"\r\n");
+		snprintf(fbufp + (iArrayIndex + 1) * 7 + y * 2, sizeof(fbufp), "\r\n");
 	}
 #if TOUCH_KEY_NUM > 0
 	keydata_output_offset = y_ch * x_ch * 7 + y_ch * 2;
 	for (k = 0; k < Key_Channel; k++) {
 		iArrayIndex = y_ch * x_ch + k;
 		printk("%5d, ", rawdata[iArrayIndex]);
-		sprintf(fbufp + keydata_output_offset + k * 7, "%5d, ", rawdata[iArrayIndex]);
+		snprintf(fbufp + keydata_output_offset + k * 7, sizeof(fbufp), "%5d, ", rawdata[iArrayIndex]);
 	}
 	printk("\n");
-	sprintf(fbufp + y_ch * x_ch * 7 + y_ch * 2 + Key_Channel * 7, "\r\n");
+	snprintf(fbufp + y_ch * x_ch * 7 + y_ch * 2 + Key_Channel * 7, sizeof(fbufp), "\r\n");
 #endif /* #if TOUCH_KEY_NUM > 0 */
 
 	org_fs = get_fs();

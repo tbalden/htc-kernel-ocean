@@ -328,6 +328,7 @@ struct qpnp_pwm_chip {
 	bool			enabled;
 	struct _qpnp_pwm_config	pwm_config;
 	struct	qpnp_lpg_config	lpg_config;
+	enum pm_pwm_mode	pwm_mode;
 	spinlock_t		lpg_lock;
 	enum qpnp_lpg_revision	revision;
 	u8			sub_type;
@@ -1314,17 +1315,24 @@ after_table_write:
 	return rc;
 }
 
+/* lpg_lock should be held while calling _pwm_enable() */
 static int _pwm_enable(struct qpnp_pwm_chip *chip)
 {
 	int rc = 0;
-	unsigned long flags;
-
-	spin_lock_irqsave(&chip->lpg_lock, flags);
 
 	if (QPNP_IS_PWM_CONFIG_SELECTED(
 		chip->qpnp_lpg_registers[QPNP_ENABLE_CONTROL]) ||
 			chip->flags & QPNP_PWM_LUT_NOT_SUPPORTED) {
 		rc = qpnp_lpg_configure_pwm_state(chip, QPNP_PWM_ENABLE);
+		if (rc) {
+			pr_err("Failed to enable PWM mode, rc=%d\n", rc);
+			return rc;
+		}
+		rc = qpnp_lpg_glitch_removal(chip, true);
+		if (rc) {
+			pr_err("Failed to enable glitch removal, rc=%d\n", rc);
+			return rc;
+		}
 	} else if (!(chip->flags & QPNP_PWM_LUT_NOT_SUPPORTED)) {
 		rc = qpnp_lpg_configure_lut_state(chip, QPNP_LUT_ENABLE);
 	}
@@ -1332,8 +1340,21 @@ static int _pwm_enable(struct qpnp_pwm_chip *chip)
 	if (!rc)
 		chip->enabled = true;
 
-	spin_unlock_irqrestore(&chip->lpg_lock, flags);
+	return rc;
+}
 
+/* lpg_lock should be held while calling _pwm_change_mode() */
+static int _pwm_change_mode(struct qpnp_pwm_chip *chip, enum pm_pwm_mode mode)
+{
+	int rc;
+
+	if (mode == PM_PWM_MODE_LPG)
+		rc = qpnp_configure_lpg_control(chip);
+	else
+		rc = qpnp_configure_pwm_control(chip);
+
+	if (rc)
+		pr_err("Failed to change the mode\n");
 	return rc;
 }
 
@@ -1410,10 +1431,14 @@ static int qpnp_pwm_enable(struct pwm_chip *pwm_chip,
 {
 	int rc;
 	struct qpnp_pwm_chip *chip = qpnp_pwm_from_pwm_chip(pwm_chip);
+	unsigned long flags;
 
+	spin_lock_irqsave(&chip->lpg_lock, flags);
 	rc = _pwm_enable(chip);
 	if (rc)
 		pr_err("Failed to enable PWM channel: %d\n", chip->channel_id);
+
+	spin_unlock_irqrestore(&chip->lpg_lock, flags);
 
 	return rc;
 }
@@ -1452,20 +1477,6 @@ static void qpnp_pwm_disable(struct pwm_chip *pwm_chip,
 					chip->channel_id);
 }
 
-static int _pwm_change_mode(struct qpnp_pwm_chip *chip, enum pm_pwm_mode mode)
-{
-	int rc;
-
-	if (mode)
-		rc = qpnp_configure_lpg_control(chip);
-	else
-		rc = qpnp_configure_pwm_control(chip);
-
-	if (rc)
-		pr_err("Failed to change the mode\n");
-	return rc;
-}
-
 /**
  * pwm_change_mode - Change the PWM mode configuration
  * @pwm: the PWM device
@@ -1473,7 +1484,7 @@ static int _pwm_change_mode(struct qpnp_pwm_chip *chip, enum pm_pwm_mode mode)
  */
 int pwm_change_mode(struct pwm_device *pwm, enum pm_pwm_mode mode)
 {
-	int rc;
+	int rc = 0;
 	unsigned long flags;
 	struct qpnp_pwm_chip *chip;
 
@@ -1490,7 +1501,22 @@ int pwm_change_mode(struct pwm_device *pwm, enum pm_pwm_mode mode)
 	chip = qpnp_pwm_from_pwm_dev(pwm);
 
 	spin_lock_irqsave(&chip->lpg_lock, flags);
-	rc = _pwm_change_mode(chip, mode);
+	if (chip->pwm_mode != mode) {
+		rc = _pwm_change_mode(chip, mode);
+		if (rc) {
+			pr_err("Failed to change mode: %d, rc=%d\n", mode, rc);
+			goto unlock;
+		}
+		chip->pwm_mode = mode;
+		if (chip->enabled) {
+			rc = _pwm_enable(chip);
+			if (rc) {
+				pr_err("Failed to enable PWM, rc=%d\n", rc);
+				goto unlock;
+			}
+		}
+	}
+unlock:
 	spin_unlock_irqrestore(&chip->lpg_lock, flags);
 
 	return rc;
@@ -1894,7 +1920,7 @@ out:
 static int qpnp_parse_dt_config(struct platform_device *pdev,
 					struct qpnp_pwm_chip *chip)
 {
-	int			rc, enable, lut_entry_size, list_size, i;
+	int			rc, mode, lut_entry_size, list_size, i;
 	const char		*label;
 	const __be32		*prop;
 	u32			size;
@@ -2078,18 +2104,20 @@ static int qpnp_parse_dt_config(struct platform_device *pdev,
 		}
 	}
 
-	rc = of_property_read_u32(of_node, "qcom,mode-select", &enable);
+	rc = of_property_read_u32(of_node, "qcom,mode-select", &mode);
 	if (rc)
 		goto read_opt_props;
 
-	if ((enable == PM_PWM_MODE_PWM && found_pwm_subnode == 0) ||
-		(enable == PM_PWM_MODE_LPG && found_lpg_subnode == 0)) {
+	if (mode > PM_PWM_MODE_LPG ||
+		(mode == PM_PWM_MODE_PWM && found_pwm_subnode == 0) ||
+		(mode == PM_PWM_MODE_LPG && found_lpg_subnode == 0)) {
 		dev_err(&pdev->dev, "%s: Invalid mode select\n", __func__);
 		rc = -EINVAL;
 		goto out;
 	}
 
-	_pwm_change_mode(chip, enable);
+	chip->pwm_mode = mode;
+	_pwm_change_mode(chip, mode);
 	_pwm_enable(chip);
 
 read_opt_props:

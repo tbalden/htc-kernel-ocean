@@ -50,6 +50,10 @@ static DEFINE_MUTEX(dev_pm_qos_mtx);
 static DEFINE_MUTEX(dev_pm_qos_sysfs_mtx);
 
 static BLOCKING_NOTIFIER_HEAD(dev_pm_notifiers);
+#ifdef CONFIG_HTC_POWER_DEBUG
+int pm_qos_update_count = 0;
+int pm_qos_value = 0;
+#endif
 
 /**
  * __dev_pm_qos_flags - Check PM QoS flags for a given device.
@@ -127,7 +131,12 @@ s32 dev_pm_qos_read_value(struct device *dev)
 
 	return ret;
 }
-
+#ifdef CONFIG_HTC_POWER_DEBUG
+void htc_show_pm_qos_state(void)
+{
+	printk("[K] pm_qos: (%d, %d)\n", pm_qos_value, pm_qos_update_count);
+}
+#endif
 /**
  * apply_constraint - Add/modify/remove device PM QoS request.
  * @req: Constraint request to apply
@@ -154,6 +163,10 @@ static int apply_constraint(struct dev_pm_qos_request *req,
 						     (unsigned long)value,
 						     req);
 		}
+#ifdef CONFIG_HTC_POWER_DEBUG
+		pm_qos_value = value;
+		pm_qos_update_count++;
+#endif
 		break;
 	case DEV_PM_QOS_LATENCY_TOLERANCE:
 		ret = pm_qos_update_target(&qos->latency_tolerance,
@@ -162,10 +175,18 @@ static int apply_constraint(struct dev_pm_qos_request *req,
 			value = pm_qos_read_value(&qos->latency_tolerance);
 			req->dev->power.set_latency_tolerance(req->dev, value);
 		}
+#ifdef CONFIG_HTC_POWER_DEBUG
+		pm_qos_value = value;
+		pm_qos_update_count++;
+#endif
 		break;
 	case DEV_PM_QOS_FLAGS:
 		ret = pm_qos_update_flags(&qos->flags, &req->data.flr,
 					  action, value);
+#ifdef CONFIG_HTC_POWER_DEBUG
+		pm_qos_value = value;
+		pm_qos_update_count++;
+#endif
 		break;
 	default:
 		ret = -EINVAL;

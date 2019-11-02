@@ -150,6 +150,7 @@ static struct kobject *android_edge_kobj = NULL;
 
 static struct i2c_client *xr15510_i2c_client = NULL;
 static struct i2c_client *xr15510_i2c_flash_client = NULL;
+static struct xr15510_data *g_edge_data;
 
 /************************************************
  ******** Start: For developement stage *********
@@ -1363,7 +1364,7 @@ static int xr15510_i2c_probe(struct i2c_client *i2c,
 
     /* Queue out to read firmware version */
     queue_work(fw_workqueue, &fw_chk_work);
-
+    g_edge_data = edge_data;
     EDGE_INFO_LOG("%s: End--\n", __func__);
 
     return ret;

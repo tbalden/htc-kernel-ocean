@@ -101,6 +101,20 @@ enum gsi_ctrl_notify_state {
 	GSI_CTRL_NOTIFY_RESPONSE_AVAILABLE,
 };
 
+enum rndis_class_id {
+	RNDIS_ID_UNKNOWN,
+	WIRELESS_CONTROLLER_REMOTE_NDIS,
+	MISC_ACTIVE_SYNC,
+	MISC_RNDIS_OVER_ETHERNET,
+	MISC_RNDIS_OVER_WIFI,
+	MISC_RNDIS_OVER_WIMAX,
+	MISC_RNDIS_OVER_WWAN,
+	MISC_RNDIS_FOR_IPV4,
+	MISC_RNDIS_FOR_IPV6,
+	MISC_RNDIS_FOR_GPRS,
+	RNDIS_ID_MAX,
+};
+
 #define MAXQUEUELEN 128
 struct event_queue {
 	u8 event[MAXQUEUELEN];
@@ -237,6 +251,8 @@ struct f_gsi {
 	struct rndis_params *params;
 	atomic_t connected;
 	bool data_interface_up;
+	bool rndis_use_wceis;
+	enum rndis_class_id rndis_id;
 
 	const struct usb_endpoint_descriptor *in_ep_desc_backup;
 	const struct usb_endpoint_descriptor *out_ep_desc_backup;
@@ -470,9 +486,9 @@ static struct usb_interface_descriptor rndis_gsi_control_intf = {
 	/* .bInterfaceNumber = DYNAMIC */
 	/* status endpoint is optional; this could be patched later */
 	.bNumEndpoints =	1,
-	.bInterfaceClass =	USB_CLASS_WIRELESS_CONTROLLER,
-	.bInterfaceSubClass =   0x01,
-	.bInterfaceProtocol =   0x03,
+	.bInterfaceClass =	USB_CLASS_MISC,
+	.bInterfaceSubClass =   0x04,
+	.bInterfaceProtocol =   0x01, /* RNDIS over Ethernet */
 	/* .iInterface = DYNAMIC */
 };
 
@@ -530,9 +546,9 @@ rndis_gsi_iad_descriptor = {
 	.bDescriptorType =	USB_DT_INTERFACE_ASSOCIATION,
 	.bFirstInterface =	0, /* XXX, hardcoded */
 	.bInterfaceCount =	2, /* control + data */
-	.bFunctionClass =	USB_CLASS_WIRELESS_CONTROLLER,
-	.bFunctionSubClass =	0x01,
-	.bFunctionProtocol =	0x03,
+	.bFunctionClass =	USB_CLASS_MISC,
+	.bFunctionSubClass =	0x04,
+	.bFunctionProtocol =	0x01, /* RNDIS over Ethernet */
 	/* .iFunction = DYNAMIC */
 };
 
@@ -564,7 +580,7 @@ static struct usb_endpoint_descriptor rndis_gsi_fs_out_desc = {
 };
 
 static struct usb_descriptor_header *gsi_eth_fs_function[] = {
-	(struct usb_descriptor_header *) &gsi_eth_fs_function,
+	(struct usb_descriptor_header *) &rndis_gsi_iad_descriptor,
 	/* control interface matches ACM, not Ethernet */
 	(struct usb_descriptor_header *) &rndis_gsi_control_intf,
 	(struct usb_descriptor_header *) &rndis_gsi_header_desc,

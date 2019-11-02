@@ -75,6 +75,7 @@ enum {
 	HTC_PM_DEBUG_CLOCK = BIT(0),
 	HTC_PM_DEBUG_GPIO = BIT(1),
 	HTC_PM_DEBUG_VREG = BIT(2),
+	HTC_PM_DEBUG_TID = BIT(3),
 };
 
 static int htc_pm_debug_mask = 0;
@@ -1644,6 +1645,13 @@ bool psci_enter_sleep(struct lpm_cluster *cluster, int idx, bool from_idle)
 }
 #endif
 
+#ifdef CONFIG_HTC_POWER_DEBUG
+int htc_tid_enabled(void)
+{
+	return htc_pm_debug_mask & HTC_PM_DEBUG_TID;
+}
+#endif
+
 static int lpm_cpuidle_select(struct cpuidle_driver *drv,
 		struct cpuidle_device *dev)
 {
@@ -1834,7 +1842,8 @@ static int cluster_cpuidle_register(struct lpm_cluster *cl)
 		struct cpuidle_state *st = &cl->drv->states[i];
 		struct lpm_cpu_level *cpu_level = &cl->cpu->levels[i];
 		snprintf(st->name, CPUIDLE_NAME_LEN, "C%u\n", i);
-		snprintf(st->desc, CPUIDLE_DESC_LEN, cpu_level->name);
+		snprintf(st->desc, CPUIDLE_DESC_LEN, "%s",
+			cpu_level->name);
 		st->flags = 0;
 		st->exit_latency = cpu_level->pwr.latency_us;
 		st->power_usage = cpu_level->pwr.ss_power;

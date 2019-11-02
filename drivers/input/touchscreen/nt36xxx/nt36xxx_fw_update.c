@@ -938,7 +938,7 @@ void Boot_Update_Firmware(struct work_struct *work)
 	int32_t ret = 0;
 
 	char firmware_name[256] = "";
-	sprintf(firmware_name, BOOT_UPDATE_FIRMWARE_NAME);
+	snprintf(firmware_name, sizeof(firmware_name), BOOT_UPDATE_FIRMWARE_NAME);
 #ifdef HTC_FEATURE
 	Read_FW_Ver();
 #endif

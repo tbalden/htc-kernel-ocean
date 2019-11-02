@@ -39,6 +39,7 @@ struct msm_ext_disp {
 	struct list_head display_list;
 	struct mutex lock;
 	struct completion hpd_comp;
+	bool update_audio;
 	u32 flags;
 };
 
@@ -582,6 +583,7 @@ static int msm_ext_disp_update_audio_ops(struct msm_ext_disp *ext_disp,
 {
 	int ret = 0;
 	struct msm_ext_disp_audio_codec_ops *ops = ext_disp->ops;
+	ext_disp->update_audio = false;
 
 	if (!(flags & MSM_EXT_DISP_HPD_AUDIO)) {
 		pr_debug("skipping audio ops setup for display (%s)\n",
@@ -591,6 +593,10 @@ static int msm_ext_disp_update_audio_ops(struct msm_ext_disp *ext_disp,
 
 	if (!ops) {
 		pr_err("Invalid audio ops\n");
+		if (state == EXT_DISPLAY_CABLE_CONNECT) {
+			/* update audio ops once audio codec gets registered */
+			ext_disp->update_audio = true;
+		}
 		ret = -EINVAL;
 		goto end;
 	}
@@ -693,6 +699,18 @@ int msm_ext_disp_register_audio_codec(struct platform_device *pdev,
 	}
 
 	pr_debug("audio codec registered\n");
+
+	mutex_lock(&ext_disp->lock);
+	if (ext_disp->update_audio) {
+		msm_ext_disp_update_audio_ops(ext_disp, ext_disp->current_disp,
+				EXT_DISPLAY_CABLE_CONNECT, ext_disp->flags);
+
+		msm_ext_disp_process_audio(ext_disp, ext_disp->current_disp,
+				EXT_DISPLAY_CABLE_CONNECT, ext_disp->flags);
+
+		ext_disp->update_audio = false;
+	}
+	mutex_unlock(&ext_disp->lock);
 
 	return ret;
 }
@@ -815,6 +833,8 @@ static int msm_ext_disp_probe(struct platform_device *pdev)
 	INIT_LIST_HEAD(&ext_disp->display_list);
 	init_completion(&ext_disp->hpd_comp);
 	ext_disp->current_disp = EXT_DISPLAY_TYPE_MAX;
+	ext_disp->flags = 0;
+	ext_disp->update_audio = false;
 
 	return ret;
 

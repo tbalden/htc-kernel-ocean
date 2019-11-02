@@ -540,6 +540,11 @@ static int cyttsp5_upgrade_firmware(struct device *dev, const u8 *fw_img,
 			}
 		}
 	}
+    else
+    {
+        pr_err("%s: No such device", __func__);
+        return -ENODEV;
+    }
 //htc--
 
 //htc++

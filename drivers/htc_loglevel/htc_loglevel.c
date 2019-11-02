@@ -69,7 +69,8 @@ static int htc_debug_read(struct seq_file *m, void *v)
         SECMSG("read: %s: offset :%d\n", __func__, offset);
         filp->f_pos = offset;
 
-        nread = kernel_read(filp, filp->f_pos, RfMisc, FLAG_LEN+2);
+        if (filp)
+            nread = kernel_read(filp, filp->f_pos, RfMisc, FLAG_LEN+2);
 
         memset(htc_debug_flag,0,FLAG_LEN+1);
         memcpy(htc_debug_flag,RfMisc+2,FLAG_LEN);//RfMisc will have two bytes prefix "0x"
@@ -118,11 +119,11 @@ static ssize_t htc_debug_write(struct file *file, const char __user *buffer,
         return PTR_ERR(filp);
     }
 
-    filp->f_pos = offset;
-    nread = kernel_write(filp, buf, FLAG_LEN+2, filp->f_pos);//Need to write two bytes prefix "0x" to misc
-
-    if (filp)
+    if (filp) {
+        filp->f_pos = offset;
+        nread = kernel_write(filp, buf, FLAG_LEN+2, filp->f_pos);//Need to write two bytes prefix "0x" to misc
         filp_close(filp, NULL);
+    }
 
     return count;
 }
@@ -151,13 +152,13 @@ static void init_from_device_tree(void)
     if(NULL == misc_node)
         return;
 
-	pr_info("/chosen/misc found name: %s\n", misc_node->name);
+    pr_info("/chosen/misc found name: %s\n", misc_node->name);
 
     data = (char *) of_get_property(misc_node, ENABLE_LOG_PROPERTY, &property_size);
-	if(property_size < FLAG_LEN || data== NULL){
-		pr_info("use \"misc\" of_get_property failed ! \n");
-		return;
-	}
+    if(property_size < FLAG_LEN || data== NULL){
+        pr_info("use \"misc\" of_get_property failed ! \n");
+        return;
+    }
 
     pr_info("%s - loglevel: %s\n", __func__, data);
 

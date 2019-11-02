@@ -34,7 +34,9 @@ void sendnlmsg(char *msg)
 	}
 
 	nlh = nlmsg_put(skb_1, 0, 0, 0, MAX_MSGSIZE, 0);
-
+    if(nlh == NULL) {
+        return ;
+    }
 	NETLINK_CB(skb_1).portid = 0;
 	NETLINK_CB(skb_1).dst_group = 0;
 

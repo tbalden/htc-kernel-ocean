@@ -70,6 +70,16 @@ struct f_ncm {
 	 */
 	spinlock_t			lock;
 	struct net_device               *netdev;
+
+	/* For multi-frame NDP TX */
+	struct sk_buff			*skb_tx_data;
+	struct sk_buff			*skb_tx_ndp;
+	u16				ndp_dgram_count;
+	bool				timer_force_tx;
+	struct tasklet_struct		tx_tasklet;
+	struct hrtimer			task_timer;
+
+	bool				timer_stopping;
 };
 
 static inline struct f_ncm *func_to_ncm(struct usb_function *f)
@@ -1301,6 +1311,7 @@ static int ncm_bind(struct usb_configuration *c, struct usb_function *f)
 	struct usb_ep		*ep;
 	struct f_ncm_opts	*ncm_opts;
 
+
 	if (!can_support_ecm(cdev->gadget))
 		return -EINVAL;
 
@@ -1559,7 +1570,9 @@ static void ncm_unbind(struct usb_configuration *c, struct usb_function *f)
 
 	DBG(c->cdev, "ncm unbind\n");
 
-	if (c->cdev->gadget)
+	opts->bound = false;
+
+	if(c->cdev->gadget)
 		c->cdev->gadget->miMaxMtu = 0;
 
 	ncm_string_defs[0].id = 0;
@@ -1569,7 +1582,7 @@ static void ncm_unbind(struct usb_configuration *c, struct usb_function *f)
 	usb_ep_free_request(ncm->notify, ncm->notify_req);
 
 	gether_cleanup(netdev_priv(opts->net));
-	opts->bound = false;
+
 
 	ncm->port.in_ep->is_ncm = false;
 	ncm->port.out_ep->is_ncm = false;
