@@ -298,6 +298,7 @@ static bool face_down = false;
 static bool proximity = false;
 static bool silent = false;
 static bool ringing = false;
+static bool in_call = false;
 
 void flash_blink(bool haptic);
 void flash_stop_blink(void);
@@ -307,6 +308,7 @@ void flash_uci_sys_listener(void) {
 	pr_info("%s uci sys parse happened...\n",__func__);
 	{
 		bool ringing_new = !!uci_get_sys_property_int_mm("ringing", 0, 0, 1);
+		bool in_call_new = !!uci_get_sys_property_int_mm("in_call", 0, 0, 1);
 		face_down = !!uci_get_sys_property_int_mm("face_down", 0, 0, 1);
 		proximity = !!uci_get_sys_property_int_mm("proximity", 0, 0, 1);
 		silent = !!uci_get_sys_property_int_mm("silent", 0, 0, 1);
@@ -321,6 +323,11 @@ void flash_uci_sys_listener(void) {
 			flash_stop_blink();
 		}
 		ringing = ringing_new;
+
+		if (in_call_new && !in_call) {
+			flash_stop_blink();
+		}
+		in_call = in_call_new;
 
 		pr_info("%s uci sys face_down %d\n",__func__,face_down);
 		pr_info("%s uci sys proximity %d\n",__func__,proximity);
@@ -511,7 +518,7 @@ void do_flash_blink(void) {
 	pr_info("%s flash_blink\n",__func__);
 	alarm_cancel(&flash_blink_do_blink_rtc); // stop pending alarm... no need to unidle cpu in that alarm...
 
-	if (currently_torch_mode || interrupt_retime) return;
+	if (currently_torch_mode || interrupt_retime || in_call) return;
 
 	dim = is_dim_blink_needed();
 	pr_info("%s dim %d\n",__func__,dim);
